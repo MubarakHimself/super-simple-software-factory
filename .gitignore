@@ -158,3 +158,6 @@ sssf.db*
 apps/inkwell/inkwell.db*
 
 *.mov
+# sssf runtime
+adws/adw_data/sssf.db*
+*.pyc

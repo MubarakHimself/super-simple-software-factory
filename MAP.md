@@ -130,6 +130,13 @@ Out of scope: a deployment ADW (deploy locally in a normal session — "it's ove
   Tailscale on the server.
 - **Two mirrored trees** (`adws/` and the skill's `templates/adws/`) drift when maintained by hand.
   Decide one source of truth and sync mechanically; the previous attempt drifted within hours.
+  Until mirror-sync lands (installer phase), the factory's own lint/typecheck gates scope to the
+  live `adws/` tree — the templates mirror is ruff-excluded, not silently scanned-and-failing.
+- **`just` is not installed on the laptop** — the wizard installs it (phase 2). Until then, run the
+  demo commands directly via `uv run`.
+- **Kimi K2.7-code envelope compliance is imperfect** — first response of the first real round trip
+  was invalid envelope JSON, recovered on retry 1/2 in the same session. Watch the retry budget
+  before batch runs on the test lane.
 
 ## Dead list — killed with reasons, do not resurrect
 
@@ -154,7 +161,8 @@ Out of scope: a deployment ADW (deploy locally in a normal session — "it's ove
 - **The daily loop, made legible.** How the operator's day actually runs — which skill fires when
   per entry path (greenfield / brownfield / import / small feature / big feature), and exactly what
   documentation-factory contributes at each. The previous diagram confused him; needs a clean
-  visual + a short discussion. Related fact: **documentation-factory was never edited** — five
+  visual + a short discussion. **Deferred by the operator (2026-08-12) until the factory is
+  visibly running — not load-bearing for the build.** Related fact: **documentation-factory was never edited** — five
   enhancements are agreed but unbuilt: a *front door* ("what are you trying to do?" on invocation,
   then it picks its own mode), *architecture-preflight* (prove reuse-or-new before building), OKF
   provenance frontmatter, plus lens/skeleton additions. Project specifics enter as **rider files at

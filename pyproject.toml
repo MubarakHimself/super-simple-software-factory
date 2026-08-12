@@ -1,0 +1,68 @@
+# The factory's own toolchain. Not a package — nothing here is built or
+# published; this file exists so `uv run --group dev <tool>` resolves a pinned
+# set instead of whatever happens to be on PATH. quality.py invokes the tools
+# through `uv run`, which keeps every command a bare-name invocation and bakes
+# no machine path into the trace (see adw_modules/utils.operator_env).
+#
+# Load-bearing assumption, verified before this file was written: every
+# adw_*.py carries PEP 723 inline metadata (the `# /// script ... ///` block at
+# the top of each), and `uv run` on a script with inline metadata uses THAT
+# script's own dependencies and skips the surrounding project entirely. So
+# adding a project root here changes nothing about how an ADW resolves its own
+# deps — this file is read only by `uv run --group ...` invocations that name
+# no script, i.e. quality.py's subprocess calls and `uv sync`/`uv run pytest`.
+
+[project]
+name = "sdl-factory"
+version = "0.1.0"
+description = "Deterministic agent+code software factory (SSSF fork)"
+requires-python = ">=3.10"
+# The same four every adw_*.py declares in its own PEP 723 header. Declared
+# here too because adws/tests/ imports adw_modules directly, so `uv run
+# --group dev pytest` needs them importable — no ADW itself consults this
+# list; each resolves its own inline metadata per the note above.
+dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
+
+[dependency-groups]
+# Everything quality.py's lint / typecheck / test blocks need. Installs clean
+# on Windows with no external toolchain.
+dev = ["ruff", "pytest", "mypy", "types-PyYAML"]
+
+# skylos is SEPARATE from `dev`, and not because it is optional — because it
+# does not install on this Windows laptop, and one shared group would take
+# ruff, pytest and mypy down with it on every `uv sync`/`uv run --group dev`.
+#
+# skylos itself ships wheels, but it depends on tree-sitter-dart-orchard,
+# which publishes an sdist only (no wheel, on any platform) and needs an MSVC
+# toolchain to build from source on Windows. Linux has gcc and installs clean;
+# this laptop does not have MSVC and never will (it is a planning box — see
+# MAP.md "Platform landmines"). quality.ai_defects() treats every uv
+# provisioning failure from this group as TOOL UNAVAILABLE ("incomplete"),
+# never as a passed or failed scan — see adw_modules/quality.py.
+#
+# Unblock on a machine that has (or gets) an MSVC toolchain with:
+#   uv run --group scan skylos --version
+scan = ["skylos"]
+
+[tool.pytest.ini_options]
+testpaths = ["adws/tests"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["adws"]
+exclude = "adws/adw_data"
+
+[tool.ruff]
+# adw_data/ holds runtime session output and stamped prompt/config files
+# copied verbatim from the skill template, not source this repo owns.
+# .claude/skills/sssf/templates is the mirror of adws/ — skill-package content
+# maintained by the installer phase (see MAP.md landmines: mirror-sync hasn't
+# landed yet). The factory's lint gate scopes to the live adws/ tree only.
+extend-exclude = ["adws/adw_data", ".claude/skills/sssf/templates"]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    # every subprocess call inspects returncode itself — explicit check= is noise here
+    "PLW1510",
+]
