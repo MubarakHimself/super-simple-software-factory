@@ -100,7 +100,10 @@ Opus 4.6/4.7, MiniMax M3.
    no-mistakes/CodeGraph, prompts for auth, restart after. Server install also installs the UI, and
    Claude Code + Codex CLIs as the credential surface the bridges read
    (`CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)`).
-3. **UI** — Board/Trace/Gate + settings; shadcn; "don't overcook it."
+3. **UI** — **DONE v1 2026-08-12** (spec `specs/ui.md`; apps/ui — React+Vite+Tailwind+shadcn,
+   one Bun process, 127.0.0.1:4700, GET-only over sssf.db; live-tail verified in a real browser;
+   queue decided: `queue/*.md` agent-brief files, git-tracked; Gate's populated path awaits the
+   first branch-cutting run — verified by empty state + code, never mocked).
 4. **Server + shipping roster** — factory on the VPS, real T02 roster applied, lanes verified by
    real round trips.
 
@@ -145,6 +148,12 @@ Out of scope: a deployment ADW (deploy locally in a normal session — "it's ove
 - **Rich's own box-drawing glyphs still reach stdout** (library output, not source literals). Fine
   on this console; a headless cp1252 pipe on another host is where the bill comes due. Decide before
   the server phase: force an ASCII box style, or pin the child's IO encoding at the spawn site.
+
+**UI tooling note (operator-supplied 2026-08-12):** shadcn ships an official agent skill
+(`skills add shadcn/ui` — reads `components.json`, grounds agents via `shadcn info --json`) and a
+fully non-interactive CLI (`init --defaults --yes`, `add <c> --yes`, `search/view/docs --json`,
+registry MCP). Install the skill into `apps/ui`; UI-touching agents load it — this is the concrete
+case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skills, /docs/cli.
 
 ## Dead list — killed with reasons, do not resurrect
 

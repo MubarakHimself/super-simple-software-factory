@@ -121,3 +121,16 @@ obs:
 [unix]
 obs:
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+
+# --- factory ui -------------------------------------------------------------
+# One Bun process: builds the SPA, then serves it plus the read-only JSON API
+# on 127.0.0.1 only. The db path is passed explicitly so the server can run
+# from the app dir. Needs bun.
+
+# boot the factory ui, http://127.0.0.1:4700  (Board / Trace / Gate / Settings)
+ui:
+    cd apps/ui && bun install && bunx vite build && bun run server/index.ts --db {{justfile_directory()}}/{{db}}
+
+# ui with hot reload for development, http://127.0.0.1:4710 (api still on 4700)
+ui-dev:
+    cd apps/ui && bun install && bunx vite

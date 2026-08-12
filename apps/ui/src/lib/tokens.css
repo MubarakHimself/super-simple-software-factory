@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+/*
+ * Design language, straight from specs/ui.md section 6 - dark only, no
+ * toggle, no light-mode branch. The operator's brief: "it needs to look
+ * like an actual development environment, not a dashboard."
+ */
+@theme {
+  --font-sans:
+    "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* raw palette */
+  --color-canvas: #0a0a0b;
+  --color-chrome: #0f0f11;
+  --color-elevated: #17171a;
+  --color-elevated-hover: #1c1c1f;
+  --color-hairline: #232326;
+  --color-text: #ededef;
+  --color-text-secondary: #a0a0a8;
+  --color-text-meta: #6e6e76;
+  --color-blue: #3b82f6;
+  --color-running: #3b9eff;
+  --color-success: #22c55e;
+  --color-fail: #ef4444;
+  --color-warning: #d9a441;
+
+  /* shadcn semantic mapping - one theme, no dark: variant needed */
+  --color-background: var(--color-canvas);
+  --color-foreground: var(--color-text);
+  --color-card: var(--color-elevated);
+  --color-card-foreground: var(--color-text);
+  --color-popover: var(--color-elevated);
+  --color-popover-foreground: var(--color-text);
+  --color-primary: var(--color-blue);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--color-elevated);
+  --color-secondary-foreground: var(--color-text);
+  --color-muted: var(--color-elevated);
+  --color-muted-foreground: var(--color-text-secondary);
+  --color-accent: var(--color-elevated-hover);
+  --color-accent-foreground: var(--color-text);
+  --color-destructive: var(--color-fail);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--color-hairline);
+  --color-input: var(--color-hairline);
+  --color-ring: var(--color-blue);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius: 6px;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the shell owns its own scroll regions */
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-blue) 35%, transparent);
+}
+
+/* thin, dim scrollbars - a dev tool, not a marketing page */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 1px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+@keyframes ellipsis {
+  0%,
+  20% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
+}
+.animate-ellipsis {
+  animation: ellipsis 1.4s ease-in-out infinite;
+}
