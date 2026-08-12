@@ -26,7 +26,7 @@ We add exactly four things (plus one gate layer):
 |---|---|
 | **A host** | Contabo VPS for v1. Installer makes the host swappable — laptop / server / container. Tailscale is a convenience, never a dependency. |
 | **A queue** | The Kanban — durable board of `ready-for-agent` briefs, the seam between laptop planning and the server factory. Local, **not** GitHub Issues. |
-| **A UI** | Board / Trace / Gate, one app, shadcn, T3 Code's five patterns (`docs/research/t3code-ui-notes.md`), plus a settings panel (roster config, provider auth/keys). Reads SQLite; pi RPC is an option, not the spine. |
+| **A UI** | Board / Trace / Gate, one app, shadcn, T3 Code's five patterns (`docs/research/t3code-ui-notes.md`), plus a settings panel (roster config, provider auth/keys). Reads SQLite; pi RPC is an option, not the spine. Ships as a desktop app (Electron — Tauri needs the MSVC toolchain this laptop lacks). **Operator ruling 2026-08-12: it is a *control surface / dashboard*, not an "ADE" — the coding happens in the factory, never locally in this window.** |
 | **A roster + lane balancer** | One provider account = one lane = one rate-limit bucket. See [Roster](#roster). |
 | **Skylos** | Deterministic AI-defect layer: quality block (`--ai-defects`) + gate (`verify --file --range`), three states pass/fail/incomplete, **fail-closed**. |
 
@@ -104,8 +104,23 @@ Opus 4.6/4.7, MiniMax M3.
    one Bun process, 127.0.0.1:4700, GET-only over sssf.db; live-tail verified in a real browser;
    queue decided: `queue/*.md` agent-brief files, git-tracked; Gate's populated path awaits the
    first branch-cutting run — verified by empty state + code, never mocked).
-4. **Server + shipping roster** — factory on the VPS, real T02 roster applied, lanes verified by
-   real round trips.
+4. **Deployment + shipping roster** — **deployment is not a build phase** (operator ruling,
+   restated 2026-08-12 night): run the wizard on any host — laptop, VPS, container — and the SAME
+   factory with the SAME capabilities comes up; think "install the product", nothing bespoke per
+   host. Anything heavy is a settings toggle, never a host assumption. What actually gates the
+   remaining items, by real cause: the shipping roster + lane-balancer intelligence wait on **lane
+   auth** (operator re-logins: Grok, Codex — buildable on the laptop the moment lanes answer);
+   Skylos *acceptance* waits on a **non-Windows host** (MSVC platform fact); the V1 cold-launch
+   probe and Linux desktop packaging wait on **the first fresh deployment**. Plus the two
+   `origin/main` log lines (operator-approved "add for now") that evidence-gate the future
+   merge_check phase.
+5. **Worktree layer** — **pulled forward to NOW by operator overrule (2026-08-12 night)**: the
+   first real workload is huge (a whole agentic harness) and ships in parallel chunks, so
+   worktree-per-run must work out of the box — one worktree per concurrently running agent
+   (branches name history; worktrees buy parallelism), plus the reconciliation command: a run
+   either merges or leaves a named artifact saying why — no stranded work ever (the operator's
+   lived 10-worktree failure). Lane-balancer intelligence (weekly-headroom-aware routing) still
+   waits for multiple live lanes — it cannot be built truthfully with one authenticated provider.
 
 Out of scope: a deployment ADW (deploy locally in a normal session — "it's overkill"), mobile
 (permitted, not wanted; the PR is the merge button), porting the operator off Claude Code.
@@ -160,6 +175,7 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
 | Killed | Why |
 |---|---|
 | `codex review` as a reviewer | Would be the 8th check and 2nd model reviewer. "It's an overkill." |
+| **no-mistakes (the tool)** | Study-verified 2026-08-12: its push is code-bound to its own agent review — the decided trim is impossible, and untrimmed it stacks a 2nd model reviewer. The idea survives as a future ~100-line `merge_check` code phase, evidence-gated. |
 | Skylos GitHub Action | Raised for an install blocker that turned out Windows-only; a workaround whose reason disappeared is dropped, not re-jobbed. Skylos runs in-run only. |
 | git-flow (dev→staging→release) | Three more merge points = three more places finished work strands. Trunk-based instead. |
 | Sandboxes in v1 | Own server, own code. Worktrees give parallelism; `writes:`/`protected_files` give safety. pi ships containerization for later. |
@@ -184,16 +200,39 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
   then it picks its own mode), *architecture-preflight* (prove reuse-or-new before building), OKF
   provenance frontmatter, plus lens/skeleton additions. Project specifics enter as **rider files at
   Stage 1**, never as edits to the skill.
-- **Whether `/to-spec` can batch** (tickets and triage batch; spec looks singular). Parked —
-  operator's call after a real attempt.
+- **Whether `/to-spec` can batch** — answer shape seeded by the operator (2026-08-12): `/to-spec`
+  never batches; **documentation-factory emits a feature inventory** ("this documentation contains
+  features X, Y, Z, scoped and ordered") as a first-class output, and the spec loop consumes it one
+  feature at a time with no human re-prompting — so tickets arrive pre-chunked and cheap workhorse
+  models never suffer oversized work. Quality lives upstream where the heavy model (Fable-tier at
+  the doc/planning level) already paid for it. To implement as a doc-factory follow-up enhancement
+  (a generic inventory artifact the front door mentions), then a real attempt on his platform docs.
+- **Codex skills compatibility** — **RESOLVED 2026-08-12** (`docs/research/codex-skills.md`,
+  verified). Codex scans `~/.agents/skills`; skills.sh already installed the whole Pocock chain
+  there with `~/.claude/skills` symlinked in — it was live in Codex all along, including Pocock's
+  own #516 fix (`agents/openai.yaml`, `allow_implicit_invocation: false`) on 27 skills. The two
+  new skills (documentation-factory, queue-publish) were Claude-side-only; now junctioned into
+  `~/.agents/skills` so Codex, Claude Code and pi read the same bytes. Wizard follow-up: an
+  idempotent skill-address step (real copy or link present in `~/.agents/skills` per skill).
 - **The import path** — the operator's ~60-page platform docs went doc-factory → git → server crash
   → GitBook recovery → 6-7 edit rounds over two months; "probably not an LLM wiki any more." Open
   the docs before choosing a mode.
-- **Gate 2 skill** — the pre-merge morning brief conversation; `/code-review`'s axes are the right
-  starting shape but it reviews rather than converses.
-- **no-mistakes** — decided shape: trimmed to disposable worktree + merge-check into *current*
-  `main` + open the PR (its own review/test/docs/lint off). But the operator wants **a proper deep
-  study before anything is wired**. Do the study first.
+- **Gate 2 skill** — the pre-merge morning brief conversation: plain-words "what did the factory
+  do overnight, which worktree, what shipped, is it what we agreed". Candidate bases, both
+  installed: `/wait-what` (Pocock's explain-what-just-happened skill — the operator reaches for it
+  when confused) and `/code-review`'s two axes (reviews rather than converses). The Gate UI surface
+  is the visual half; this skill is the conversational half.
+- **no-mistakes** — **STUDY DONE 2026-08-12** (`docs/research/no-mistakes-study.md`, adversarially
+  verified). The decided trim is **refused by the tool's own code**: `push.go` will not push/PR
+  without a completed round of its own agent review, and no persistent skip exists — so adopting it
+  means keeping an 8th check and a 2nd model reviewer (both dead-listed). 5 of its stages duplicate
+  factory mechanisms. Its one unique signal — does this branch still work merged into *current*
+  `main` — is real and nothing in the factory checks it today. Verdict per T26's own fallback:
+  **the tool is out; rebuild the thin version ourselves (~100 lines, `kind="code"` merge_check
+  phase) — but only after evidence**: first add two `ph.log()` calls recording `origin/main` at
+  branch-cut and at Gate; build the phase when the log shows `main` actually moves mid-run (or the
+  server phase lands parallelism). Follow-ups: drop the wizard's now-pointless no-mistakes install
+  step; add the two log lines.
 - **OKF bundle shape** and documentation currency (what a project's knowledge base bundle looks
   like on disk).
 - **Coding standards** — stored in constitution.md/AGENTS.md/variables registry; operator-seeded on

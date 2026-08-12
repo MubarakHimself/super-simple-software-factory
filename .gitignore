@@ -92,6 +92,10 @@ dist-ssr/
 .vite/
 node_modules/.vite/
 
+# ─── Electron (apps/ui ADE build outputs) ──────────────────
+dist-electron/
+/apps/ui/release/
+
 # Vue / Volar
 *.vue.js
 

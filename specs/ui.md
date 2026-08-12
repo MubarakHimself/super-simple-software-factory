@@ -535,3 +535,98 @@ Done means all of these, run for real:
   only assembles its raw material.
 - **Light theme** - the notes flag dark-only as a real risk for daylight work. Rejected
   for v1 as scope, not as a principle.
+
+---
+
+## 12. Desktop shell (Electron) - the control surface as a window (NOT an "ADE": operator ruling, coding never happens locally here)
+
+The desktop app: the same server and web UI above, opened in a native window instead
+of a browser tab. No server behavior changes - `just ui` is untouched, the server is still
+127.0.0.1-only and GET-only, and nothing here writes to `sssf.db`. Windows laptop; prebuilt
+binaries only (no Rust, no MSVC, nothing compiles native code).
+
+**Process shape.** `apps/ui/electron/main.ts` (compiled by `tsc` to
+`apps/ui/dist-electron/main.js`, referenced as `package.json`'s `main`):
+
+1. `GET http://127.0.0.1:4700/api/health` once. If it answers `ok:true`, that server is
+   **reused** untouched - the operator may already have `just ui` running.
+2. Otherwise, walk up from the app's own location looking for the repo (a directory with
+   both `justfile` and `adws/adw_data/sssf.db`), then spawn exactly what `just ui` runs:
+   `bun run server/index.ts --db <resolved sssf.db path>`, cwd `apps/ui`, as a direct child
+   (no shell, so `child.kill()` terminates `bun.exe` itself on Windows instead of an
+   intermediate cmd.exe). Poll health every 400ms up to a 20s budget; on timeout, kill the
+   child, show a plain-English error (`dialog.showErrorBox` outside `--smoke`), exit 1.
+3. Open a `BrowserWindow` at `http://127.0.0.1:4700/`: title `SDL Factory`, dark titlebar
+   (`nativeTheme.themeSource = "dark"`, set before window creation), `minWidth 1100 /
+   minHeight 700`, `backgroundColor #0A0A0B` (the canvas color from section 6) to avoid a
+   white flash before load. `contextIsolation: true`, `nodeIntegration: false`, no preload
+   script - the renderer is the same web page `just ui` already serves, nothing new is
+   exposed to it.
+4. **Window state** - a stdlib approach, no library: bounds + maximized flag read/written
+   as a small JSON file at `app.getPath("userData")/window-state.json`, on `resize`/`move`/
+   `close`. A remembered position is only honored if it still lands on a currently
+   connected display.
+5. **Kill-on-quit is conditional**: the spawned child (if any) is killed on
+   `window-all-closed`/`before-quit`. A server the operator started by hand is never
+   touched, in either direction - verified by hand (start `just ui` manually, launch the
+   app window, close it, confirm the manual server is still answering `/api/health`).
+
+**`--smoke` flag** - the build's verifier hook: same boot sequence, window created but
+never shown (`show: false`, `ready-to-show` never fires a `.show()`), then
+`console.log("ADE_SMOKE_OK")` and `app.exit(0)`, budgeted to finish well under 30s. Any
+failure to reach health prints the same plain-English error to stderr and exits 1 (no
+`dialog` popups in `--smoke`, since nothing should block on operator input).
+
+**Packaging** - `apps/ui/electron-builder.yml`:
+
+- **Windows portable - buildable now**, and the actual target of this phase. A single
+  unsigned `.exe`, no installer, no admin rights. Only `dist-electron/**` and
+  `package.json` are bundled - the packaged app never embeds a copy of the server or the
+  built SPA; at runtime it does the same repo-root walk as dev mode, so the portable `.exe`
+  needs to live inside (or be run from within) a real checkout of this repo. Build with
+  `CSC_IDENTITY_AUTO_DISCOVERY=false` (see the `app-build` justfile recipe) - without it,
+  electron-builder auto-discovers any code-signing identity sitting in the local Windows
+  cert store and reaches out to a network timestamp server for it, which can hang the build
+  on a machine that has any signing identity at all. This build is deliberately unsigned.
+- **Linux (AppImage + deb) - config decided, not built here.** Building either from this
+  Windows laptop is out of scope for the UI phase: no Linux build tooling/Docker/WSL is
+  assumed, and electron-builder's Linux targets fetch prebuilt tool binaries for the
+  *target* platform that have never been exercised on this box. That's MAP build phase 4
+  (the Contabo VPS) - the config exists now so the shape is reviewable, not to be run yet.
+- If `electron`'s own postinstall binary download (or electron-builder's) resets/hangs on a
+  given network, `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` is a working
+  fallback CDN for the same signed artifacts - a troubleshooting note, not a default.
+
+**justfile** (appended after `ui-dev`; `ui` and `ui-dev` untouched):
+
+```
+# launch the desktop app (builds the ui, compiles the electron shell, opens the window)
+app:
+    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && bunx electron .
+
+# package a portable Windows .exe of the desktop app into apps/ui/release/
+app-build:
+    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
+```
+
+**Layout on disk** (additions to section 9's tree):
+
+```
+apps/ui/
+  electron/
+    main.ts          the whole main process - health check, spawn-or-reuse, window,
+                      window-state persistence, --smoke
+    tsconfig.json     compiles to ../dist-electron (gitignored build output)
+  electron-builder.yml
+  dist-electron/      gitignored - compiled electron/main.ts
+  release/            gitignored - electron-builder output (win-unpacked/, the portable .exe)
+```
+
+**Verified**, run for real on this laptop: `bun run typecheck` green (now three project
+references: app, server, electron); `bunx electron . --smoke` prints `ADE_SMOKE_OK` and
+exits 0 both when it has to spawn the server itself (and the spawned server is confirmed
+killed after) and when a manually-started `just ui` is already healthy (confirmed left
+running after); `just ui`'s recipe body still boots the real server and answers
+`/api/health` with `ok:true`; `just --list` still parses the whole justfile and shows `app`:
+and `app-build` alongside the untouched `ui`; `bunx electron-builder --win portable`
+produced a real ~90MB `SDL Factory 0.1.0.exe` with no errors.

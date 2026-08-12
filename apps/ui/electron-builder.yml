@@ -1,0 +1,47 @@
+# electron-builder config for the SDL Factory desktop shell (the operator's "ADE").
+#
+# This packages ONLY the Electron main-process glue (dist-electron/main.js +
+# package.json). The app never embeds a copy of the server or the built SPA:
+# at runtime (see electron/main.ts) it walks up from its own location to find
+# the sdl-factory repo - a directory with both `justfile` and
+# `adws/adw_data/sssf.db` - and spawns THAT repo's `bun run server/index.ts`,
+# exactly what `just ui` runs by hand. Ship the packaged .exe inside (or next
+# to) a real checkout of this repo: it is a shell around the repo, not a
+# standalone redistributable app.
+appId: com.sdlfactory.ade
+productName: SDL Factory
+directories:
+  output: release
+files:
+  - dist-electron/**/*
+  - package.json
+  - "!**/*.ts"
+  - "!**/*.map"
+asar: true
+
+# --- Windows: buildable now, this is the UI phase's actual target ----------
+# Portable = single .exe, no installer, no admin rights, no code signing.
+# Verified with: bunx electron-builder --win portable   (see `just ade-build`)
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+
+# --- Linux: config decided, NOT built in this phase -------------------------
+# AppImage + deb are the server-phase targets (MAP.md build phase 4, the
+# Contabo VPS). Building either from this Windows laptop is out of scope for
+# the UI phase: no Linux build tooling/Docker/WSL is assumed here, and
+# electron-builder's Linux targets fetch prebuilt tool binaries for the
+# *target* platform that have never been exercised on this box. This block
+# exists so the shape is decided and reviewable now; actually running
+# `electron-builder --linux` is a server-phase verification step.
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: Development

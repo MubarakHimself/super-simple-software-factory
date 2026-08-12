@@ -134,3 +134,27 @@ ui:
 # ui with hot reload for development, http://127.0.0.1:4710 (api still on 4700)
 ui-dev:
     cd apps/ui && bun install && bunx vite
+
+# --- factory app (desktop shell) ---------------------------------------------
+# The control surface / dashboard as a desktop window (operator ruling: it is
+# NOT an "ADE" - the coding happens in the factory, never locally here). Same
+# read-only ui in an Electron window instead of a browser tab. Reuses an
+# already-healthy `just ui` if one is running; otherwise spawns the server
+# itself (and kills only that child on quit). Windows portable is the only
+# packaged target built in this phase - see apps/ui/electron-builder.yml for
+# why Linux is config-only for now. Needs bun; electron's own binary is a
+# postinstall download (`bun install` trusts it via package.json's
+# trustedDependencies), nothing compiles.
+
+# launch the desktop app (builds the ui, compiles the electron shell, opens the window)
+app:
+    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && bunx electron .
+
+# package a portable Windows .exe of the desktop app into apps/ui/release/
+# CSC_IDENTITY_AUTO_DISCOVERY=false: this is an unsigned build - stops
+# electron-builder from auto-discovering (and reaching out to a network
+# timestamp server for) any code-signing identity that happens to be sitting
+# in the local Windows cert store. Without it the build can hang/fail with
+# "socket hang up" on a machine that has any signing identity at all.
+app-build:
+    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
