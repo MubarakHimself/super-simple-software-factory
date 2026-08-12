@@ -52,6 +52,40 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
+def under(root: str | Path, value: str | Path) -> Path:
+    """Absolute in, absolute out; relative in, joined to `root`.
+
+    Used to resolve config values (`observability.db`, `defaults.data_dir`)
+    against `main_root` rather than the process cwd — the fix for the
+    silent-loss landmine (spec 5.3): once an agent's cwd moves to a worktree,
+    a bare relative path in a variable handed to it would resolve INSIDE that
+    worktree instead of the main repo. The config object itself is never
+    mutated — only the resolved Path this returns.
+    """
+    p = Path(value)
+    return p if p.is_absolute() else Path(root) / p
+
+
+def minutes_since(iso_ts: str, now: datetime | None = None) -> float:
+    """Minutes between `iso_ts` (a `now_iso()`-shaped timestamp) and `now`
+    (defaults to this instant, UTC).
+
+    A malformed or empty timestamp reads as infinitely old rather than
+    raising — every caller uses this to decide staleness (session.py's live-
+    rejoin guard, worktrees.py's `alive (stale Nh)` annotation), and a crash
+    here must never block the recovery path it exists to protect.
+    """
+    if not iso_ts:
+        return float("inf")
+    try:
+        then = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return float("inf")
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - then).total_seconds() / 60
+
+
 def resolve_prompt(arg: str) -> str:
     """CLI prompt arg: a file path resolves to its contents, else inline text."""
     try:

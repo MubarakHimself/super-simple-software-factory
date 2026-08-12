@@ -107,9 +107,23 @@ export class GitRepo {
   }
 
   /** The parent of `sha` - used to build the "first-parent..last" whole-run
-   * diff range described in spec 5.2.1. Null on a root commit. */
+   * diff range described in spec 5.2.1. Null on a root commit (no parent),
+   * an unsafe/unresolvable sha, or a git failure.
+   *
+   * Deliberately does NOT go through `revParse(`${sha}^`)`: SHA_RE/REF_RE
+   * both reject a trailing "^" (it is neither a bare hex sha nor a bare
+   * ref), so that path always returned null and every whole-run diff fell
+   * back to EMPTY_TREE - Gate reporting the entire repo as added. Fixed by
+   * resolving the parent through a form that needs no new grammar: `git
+   * rev-list --parents` takes the already-validated sha as its only ref
+   * argument (no "^" suffix involved) and prints "<sha> [parent...]" on one
+   * line, so SHA_RE/REF_RE stay exactly as strict as they were. */
   async parentOf(sha: string): Promise<string | null> {
-    return this.revParse(`${sha}^`);
+    if (!isSafeSha(sha) && !isSafeRef(sha)) return null;
+    const { code, stdout } = await run(this.root, ["rev-list", "--parents", "-n", "1", sha]);
+    if (code !== 0) return null;
+    const parts = stdout.trim().split(/\s+/).filter(Boolean);
+    return parts[1] ?? null; // parts[0] is sha itself; no second token = root commit
   }
 
   async shortSha(sha: string): Promise<string> {

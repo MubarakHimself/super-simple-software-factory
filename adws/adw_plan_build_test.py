@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_plan_build_test.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> git(branch) -> planner -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded] -> git(commit)
+Phases: engineer(request) -> git(worktree) -> planner -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded] -> git(commit)
 
 Testing is CODE: the suite's command lives in adw_modules/quality.py, so no
 agent spends a context window rediscovering it. Failures flow back to the
@@ -38,9 +38,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
-    with run.phase(PhaseParams(name="branch", kind="code", owner="git",
-                               description="Cut or join this run's branch - one branch per unit of work")) as ph:
-        ph.log(branch=git_helper.ensure_run_branch(run.adw_id, prompt))
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
@@ -75,7 +75,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Land the code only after the suite came back green")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"
-            ph.log(sha=git_helper.commit_all(message), message=message)
+            ph.log(sha=git_helper.commit_all(message, tree=run.repo_root), message=message)
 
     return run.finish(accepted=test is not None and test.passed,
                       reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")

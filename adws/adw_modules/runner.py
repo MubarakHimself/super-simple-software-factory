@@ -13,9 +13,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import agents, git_helper
+from . import agents, git_helper, permissions, worktrees
 from .console import Console
-from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
+from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams, RunWorktree
 from .utils import ensure_dir, now_iso
 
 
@@ -40,7 +40,8 @@ class PhaseHandle:
 
 
 class Run:
-    def __init__(self, cfg, adw_id: str, tracer, engineer: str):
+    def __init__(self, cfg, adw_id: str, tracer, engineer: str,
+                main_root: Path, data_dir: Path):
         self.cfg = cfg
         self.adw_id = adw_id
         self.tracer = tracer
@@ -50,12 +51,51 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        # main_root is IMMUTABLE — the operator's own checkout, always on trunk
+        # (spec invariant 1). repo_root is where THIS run's agents work: the
+        # main checkout until enter_worktree() rebinds it to the run's own
+        # tree. The four read-only ADWs never call enter_worktree, so for them
+        # repo_root == main_root for the run's entire life — unchanged
+        # behaviour, byte for byte.
+        self.main_root = main_root
+        self.repo_root = main_root
+        self.worktree: RunWorktree | None = None
+        self._main_checkout_snapshot: dict[str, str] | None = None  # permissions tripwire (5.5)
+        self.session_dir = ensure_dir(data_dir / "sessions" / adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text(encoding="utf-8"))
                                 if self._agent_map_path.exists() else {})
+
+    # ── worktrees (spec section 4/5) ─────────────────────────────────────────
+    def enter_worktree(self, prompt: str) -> dict:
+        """Cut or join this run's branch AND its own working tree, then rebind
+        `repo_root` to it. The only new call site an ADW needs — the
+        `worktree` phase that replaces today's `branch` phase (4.2).
+
+        `worktrees.enabled: false` keeps the pre-worktree behaviour: a branch
+        cut in the main checkout, repo_root left pointing at main_root.
+
+        Also arms the main-checkout tripwire (5.5): the baseline snapshot is
+        taken HERE, before any agent runs, not lazily on the first call to
+        `permissions.enforce()`. Seeding it there would make the tripwire
+        blind for the first agent phase of every writing ADW (the "before"
+        snapshot would be taken only AFTER that phase had already run) and
+        completely inert for a single-agent-phase ADW like `adw_build` or
+        `adw_document`, where that first call is also the only call.
+        """
+        wcfg = self.cfg.worktrees
+        if not wcfg.enabled:
+            existing = git_helper.find_run_branch(self.adw_id, tree=self.main_root)
+            branch = git_helper.ensure_run_branch(self.adw_id, prompt, tree=self.main_root)
+            rw = RunWorktree(branch=branch, path=str(self.main_root),
+                             reused=existing is not None, base="")
+        else:
+            rw = worktrees.ensure_run_worktree(self.main_root, self.adw_id, prompt, wcfg)
+        self.repo_root = Path(rw.path)
+        self.worktree = rw
+        self._main_checkout_snapshot = permissions.snapshot_main(self)
+        return rw.model_dump()
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:

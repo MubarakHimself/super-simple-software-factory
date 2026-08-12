@@ -371,10 +371,63 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class WorktreesConfig(BaseModel):
+    """`worktrees:` config block (spec 3.3). Config only — no environment
+    variable, no auto-discovery (MAP rule 12); `SSSF_CONFIG=other.yaml`
+    already swaps the whole file for one run.
+
+    `enabled=False` exists for one reason: a box that cannot support
+    worktrees (or a debugging session) must still be able to run the
+    factory — pre-worktree behaviour, a branch cut in the main checkout —
+    and turning the layer off must be a written decision in a config file
+    rather than an accident.
+    """
+
+    enabled: bool = True
+    root: str = ""                    # "" = <parent of repo>/<repo-name>-worktrees
+    trunk: str = "main"                # what runs fork from and are measured against
+    stale_after_minutes: int = 30      # a 'running' session silent this long is stale (4.5)
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    worktrees: WorktreesConfig = Field(default_factory=WorktreesConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
+
+
+# ── Worktrees ────────────────────────────────────────────────────────────────
+
+class RunWorktree(BaseModel):
+    """What `Run.enter_worktree()` resolves — branch, path, whether this call
+    cut a fresh tree or rejoined one, and the base it was cut from (empty on
+    rejoin, since nothing was cut)."""
+
+    branch: str
+    path: str
+    reused: bool
+    base: str = ""
+
+
+WorktreeState = Literal["alive", "orphan", "unmerged", "merged", "no-tree"]
+
+
+class WorktreeRow(BaseModel):
+    """One reconciled row — the join of git worktree/branch state with the
+    `sessions` table (8.2). `no-tree` is the fifth, informational,
+    `--all`-only row type (8.3): a session that legitimately never cut
+    anything (adw_scout, adw_prompt, adw_plan, adw_quality).
+    """
+
+    adw_id: str
+    branch: str = ""
+    path: str = ""
+    state: WorktreeState = "no-tree"
+    ahead: int = 0                    # commits on branch not in trunk — display only
+    dirty: bool = False
+    request: str = ""
+    status: str = ""                  # sessions.status; "" when no session row (orphan)
+    note: str = ""                    # HOLDS WORK / CANNOT NAME / staleness annotation
 
 
 # ── Tracing ──────────────────────────────────────────────────────────────────

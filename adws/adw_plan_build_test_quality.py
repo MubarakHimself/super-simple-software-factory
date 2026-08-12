@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_plan_build_test_quality.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> git(branch) -> planner -> builder -> [code(verify) -> code(test) -> builder(fix)] bounded -> git(commit)
+Phases: engineer(request) -> git(worktree) -> planner -> builder -> [code(verify) -> code(test) -> builder(fix)] bounded -> git(commit)
 
 Verify and test are CODE, not agents. Their commands are known, so running them
 needs no judgement — only repairing them does. A failing block does not fail its
@@ -35,9 +35,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
-    with run.phase(PhaseParams(name="branch", kind="code", owner="git",
-                               description="Cut or join this run's branch - one branch per unit of work")) as ph:
-        ph.log(branch=git_helper.ensure_run_branch(run.adw_id, prompt))
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
@@ -91,7 +91,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Commit the tested and quality-verified working tree")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"
-            ph.log(sha=git_helper.commit_all(message), message=message)
+            ph.log(sha=git_helper.commit_all(message, tree=run.repo_root), message=message)
 
     return run.finish(accepted=verified,
                       reason=f"verify/test never came back clean after {MAX_FIX_LOOPS} fix attempt(s)")

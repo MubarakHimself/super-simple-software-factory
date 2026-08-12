@@ -45,12 +45,25 @@ TAIL_CHARS = 4_000
 # Every "real tool" block runs through the project's own pinned dev toolchain
 # (root pyproject.toml, `[dependency-groups] dev`), never whatever happens to
 # be on the operator's PATH under some other name.
-DEV = ["uv", "run", "--group", "dev"]
+#
+# `--project <run.repo_root>` (never a bare `uv run --group dev`) is what
+# keeps this correct once `run.repo_root` is a worktree: with cwd = the
+# worktree but no --project, uv still resolves relative to cwd and would
+# usually get the right project anyway — the study's real flag is
+# UV_PROJECT_ENVIRONMENT (below), which an inherited value from the
+# operator's shell or the `uv run` that launched the ADW could otherwise
+# silently redirect. Both are made fully explicit — nothing ambient, nothing
+# inferred (spec section 6).
+def _dev(run) -> list[str]:
+    return ["uv", "run", "--project", str(run.repo_root), "--group", "dev"]
+
+
 # skylos lives in its OWN group (`scan`), never `dev` — see pyproject.toml for
 # why: one of its dependencies is sdist-only and needs an MSVC toolchain this
 # laptop does not have, and a single shared group would take ruff/mypy/pytest
 # down with it on every `uv sync`.
-SCAN = ["uv", "run", "--group", "scan"]
+def _scan(run) -> list[str]:
+    return ["uv", "run", "--project", str(run.repo_root), "--group", "scan"]
 
 
 def _check_dir(run, name: str) -> Path:
@@ -127,7 +140,13 @@ def _run(spec: QualityCheckSpec, run,
     output_dir = _check_dir(run, spec.name)
     output_artifact = output_dir / "command.log"
     command = shlex.join(spec.argv)
-    env = operator_env()             # the engineer's own shell environment
+    # UV_PROJECT_ENVIRONMENT, absolute and per-tree, pins WHICH venv uv uses —
+    # fixes it against an inherited value from the operator's shell (or the
+    # `uv run` that launched this ADW) silently redirecting every parallel
+    # run into one shared venv (section 6.1). Harmless to set for non-uv
+    # commands too, so it rides in the base env unconditionally rather than
+    # per-block.
+    env = {**operator_env(), "UV_PROJECT_ENVIRONMENT": str(Path(run.repo_root) / ".venv")}
 
     run.console.note(f"quality {spec.name}: {command}")
     started_at = now_iso()
@@ -217,7 +236,7 @@ def test(run) -> QualityCheckResult:
         name="test",
         area="repo",
         operation="test",
-        argv=[*DEV, "pytest", "-q", "adws/tests"],
+        argv=[*_dev(run), "pytest", "-q", "adws/tests"],
         timeout_seconds=600,
     ), run)
 
@@ -227,7 +246,7 @@ def lint(run) -> QualityCheckResult:
         name="lint",
         area="repo",
         operation="lint",
-        argv=[*DEV, "ruff", "check", "."],
+        argv=[*_dev(run), "ruff", "check", "."],
     ), run)
 
 
@@ -236,7 +255,7 @@ def typecheck(run) -> QualityCheckResult:
         name="typecheck",
         area="repo",
         operation="typecheck",
-        argv=[*DEV, "mypy", "adws"],
+        argv=[*_dev(run), "mypy", "adws"],
     ), run)
 
 
@@ -264,9 +283,9 @@ def ai_defects(run, trunk: str = "main") -> QualityCheckResult:
     excluded from `run_quality`'s builder-facing `failures` (see there for
     why: a missing MSVC toolchain is not something a repair loop can fix).
     """
-    argv = [*SCAN, "skylos", ".", "--ai-defects", "--format", "concise"]
+    argv = [*_scan(run), "skylos", ".", "--ai-defects", "--format", "concise"]
     try:
-        base = git_helper.merge_base(trunk)
+        base = git_helper.merge_base(trunk, tree=run.repo_root)
     except (RuntimeError, OSError):
         base = ""
     if base:

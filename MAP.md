@@ -102,8 +102,11 @@ Opus 4.6/4.7, MiniMax M3.
    (`CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)`).
 3. **UI** — **DONE v1 2026-08-12** (spec `specs/ui.md`; apps/ui — React+Vite+Tailwind+shadcn,
    one Bun process, 127.0.0.1:4700, GET-only over sssf.db; live-tail verified in a real browser;
-   queue decided: `queue/*.md` agent-brief files, git-tracked; Gate's populated path awaits the
-   first branch-cutting run — verified by empty state + code, never mocked).
+   queue decided: `queue/*.md` agent-brief files, git-tracked; Gate's populated path now
+   real-verified — the first branch-cutting runs exposed a `parentOf` guard bug that made Gate
+   show the whole repo as the diff; fixed 2026-08-13, true diffs + compare URLs confirmed live).
+   Known cosmetic wart: card titles under 4 words pick up a stray boilerplate token in the branch
+   slug — clean fix is a `--slug` flag threaded to `enter_worktree` (small follow-up).
 4. **Deployment + shipping roster** — **deployment is not a build phase** (operator ruling,
    restated 2026-08-12 night): run the wizard on any host — laptop, VPS, container — and the SAME
    factory with the SAME capabilities comes up; think "install the product", nothing bespoke per
@@ -114,13 +117,17 @@ Opus 4.6/4.7, MiniMax M3.
    probe and Linux desktop packaging wait on **the first fresh deployment**. Plus the two
    `origin/main` log lines (operator-approved "add for now") that evidence-gate the future
    merge_check phase.
-5. **Worktree layer** — **pulled forward to NOW by operator overrule (2026-08-12 night)**: the
-   first real workload is huge (a whole agentic harness) and ships in parallel chunks, so
-   worktree-per-run must work out of the box — one worktree per concurrently running agent
-   (branches name history; worktrees buy parallelism), plus the reconciliation command: a run
-   either merges or leaves a named artifact saying why — no stranded work ever (the operator's
-   lived 10-worktree failure). Lane-balancer intelligence (weekly-headroom-aware routing) still
-   waits for multiple live lanes — it cannot be built truthfully with one authenticated provider.
+5. **Worktree layer** — **DONE 2026-08-13** (spec `specs/worktrees.md`; pulled forward by operator
+   overrule — parallel shipping out of the box). Verified live: two real runs overlapped 67s, each
+   on its own branch + worktree + venv under `../sdl-factory-worktrees/`; the main checkout never
+   moved; reconciliation flags stranded work and exits 1; prune refuses anything unmerged; rejoin
+   reuses the tree; the main-checkout tripwire arms at worktree entry (regression-tested).
+   Lane-balancer intelligence (weekly-headroom routing) still waits on multiple live lanes.
+6. **Dispatcher** — **DONE 2026-08-13**: `just work <queue-file>` / `just work-next` — parses the
+   card header, routes by `Adw:` to the 8 writing ADWs, writes `Status:` back
+   (ready-for-agent → running → done/blocked), streams the run live, branch named from the card
+   title. Proven end to end with a real card through a real run. Moving cards to `done/` stays
+   the merge event (Gate's job, never dispatch).
 
 Out of scope: a deployment ADW (deploy locally in a normal session — "it's overkill"), mobile
 (permitted, not wanted; the PR is the merge button), porting the operator off Claude Code.
@@ -200,13 +207,12 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
   then it picks its own mode), *architecture-preflight* (prove reuse-or-new before building), OKF
   provenance frontmatter, plus lens/skeleton additions. Project specifics enter as **rider files at
   Stage 1**, never as edits to the skill.
-- **Whether `/to-spec` can batch** — answer shape seeded by the operator (2026-08-12): `/to-spec`
-  never batches; **documentation-factory emits a feature inventory** ("this documentation contains
-  features X, Y, Z, scoped and ordered") as a first-class output, and the spec loop consumes it one
-  feature at a time with no human re-prompting — so tickets arrive pre-chunked and cheap workhorse
-  models never suffer oversized work. Quality lives upstream where the heavy model (Fable-tier at
-  the doc/planning level) already paid for it. To implement as a doc-factory follow-up enhancement
-  (a generic inventory artifact the front door mentions), then a real attempt on his platform docs.
+- **Whether `/to-spec` can batch** — **RESOLVED 2026-08-13**, the operator's own answer shape,
+  built: `/to-spec` never batches; **documentation-factory now emits the feature inventory** at
+  Stage 4 (`_docwork/feature_inventory.yaml`: FEAT-ids, scope, ledger tracing, blocking edges,
+  size hints; gated by `validate_inventory.py`, selftest green). The spec loop consumes one
+  feature per pass; tickets arrive pre-chunked. **Still to do: the first real run over the
+  operator's platform docs** — that is day-one work, not charting.
 - **Codex skills compatibility** — **RESOLVED 2026-08-12** (`docs/research/codex-skills.md`,
   verified). Codex scans `~/.agents/skills`; skills.sh already installed the whole Pocock chain
   there with `~/.claude/skills` symlinked in — it was live in Codex all along, including Pocock's
@@ -217,11 +223,14 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
 - **The import path** — the operator's ~60-page platform docs went doc-factory → git → server crash
   → GitBook recovery → 6-7 edit rounds over two months; "probably not an LLM wiki any more." Open
   the docs before choosing a mode.
-- **Gate 2 skill** — the pre-merge morning brief conversation: plain-words "what did the factory
-  do overnight, which worktree, what shipped, is it what we agreed". Candidate bases, both
-  installed: `/wait-what` (Pocock's explain-what-just-happened skill — the operator reaches for it
-  when confused) and `/code-review`'s two axes (reviews rather than converses). The Gate UI surface
-  is the visual half; this skill is the conversational half.
+- **Gate 2 skill** — **DONE 2026-08-13**: `/morning-brief` (installed, Codex-visible). Plain-words
+  per-run narration from the real trace db (`scripts/collect_runs.py`, read-only, honest nulls),
+  the "is this what we agreed?" conversation, ends with the compare link as the only merge button.
+  Never runs a git/gh command that writes. Unproven end-to-end against a real GitHub compare link —
+  first real merged run closes that.
+- **503/529 backoff does not exist in the agent path** (agent_pi/agents have no retry-on-overload;
+  the lane has simply never 503'd during a verified run since the fix rounds). Add bounded backoff
+  at the pi-spawn site before any batch run leans on the test lane.
 - **no-mistakes** — **STUDY DONE 2026-08-12** (`docs/research/no-mistakes-study.md`, adversarially
   verified). The decided trim is **refused by the tool's own code**: `push.go` will not push/PR
   without a completed round of its own agent review, and no persistent skip exists — so adopting it

@@ -106,7 +106,7 @@ def test_find_run_branch_is_none_before_any_branch_is_cut(tmp_repo):
 
 
 def test_ensure_run_branch_cuts_a_new_branch_from_the_prompt(tmp_repo):
-    branch = git_helper.ensure_run_branch("deadbeef", "Add a login flow")
+    branch = git_helper.ensure_run_branch("deadbeef", "Add a login flow", tree=tmp_repo)
 
     assert branch == "adw/deadbeef_add-a-login-flow"
     assert git_helper.current_branch() == branch
@@ -114,12 +114,12 @@ def test_ensure_run_branch_cuts_a_new_branch_from_the_prompt(tmp_repo):
 
 def test_ensure_run_branch_reuses_the_branch_for_a_joined_run(tmp_repo):
     # First call: a fresh run, no branch yet -> cuts one.
-    first = git_helper.ensure_run_branch("deadbeef", "Add a login flow")
+    first = git_helper.ensure_run_branch("deadbeef", "Add a login flow", tree=tmp_repo)
 
     # A joined run passes a DIFFERENT prompt (e.g. the next phase's own ask,
     # or a fix-loop re-prompt) but the SAME adw_id — it must land on the same
     # branch, not cut a second one whose slug matches the new prompt instead.
-    second = git_helper.ensure_run_branch("deadbeef", "now write the tests")
+    second = git_helper.ensure_run_branch("deadbeef", "now write the tests", tree=tmp_repo)
 
     assert second == first
     assert git_helper.current_branch() == first
@@ -130,7 +130,7 @@ def test_ensure_run_branch_reuses_the_branch_for_a_joined_run(tmp_repo):
 
 def test_ensure_run_branch_switches_back_when_joined_from_elsewhere(tmp_repo):
     default_branch = git_helper.current_branch()
-    branch = git_helper.ensure_run_branch("deadbeef", "Add a login flow")
+    branch = git_helper.ensure_run_branch("deadbeef", "Add a login flow", tree=tmp_repo)
     assert git_helper.current_branch() == branch
 
     # Simulate the operator (or another tool) leaving the run's branch between
@@ -140,17 +140,17 @@ def test_ensure_run_branch_switches_back_when_joined_from_elsewhere(tmp_repo):
 
     # Joining the run again must switch back to its branch, not cut a new one
     # off wherever HEAD happens to be sitting now.
-    rejoined = git_helper.ensure_run_branch("deadbeef", "Add a login flow")
+    rejoined = git_helper.ensure_run_branch("deadbeef", "Add a login flow", tree=tmp_repo)
 
     assert rejoined == branch
     assert git_helper.current_branch() == branch
 
 
 def test_ensure_run_branch_keeps_different_runs_on_different_branches(tmp_repo):
-    one = git_helper.ensure_run_branch("aaaaaaaa", "first unit of work")
+    one = git_helper.ensure_run_branch("aaaaaaaa", "first unit of work", tree=tmp_repo)
     _run("checkout", "-b", "scratch")  # not the default branch, just elsewhere
     _run("checkout", one)              # back onto the first run's branch
-    two = git_helper.ensure_run_branch("bbbbbbbb", "second unit of work")
+    two = git_helper.ensure_run_branch("bbbbbbbb", "second unit of work", tree=tmp_repo)
 
     assert one != two
     assert git_helper.find_run_branch("aaaaaaaa") == one

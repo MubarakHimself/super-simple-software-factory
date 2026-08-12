@@ -82,6 +82,35 @@ sdlc PROMPT *ARGS:
 simple-sdlc PROMPT *ARGS:
     uv run adws/adw_simple_sdlc.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
+# ── dispatch ────────────────────────────────────────────────────────────────
+# The seam between the Board and the factory: claims a queue/*.md item,
+# routes it (by its `Adw:` line) to the writing ADW that runs it, and writes
+# Status back as it goes - ready-for-agent -> running -> done|blocked. Never
+# moves the file to queue/done/ - that is the MERGE event and Gate owns it.
+
+# dispatch one queue item: just work queue/001-add-health-endpoint.md
+work FILE *ARGS:
+    uv run adws/dispatch.py {{FILE}} --config {{config}} {{ARGS}}
+
+# dispatch the lowest-numbered ready-for-agent item on the Board
+work-next *ARGS:
+    uv run adws/dispatch.py --next --config {{config}} {{ARGS}}
+
+# ── worktrees ───────────────────────────────────────────────────────────────
+# Reconciled against the sessions table, never guessed. A run either merges or
+# leaves a visible, named artifact explaining why not (MAP rule 11) - this is
+# that visibility. `just worktrees-prune` only ever removes MERGED trees; a
+# worktree holding uncommitted or unmerged work is never force-removed, by any
+# flag, ever (spec invariant 4).
+
+# every run's worktree, reconciled against the sessions table (exit 1 = work is stranded)
+worktrees *ARGS:
+    uv run adws/worktrees.py --config {{config}} {{ARGS}}
+
+# remove ONLY finished-and-merged worktrees; dry run unless you pass --yes
+worktrees-prune *ARGS:
+    uv run adws/worktrees.py --config {{config}} --prune {{ARGS}}
+
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
 

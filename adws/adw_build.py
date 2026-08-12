@@ -7,13 +7,13 @@
 Usage:
     uv run adws/adw_build.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> git(branch) -> builder
+Phases: engineer(request) -> git(worktree) -> builder
 """
 
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, session, utils
+from adw_modules import agents, gates, session, utils
 from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams
 
 REQUIRED_AGENTS = ["builder"]
@@ -28,9 +28,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
-    with run.phase(PhaseParams(name="branch", kind="code", owner="git",
-                               description="Cut or join this run's branch - one branch per unit of work")) as ph:
-        ph.log(branch=git_helper.ensure_run_branch(run.adw_id, prompt))
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder", retries=1,
                                description="Implement the request")) as ph:

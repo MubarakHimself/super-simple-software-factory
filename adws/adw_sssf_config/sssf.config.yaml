@@ -47,6 +47,17 @@ observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# One worktree per concurrently running agent (MAP.md build phase 5), created
+# outside the repo by the `worktree` phase every writing ADW opens with. See
+# specs/worktrees.md. `false` = pre-worktree behaviour (branch cut in the main
+# checkout) - a written decision for a box that cannot support worktrees or a
+# debugging session, never an accident.
+worktrees:
+  enabled: true
+  root: ""                         # "" = <parent of repo>/<repo-name>-worktrees
+  trunk: main                      # what runs fork from and are measured against
+  stale_after_minutes: 30          # a 'running' session silent this long is stale on rejoin
+
 agents:
   - name: planner
     thinking: high                 # model: inherits defaults.model (test lane)
