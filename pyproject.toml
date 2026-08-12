@@ -45,7 +45,7 @@ dev = ["ruff", "pytest", "mypy", "types-PyYAML"]
 scan = ["skylos"]
 
 [tool.pytest.ini_options]
-testpaths = ["adws/tests"]
+testpaths = ["adws/tests", "installer/tests"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -58,7 +58,12 @@ exclude = "adws/adw_data"
 # .claude/skills/sssf/templates is the mirror of adws/ — skill-package content
 # maintained by the installer phase (see MAP.md landmines: mirror-sync hasn't
 # landed yet). The factory's lint gate scopes to the live adws/ tree only.
-extend-exclude = ["adws/adw_data", ".claude/skills/sssf/templates"]
+# installer/assets is vendored byte-identical from ~/.pi/agent/scripts/ (see
+# installer/assets/pi/SOURCES.md for the sha256 of each file) — it is not
+# source this repo owns either, and steps.py compares sha256 against it
+# rather than trusting its contents, so linting a copy we never edit in place
+# would only ever flag findings we are not allowed to fix at the source.
+extend-exclude = ["adws/adw_data", ".claude/skills/sssf/templates", "installer/assets"]
 line-length = 100
 
 [tool.ruff.lint]

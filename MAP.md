@@ -90,9 +90,12 @@ Opus 4.6/4.7, MiniMax M3.
 
 ## Build phases
 
-1. **Make it run, honestly** *(now)* — stamp the factory from the skill, fix the landmines below,
-   real quality commands, branch-per-run, suite + `just demo` green on the test lane.
-2. **Installer / wizard** — one command, three targets (laptop/server/container), installs pi +
+1. **Make it run, honestly** — **DONE 2026-08-12** (commit `e7c9855`): stamped, landmines fixed,
+   real quality commands, branch-per-run, suite green, real round trips traced on the test lane.
+2. **Installer / wizard** — **DONE 2026-08-12** (spec `specs/installer-wizard.md`; verified: real
+   converge exit 0, idempotent re-runs, `just demo` green from a fresh terminal; V1 cold-launch
+   probe and the no-mistakes Windows binary deferred to the server phase) — one command, three
+   targets (laptop/server/container), installs pi +
    extensions (`pi-claude-bridge`, `@tintinweb/pi-subagents`) + providers + uv/just/skylos/
    no-mistakes/CodeGraph, prompts for auth, restart after. Server install also installs the UI, and
    Claude Code + Codex CLIs as the credential surface the bridges read
@@ -132,11 +135,16 @@ Out of scope: a deployment ADW (deploy locally in a normal session — "it's ove
   Decide one source of truth and sync mechanically; the previous attempt drifted within hours.
   Until mirror-sync lands (installer phase), the factory's own lint/typecheck gates scope to the
   live `adws/` tree — the templates mirror is ruff-excluded, not silently scanned-and-failing.
-- **`just` is not installed on the laptop** — the wizard installs it (phase 2). Until then, run the
-  demo commands directly via `uv run`.
+- ~~**`just` is not installed on the laptop**~~ **Resolved 2026-08-12**: the wizard installed
+  just 1.58.0; the justfile carries `set windows-shell := ["cmd.exe","/c"]` and a token-free
+  `doctor` recipe the wizard executes as its probe. Winget's "already installed" exit code
+  (-1978335189 / 2316632107) reads as installed-PATH-stale, never as failure.
 - **Kimi K2.7-code envelope compliance is imperfect** — first response of the first real round trip
   was invalid envelope JSON, recovered on retry 1/2 in the same session. Watch the retry budget
   before batch runs on the test lane.
+- **Rich's own box-drawing glyphs still reach stdout** (library output, not source literals). Fine
+  on this console; a headless cp1252 pipe on another host is where the bill comes due. Decide before
+  the server phase: force an ASCII box style, or pin the child's IO encoding at the spawn site.
 
 ## Dead list — killed with reasons, do not resurrect
 

@@ -1,0 +1,22 @@
+{
+  "api": "openai-completions",
+  "apiKey": "!python 'REPLACED-AT-INSTALL-TIME'",
+  "authHeader": true,
+  "baseUrl": "https://ollama.com/v1",
+  "compat": {
+    "maxTokensField": "max_tokens",
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": true,
+    "supportsUsageInStreaming": true
+  },
+  "models": [
+    {
+      "contextWindow": 262144,
+      "cost": { "cacheRead": 0, "cacheWrite": 0, "input": 0, "output": 0 },
+      "id": "kimi-k2.7-code",
+      "input": ["text"],
+      "maxTokens": 32768,
+      "name": "kimi-k2.7-code (Ollama Cloud)"
+    }
+  ]
+}

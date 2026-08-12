@@ -6,7 +6,11 @@
 
 # `.env` reaches every ADW through this, so keys work without exporting them.
 set dotenv-load
-set positional-arguments
+# just has no `sh` on Windows PATH by default (installer-wizard.md 6.3/9);
+# cmd.exe is always there. `just` only applies `windows-shell` when actually
+# running on Windows, so Linux/mac keep the default shell - the server is
+# unaffected.
+set windows-shell := ["cmd.exe", "/c"]
 
 # Every recipe passes this through, so `SSSF_CONFIG=other.yaml just sdlc "..."`
 # swaps the whole roster for one run.
@@ -16,6 +20,15 @@ db     := "adws/adw_data/sssf.db"
 # list every recipe
 default:
     @just --list
+
+# Token-free probe for shell + dotenv + real recipe execution (installer-wizard.md
+# 6.3/9, V6): `just --list` only proves the justfile parses, `just --evaluate`
+# only proves `set dotenv-load` parsed .env - neither one actually runs a
+# recipe body through the configured shell. This does, for zero cost.
+
+# probe: shell + dotenv + recipe execution actually work (no tokens spent)
+doctor:
+    uv run python -c "print('doctor ok')"
 
 # ── first run ───────────────────────────────────────────────────────────────
 
@@ -35,30 +48,39 @@ demo:
 
 # ── run a workflow ──────────────────────────────────────────────────────────
 # Args pass straight through: "<prompt or path/to/prompt.md>" [--adw-id X]
+#
+# PROMPT is its own named parameter (not folded into the variadic ARGS) and
+# is re-quoted in every recipe body below - `"{{PROMPT}}"` - so a multi-word
+# prompt survives as ONE argument. `set positional-arguments` + `"$@"` (the
+# previous shape) relied on a POSIX shell forwarding raw argv; cmd.exe has no
+# such mechanism - it flattens a recipe's trailing args onto the end of the
+# single command line it runs, splitting an unquoted multi-word prompt into
+# several words. Quoting `{{PROMPT}}` ourselves works identically under both
+# cmd.exe and sh, so this shape needs no per-OS branch.
 
 # one agent, one prompt: just prompt "summarize this repo"
-prompt *ARGS:
-    uv run adws/adw_prompt.py --config {{config}} "$@"
+prompt PROMPT *ARGS:
+    uv run adws/adw_prompt.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # read-only recon: just scout "where is auth handled"
-scout *ARGS:
-    uv run adws/adw_scout.py --config {{config}} "$@"
+scout PROMPT *ARGS:
+    uv run adws/adw_scout.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # plan only: just plan "add a /health endpoint"
-plan *ARGS:
-    uv run adws/adw_plan.py --config {{config}} "$@"
+plan PROMPT *ARGS:
+    uv run adws/adw_plan.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # planner, builder, commit: just plan-build "add a /health endpoint"
-plan-build *ARGS:
-    uv run adws/adw_plan_build.py --config {{config}} "$@"
+plan-build PROMPT *ARGS:
+    uv run adws/adw_plan_build.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # plan, build, test, commit: just sdlc "add a /health endpoint"
-sdlc *ARGS:
-    uv run adws/adw_plan_build_test.py --config {{config}} "$@"
+sdlc PROMPT *ARGS:
+    uv run adws/adw_plan_build_test.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # the full chain, plus review and docs: just simple-sdlc "add a /health endpoint"
-simple-sdlc *ARGS:
-    uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
+simple-sdlc PROMPT *ARGS:
+    uv run adws/adw_simple_sdlc.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
@@ -83,7 +105,19 @@ procs ADW_ID:
 
 # Needs bun. The db path is passed explicitly because the server runs from the
 # app dir and would otherwise look for a trace db sitting next to itself.
+# The API server backgrounds so `bunx vite` can run in the foreground after it
+# - `(VAR=val cmd &)` is POSIX subshell/inline-env syntax with no cmd.exe
+# equivalent (cmd's `&` is a sequential separator, not "background", and it
+# has no inline `VAR=val cmd` form at all), so this one recipe needs an
+# OS-specific body. `[windows]`/`[unix]` (just 1.58's own per-OS recipe
+# attributes) pick the matching body automatically - `just --list`/`just obs`
+# still show/run one `obs`, same as before.
 
 # boot the trace UI, http://localhost:4601 (api on :4600)
+[windows]
+obs:
+    cd .claude/skills/sssf/apps/visualizer && bun install && start /B cmd /c "set SSSF_DB={{justfile_directory()}}/{{db}}&& bun run server/index.ts" && bunx vite
+
+[unix]
 obs:
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
