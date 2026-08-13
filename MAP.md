@@ -277,8 +277,12 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
   first real merged run closes that. **What the review references (operator question, decided
   2026-08-13): the run's own TICKET — its acceptance checkboxes** — because the ticket is the
   sharpest distillation of docs → ledger → spec, so checking the ticket IS checking the docs.
-  Enhancement queued: the brief pulls the run's Kanban card and walks its checkboxes against
-  evidence, leveraging `/code-review`'s spec axis (no new skill family).
+  **Checkbox walk SHIPPED 2026-08-13 (~1 PM)**: the brief finds the run's card by `Adw-Id:` (in
+  `queue/` or `done/`), names it by title, and walks its acceptance checkboxes one by one against
+  the run's recorded evidence — honest "cannot confirm from the record" when evidence is absent;
+  never invents a match; badly-encoded cards degrade to a gap, never a crash (verifier-caught,
+  fixed, proven). First live conversational proof comes with the first real dispatched-and-briefed
+  run.
 - **Codebase hygiene (operator standing want, 2026-08-13)**: clean, organized repo with a map.
   All cache dirs are gitignored; **`just clean` shipped same day** (`adws/clean.py` — regenerable
   caches only, hard-excludes .venv/.git/.claude/adw_data, structurally cannot reach worktrees).
