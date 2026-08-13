@@ -9,6 +9,7 @@ check the same branch out twice), and the `sessions` table IS the registry.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 from dataclasses import dataclass, field
@@ -191,8 +192,24 @@ def classify(*, adw_id: str, dirty: bool, has_session: bool, session_status: str
     return "merged", ""
 
 
+def _title_from_branch_event(payload_json: str | None) -> str:
+    """The `title` field of the run's `branch` trace event payload (see
+    `runner.Run._log_branch_and_title`), or "" when there is none — no
+    payload at all, malformed JSON, or telemetry recorded before this fix
+    (the pre-worktree `branch` PHASE logged a bare `{"branch": ...}`, no
+    title). `_build_row` falls back to a humanized slug in that case.
+    """
+    if not payload_json:
+        return ""
+    try:
+        payload = json.loads(payload_json)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    return str(payload.get("title") or "") if isinstance(payload, dict) else ""
+
+
 def _read_sessions(db_path: Path) -> dict[str, dict]:
-    """adw_id -> {status, request, live_processes, latest_event}.
+    """adw_id -> {status, request, live_processes, latest_event, title}.
 
     Read-only by construction (`mode=ro`) — this is what makes "this tool
     never writes to sssf.db" checkable rather than merely intended (invariant
@@ -212,14 +229,18 @@ def _read_sessions(db_path: Path) -> dict[str, dict]:
                 "  (SELECT COUNT(*) FROM processes p WHERE p.adw_id = s.adw_id "
                 "     AND p.ended_at IS NULL) AS live_processes, "
                 "  (SELECT MAX(e.started_at) FROM events e WHERE e.adw_id = s.adw_id) "
-                "     AS latest_event "
+                "     AS latest_event, "
+                "  (SELECT e2.payload_json FROM events e2 WHERE e2.adw_id = s.adw_id "
+                "     AND e2.type = 'log' AND e2.name = 'branch' "
+                "     ORDER BY e2.started_at DESC LIMIT 1) AS branch_payload "
                 "FROM sessions s").fetchall()
         finally:
             conn.close()
     except sqlite3.Error as error:
         raise ReconciliationError(f"could not read {db_path}: {error}") from error
     return {row[0]: {"status": row[1] or "", "request": row[2] or "",
-                     "live_processes": row[3] or 0, "latest_event": row[4] or ""}
+                     "live_processes": row[3] or 0, "latest_event": row[4] or "",
+                     "title": _title_from_branch_event(row[5])}
            for row in rows}
 
 
@@ -235,6 +256,14 @@ def _build_row(adw_id: str, wt: dict | None, branch_rec: dict | None,
 
     branch_name = (wt or branch_rec or {}).get("branch", "") or ""
     path = wt["path"] if wt else ""
+
+    # Title (3(a)): the trace's own record when this run stamped one, else the
+    # branch slug humanized — never a re-derivation from `request`, which can
+    # run to hundreds of characters and was never meant to be a title.
+    title = (session or {}).get("title", "")
+    if not title and branch_name:
+        slug = branch_name.split("_", 1)[1] if "_" in branch_name else ""
+        title = git_helper.humanize_slug(slug) if slug else ""
 
     dirty = False
     if wt:
@@ -260,7 +289,7 @@ def _build_row(adw_id: str, wt: dict | None, branch_rec: dict | None,
         latest_event_age_minutes=age_minutes, merged_into_trunk=merged,
         ahead=ahead, trunk=cfg.trunk, stale_after_minutes=cfg.stale_after_minutes)
 
-    return WorktreeRow(adw_id=adw_id, branch=branch_name, path=path, state=state,
+    return WorktreeRow(adw_id=adw_id, branch=branch_name, path=path, title=title, state=state,
                        ahead=ahead, dirty=dirty,
                        request=(session or {}).get("request", ""),
                        status=(session or {}).get("status", ""), note=note)
@@ -326,8 +355,12 @@ def render(rows: list[WorktreeRow]) -> str:
     table says "nothing is stranded"; no output at all says "the tool broke".
     """
     ordered = sorted(rows, key=lambda r: (_STATE_ORDER.get(r.state, 9), r.adw_id))
-    header = f"{'STATE':<9} {'ADW_ID':<9} {'BRANCH':<40} {'AHEAD':>5} D {'REQUEST'}"
-    sep = f"{'-' * 9} {'-' * 9} {'-' * 40} {'-' * 5} - {'-' * 30}"
+    # TITLE leads (before ADW_ID): "an id tells me nothing - I want to know
+    # which worktree ran which ticket" — the human name, not the id, is what
+    # answers that at a glance. From the trace when the run stamped one, else
+    # the branch slug humanized (`_build_row`); "" only for a no-tree row.
+    header = f"{'STATE':<9} {'TITLE':<28} {'ADW_ID':<9} {'BRANCH':<40} {'AHEAD':>5} D {'REQUEST'}"
+    sep = f"{'-' * 9} {'-' * 28} {'-' * 9} {'-' * 40} {'-' * 5} - {'-' * 30}"
     lines = [header, sep]
     for row in ordered:
         dirty_mark = "*" if row.dirty else " "
@@ -335,7 +368,8 @@ def render(rows: list[WorktreeRow]) -> str:
         # verbatim as `row.request` would otherwise inject raw newlines into
         # the middle of an ASCII table row and break it across lines.
         request = " ".join((row.request or "").split())[:60]
-        lines.append(f"{row.state:<9} {row.adw_id:<9} {row.branch:<40} "
+        title = " ".join((row.title or "").split())[:28]
+        lines.append(f"{row.state:<9} {title:<28} {row.adw_id:<9} {row.branch:<40} "
                      f"{row.ahead:>5} {dirty_mark} {request}")
         if row.path:
             lines.append(f"          worktree: {row.path}")

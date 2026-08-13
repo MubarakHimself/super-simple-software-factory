@@ -127,11 +127,13 @@ export class SssfDb {
     }
 
     const agentsByAdw = this.agentsFor(ids);
+    const titlesByAdw = this.titlesFor(ids);
 
     return rows.map((session) =>
       Object.assign(session, {
         phases: byAdw.get(session.adw_id) ?? [],
         agents: agentsByAdw.get(session.adw_id) ?? [],
+        title: titlesByAdw.get(session.adw_id) ?? null,
       }),
     );
   }
@@ -234,6 +236,65 @@ export class SssfDb {
     return byAdw;
   }
 
+  /** adw_id -> human title, derived from the run's own trace events - the
+   * `type='log', name='branch'` event stamped at worktree entry (see
+   * runner.py's `Run._log_branch_and_title`) when a run has one, else the
+   * SAME fallback the CLI (`adw_modules/worktrees.py:_build_row`) already
+   * applies: humanize the branch slug (`git_helper.humanize_slug`, mirrored
+   * here by `humanizeSlug`).
+   *
+   * Two OLDER event shapes exist and neither carries a `title` field, which
+   * is why a plain `name = 'branch'` filter alone under-titles real runs:
+   *   - `name='branch'`, payload `{branch}` only - the pre-worktree `branch`
+   *     PHASE's own `ph.log(branch=...)`, before this trace-recording fix.
+   *   - `name='worktree'`, payload `{branch, path, reused, base}` - every
+   *     worktree-layer run BEFORE `_log_branch_and_title` existed logged
+   *     ONLY this event (`ph.log(**run.enter_worktree(...))`, which always
+   *     names the event after its OWN enclosing phase, "worktree" - never
+   *     "branch"). A `name = 'branch'`-only filter misses these runs
+   *     entirely, so their title reads null in the UI even though the CLI,
+   *     which reads `branch_name` straight from git rather than this event,
+   *     already humanizes one for them.
+   * Both are read here too, with `branch`-named rows always authoritative
+   * (a real title, or the humanized fallback) and `worktree`-named rows only
+   * ever filling in when NO `branch`-named row exists for that run - so a
+   * post-fix run's real `derive_title` is never overwritten by the cruder
+   * fallback its own (later) `worktree` event also carries. */
+  private titlesFor(adwIds: string[]): Map<string, string> {
+    const titles = new Map<string, string>();
+    if (adwIds.length === 0) return titles;
+    const placeholders = adwIds.map(() => "?").join(", ");
+    const rows = this.db
+      .query<{ adw_id: string; name: string; payload_json: string | null }, string[]>(
+        `SELECT adw_id, name, payload_json FROM events
+          WHERE adw_id IN (${placeholders}) AND type = 'log' AND name IN ('branch', 'worktree')
+          ORDER BY rowid`,
+      )
+      .all(...adwIds);
+    for (const row of rows) {
+      let payload: { branch?: string; title?: string } = {};
+      try {
+        payload = JSON.parse(row.payload_json ?? "{}");
+      } catch {
+        continue; // malformed payload -> no title from this row, never a failed request
+      }
+      const fallback = payload.branch ? humanizeSlug(slugFromBranch(payload.branch)) : "";
+      if (row.name === "branch") {
+        // Authoritative: a real title if this run stamped one, else the same
+        // humanized-slug fallback. ORDER BY rowid -> a later `branch` row
+        // (a rejoin's fresh worktree entry) always wins over an earlier one.
+        const title = payload.title || fallback;
+        if (title) titles.set(row.adw_id, title);
+      } else if (fallback && !titles.has(row.adw_id)) {
+        // Old shape, no `branch` row seen for this run (yet) - this is the
+        // only title source it has. Never overrides a `branch` row, whatever
+        // order the two arrive in.
+        titles.set(row.adw_id, fallback);
+      }
+    }
+    return titles;
+  }
+
   /** Everything except `branch`, which needs a git call the caller (index.ts)
    * makes once it has the adw_id, so db.ts stays pure sqlite. */
   sessionDetail(adwId: string): Omit<SessionDetail, "branch"> | null {
@@ -245,6 +306,7 @@ export class SssfDb {
       phases: this.phases(adwId),
       agents: this.agentSessions(adwId),
       processes: this.processes(adwId),
+      title: this.titlesFor([adwId]).get(adwId) ?? null,
     };
   }
 
@@ -409,6 +471,24 @@ export class SssfDb {
     for (const [key, v] of map) out.set(key, { last_at: v.last_at, last_tokens: v.last_tokens, run_count: v.run_count });
     return out;
   }
+}
+
+/** `adw/<adw_id>_<slug>` -> `<slug>` - the part `humanizeSlug` turns back
+ * into a title. "" when the branch has no `_` (should not happen for a
+ * factory-cut branch, but this is a fallback path reading old telemetry). */
+function slugFromBranch(branch: string): string {
+  const short = branch.startsWith("adw/") ? branch.slice(4) : branch;
+  const idx = short.indexOf("_");
+  return idx === -1 ? "" : short.slice(idx + 1);
+}
+
+/** Mirrors adw_modules/git_helper.py's `humanize_slug` exactly: dashes to
+ * spaces, sentence case. "add-a-clamp-helper" -> "Add a clamp helper". */
+function humanizeSlug(slug: string): string {
+  const words = slug.split("-").filter(Boolean);
+  if (words.length === 0) return slug;
+  const text = words.join(" ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function clamp(value: number, min: number, max: number): number {

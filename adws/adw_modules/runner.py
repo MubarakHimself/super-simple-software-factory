@@ -95,7 +95,30 @@ class Run:
         self.repo_root = Path(rw.path)
         self.worktree = rw
         self._main_checkout_snapshot = permissions.snapshot_main(self)
+        self._log_branch_and_title(rw, prompt)
         return rw.model_dump()
+
+    def _log_branch_and_title(self, rw: RunWorktree, prompt: str) -> None:
+        """Trace-recording gap fix: the pre-worktree `branch` PHASE used to
+        `ph.log(branch=...)`, which stamped a `type=log, name=branch` event —
+        the morning-brief collector queries exactly that shape (`fetch_branch_event()`
+        in its `collect_runs.py`). Once branching moved inside the "worktree" phase,
+        `ph.log()` alone stamps `name="worktree"` instead (it always uses the
+        ENCLOSING phase's own name), so that query silently stopped matching
+        anything — the branch column read null forever, not because no branch
+        was cut, but because nothing was looking in the right place any more.
+
+        Written directly against the tracer, under the name every reader
+        already expects, regardless of which phase is open when
+        `enter_worktree` runs. The run's human title rides in the same
+        payload (MAP.md's worktree-naming ticket, "extend the same payload")
+        — one place a title is born, every other surface reads it back.
+        """
+        phase_id = self.phases[-1].phase_id if self.phases else ""
+        self.tracer.event(EventRecord(
+            adw_id=self.adw_id, phase_id=phase_id, type="log", name="branch",
+            payload={"branch": rw.branch, "path": rw.path,
+                     "title": git_helper.derive_title(prompt)}))
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:

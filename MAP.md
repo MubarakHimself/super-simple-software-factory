@@ -70,11 +70,23 @@ We add exactly four things (plus one gate layer):
 
 ## Roster
 
-Settled pool (operator-confirmed): workhorses **Grok 4.5 · GLM 5.2 · Kimi K2.7-code ·
-Qwen3-Coder-Next**, escalating to **GPT 5.5 or Opus 4.8** when the work needs real intelligence.
-Opus 4.8 is the universal slot ("all the other models have specific jobs"). Reviewer: opposite
-family to the builder (rule 3), Opus 4.8 the leading candidate. Sub-agent fan-out counts against
-the parent's lane.
+**Operator revision 2026-08-13 morning** (supersedes the earlier pool; GPT subscription lapsed —
+out by choice, "overkill", returns only deliberately for big ML batches via the pre-batch panel):
+
+- **Reviewer: Claude only** — Opus 5 or Opus 4.8, operator's pick per run. The one family he
+  trusts for review. Cross-family rule fully satisfied (workhorses are xAI/Z.ai/Moonshot/Alibaba).
+- **Workhorses: Grok 4.5 · GLM 5.2 · Kimi K2.7 · Qwen (latest)**. Catalog facts: plain "kimi-k2.7"
+  does not exist on any lane — `kimi-k2.7-code` IS k2.7 (same weights, sampling tag; plain
+  alternative is kimi-k2.6); latest Qwen on opencode-go is **qwen3.8-max** (1M ctx). **Grok 4.5 is
+  on BOTH xai AND opencode-go** — two separate quota pools for the same workhorse, a natural
+  fallback pair that works before the xai re-login.
+- **Documenter: a model we don't lean on** — MiniMax M3, Qwen, or Sonnet 5 ("sitting there doing
+  nothing; documenting is not a huge deal").
+- **Stick to old models**: Grok 4.6 (released 2026-08-13) explicitly NOT used — protects the
+  weekly limit. Most models code well when the work is scoped properly; failures come from
+  long-running tasks, which the chunking pipeline prevents upstream.
+
+Sub-agent fan-out counts against the parent's lane.
 
 Lanes: ollama-cloud, opencode-go, openai-codex, xai, claude-bridge (+ a possible direct GLM
 account, unconfirmed). **ollama-cloud and opencode-go share one quota** (the key script reads
@@ -86,7 +98,42 @@ lane-selection criterion. **Test lane: `ollama-cloud/kimi-k2.7-code` — says no
 shipping roster.**
 
 Dead models (cost/evidence, do not re-propose): DeepSeek V4, Kimi K3, GPT 5.6 Luna, Fable 5,
-Opus 4.6/4.7, MiniMax M3.
+Opus 4.6/4.7, Grok 4.6 (operator: protect the weekly limit). MiniMax M3 rehabilitated 2026-08-13
+as a documenter candidate only.
+
+**The balancer — operator-corrected 2026-08-13 noon.** He never refused an agent router (the old
+"route is code, not a model" was over-recorded); his standing preference is code, with an agent
+where code genuinely can't. Sanctioned hybrid: (a) **per-phase lane picking stays deterministic
+code** (arithmetic over headroom, fast, auditable); (b) **a batch-level fan-out planner MAY be an
+agent** — armed with usage TOOLS (not guesses), it sizes the night's batch: which cards, how many
+worktrees active at once, which lanes carry which roles, staying inside weekly limits ("it can
+handle a huge amount of work smartly — longer, but within limits"). (c) **Usage data needs NO
+manual entry**: read the harness CLIs' local session logs the way T3/OpenCode do (Claude Code +
+Codex write per-session token counts on disk; they land on the server anyway as the bridge
+credential surface; pi's own trace covers factory spend) — research task: read T3 Code's and
+OpenCode's source for the exact mechanism, incl. remaining-limit retrieval. (d) **The pre-batch
+panel** — the deliberate door: GPT returns to subsidize load when the other subscriptions can't
+carry it (5.5 for code, 5.6 Sol for intelligence — "GPT can replace Claude everywhere" if needed).
+(e) **Activation threshold (decided 2026-08-13, orchestrator's call at operator request)**: the
+deterministic balancer runs ALWAYS (it is free arithmetic). The agent fan-out planner activates
+only when a batch is real: **more than 10 ready cards**, or **any needed lane under 30% weekly
+headroom**, or the operator explicitly asks for an overnight batch. Below that, `work-next` +
+arithmetic — no agent in the loop for 14 small things.
+**Mid-run limits**: lanes pin per PHASE — a quota death fails one phase; the run parks on its
+branch + worktree; `--adw-id` rejoin resumes without redoing finished phases. Build items:
+"paused-for-quota" status + auto-resume after window reset; upstream chunking keeps runs cheap and
+fast so limits rarely bite mid-run.
+
+**The integration ("merging") answer — operator's 16-features/4-cores scenario, 2026-08-13:**
+composition is solved upstream + continuously, never big-bang: (1) the feature inventory declares
+**blocking edges** — dependent slices run sequentially, independent ones in parallel; (2)
+**trunk-based means continuous integration** — each merged slice becomes the base the next slice
+branches from, so "feature 5 builds on merged 1-4" automatically; (3) parallel slices that
+secretly collide surface as visible conflicts on the compare page, never silently; (4) the
+**merge_check phase** (the rebuilt no-mistakes idea) is the "does slice B still work now that
+slice A merged" answer — **its evidence condition is met the moment parallel merging starts; build
+it with the balancer round, not after**; (5) the KB's component contracts (interfaces declared
+before code) are what make separately-built parts fit at all.
 
 ## Build phases
 
@@ -227,7 +274,19 @@ case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skil
   per-run narration from the real trace db (`scripts/collect_runs.py`, read-only, honest nulls),
   the "is this what we agreed?" conversation, ends with the compare link as the only merge button.
   Never runs a git/gh command that writes. Unproven end-to-end against a real GitHub compare link —
-  first real merged run closes that.
+  first real merged run closes that. **What the review references (operator question, decided
+  2026-08-13): the run's own TICKET — its acceptance checkboxes** — because the ticket is the
+  sharpest distillation of docs → ledger → spec, so checking the ticket IS checking the docs.
+  Enhancement queued: the brief pulls the run's Kanban card and walks its checkboxes against
+  evidence, leveraging `/code-review`'s spec axis (no new skill family).
+- **Codebase hygiene (operator standing want, 2026-08-13)**: clean, organized repo with a map.
+  All cache dirs are gitignored; **`just clean` shipped same day** (`adws/clean.py` — regenerable
+  caches only, hard-excludes .venv/.git/.claude/adw_data, structurally cannot reach worktrees).
+  The wiki/KB syncs by GIT — the knowledge base lives as files in the project repo, so server
+  agents read it from their checkout; laptop-to-server doc sync is push/pull, nothing extra.
+- **Operator working split (2026-08-13)**: he front-loads the agentic-harness core in Claude Code
+  by day (high-control work); the factory eats the pre-chunked Board slices overnight. Same
+  project, distributed load — the design's intended shape, not an exception.
 - **503/529 backoff does not exist in the agent path** (agent_pi/agents have no retry-on-overload;
   the lane has simply never 503'd during a verified run since the fix rounds). Add bounded backoff
   at the pi-spawn site before any batch run leans on the test lane.

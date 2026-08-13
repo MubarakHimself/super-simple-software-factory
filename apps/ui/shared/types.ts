@@ -53,6 +53,13 @@ export interface Session {
 export interface SessionSummary extends Session {
   phases: Phase[];
   agents: AgentSession[];
+  /** The run's human name - "an id tells me nothing" (MAP.md's worktree-
+   * naming ticket). Derived server-side from the run's `branch` trace event
+   * (title stamped once at worktree entry, see runner.py's
+   * `Run._log_branch_and_title`), falling back to a humanized branch slug
+   * for telemetry recorded before this fix. Null for a run that never cut a
+   * branch (adw_prompt, adw_scout, adw_quality) - never invented. */
+  title: string | null;
 }
 
 export interface Phase {
@@ -160,6 +167,8 @@ export interface SessionDetail {
   /** adw/<adw_id>_<slug>, when one exists - null for a chain that never cut
    * a branch (adw_prompt, adw_scout, adw_quality today). */
   branch: string | null;
+  /** Same derivation as SessionSummary.title - see there. */
+  title: string | null;
 }
 
 export interface EventsPage {
@@ -223,6 +232,12 @@ export interface LogPayload {
   input?: string;
   /** Commit phases log a sha + message here (git phases log). */
   sha?: string;
+  /** `name: "branch"` events only (runner.py's `Run._log_branch_and_title`,
+   * stamped at worktree entry): the run's branch, its worktree path, and its
+   * derived human title. */
+  branch?: string;
+  path?: string;
+  title?: string;
 }
 
 export interface HandoffPayload {

@@ -104,6 +104,50 @@ def run_branch_name(adw_id: str, prompt: str) -> str:
     return f"adw/{adw_id}_{slugify(prompt)}"
 
 
+# ── human titles (worktree naming — "which worktree ran which ticket") ──────
+#
+# One rule, every reader: `dispatch.py`'s `request_prompt` leads a dispatched
+# run's prompt with the queue card's own H1, on its own first line, so
+# extracting the first line recovers that title verbatim. A direct,
+# non-dispatched prompt (`just build "..."`, or a `prompt.md` file) has no
+# such structure — its first non-blank line IS the whole ask — so the same
+# extraction is capped to the first few words instead. No caller ever has to
+# know or branch on which case it is.
+
+_TITLE_MAX_WORDS = 8
+_MARKDOWN_HEADING_RE = re.compile(r"^#+\s+")
+
+
+def derive_title(prompt: str, max_words: int = _TITLE_MAX_WORDS) -> str:
+    """The run's human title, straight from the prompt handed to it. Stamped
+    once, at branch-cut time (`Run.enter_worktree`), into the trace's
+    `branch` event payload — every other surface (worktrees CLI,
+    morning-brief, the UI) reads it back rather than recomputing it.
+
+    A leading markdown "# " (a `prompt.md` file that itself starts with an
+    H1) is stripped, same as `dispatch.py`'s own H1 parser strips it.
+    """
+    first_line = next((line.strip() for line in (prompt or "").splitlines() if line.strip()), "")
+    first_line = _MARKDOWN_HEADING_RE.sub("", first_line, count=1).strip()
+    words = first_line.split()
+    if len(words) <= max_words:
+        return first_line
+    return " ".join(words[:max_words])
+
+
+def humanize_slug(slug: str) -> str:
+    """Fallback title when no trace event carries a real one — telemetry
+    recorded before this fix, or `worktrees.enabled: false`'s pre-worktree
+    branch. "add-a-clamp-helper" -> "Add a clamp helper": dashes to spaces,
+    sentence case. Never used once a run stamps a real title (`derive_title`
+    above); readers try that first."""
+    words = [w for w in slug.split("-") if w]
+    if not words:
+        return slug
+    text = " ".join(words)
+    return text[0].upper() + text[1:]
+
+
 def find_run_branch(adw_id: str, tree: Path | str | None = None) -> str | None:
     """The branch already cut for `adw_id`, if a prior phase cut one.
 

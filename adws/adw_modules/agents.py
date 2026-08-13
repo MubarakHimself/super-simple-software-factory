@@ -41,12 +41,35 @@ class GateFailure(RuntimeError):
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     defaults = raw.get("defaults", {}) or {}
+    default_harness = defaults.get("harness_engineering", []) or []
     for agent in raw.get("agents", []) or []:
         for key in ("coding_agent", "model", "thinking", "color", "tools", "writes"):
             if key in defaults:
                 agent.setdefault(key, defaults[key])
-        agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
+        # harness_engineering does NOT setdefault/replace like the keys above:
+        # it MERGES. defaults.harness_engineering is roster-wide (e.g. a bridge
+        # extension every claude-bridge lane needs); an agent's own list is its
+        # extra, specific needs (e.g. planner's subagents.ts). A plain
+        # setdefault/replace here is the landmine MAP rule 3 calls out - an
+        # agent that already names its own list would silently never gain a
+        # roster-wide extension added to defaults later.
+        agent["harness_engineering"] = merge_unique(
+            default_harness, agent.get("harness_engineering", []) or [])
     return SSSFConfig(**raw)
+
+
+def merge_unique(base: list[str], extra: list[str]) -> list[str]:
+    """Union of two lists, order-stable, no duplicates.
+
+    Every `base` item first (in its own order), then any `extra` item not
+    already present (in its own order). Used to compose
+    `defaults.harness_engineering` with each agent's own list.
+    """
+    merged = list(base)
+    for item in extra:
+        if item not in merged:
+            merged.append(item)
+    return merged
 
 
 def resolve(cfg: SSSFConfig, name: str) -> AgentConfig:
@@ -74,7 +97,13 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
             if not Path(ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
         try:
-            agent_pi.resolve_model(agent.model)
+            # The catalog probe must carry the SAME extensions this agent
+            # actually runs with (its merged harness_engineering, composed by
+            # load_config's merge_unique above) - a claude-bridge/* model is
+            # registered only once the bridge extension that names it loads,
+            # so validating without -e makes every bridge lane structurally
+            # unresolvable and SystemExits a config that is actually fine.
+            agent_pi.resolve_model(agent.model, extensions=tuple(agent.harness_engineering))
         except ValueError as e:
             problems.append(f"agent {name!r}: {e}")
     if problems:

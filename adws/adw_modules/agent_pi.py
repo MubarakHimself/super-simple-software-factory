@@ -89,12 +89,28 @@ def _count(value: str) -> int:
     return int(value)
 
 
-@lru_cache(maxsize=1)
-def _pi_catalog() -> list[tuple[str, str, int]]:
-    """Read pi's merged catalog, including built-in providers and custom models."""
+@lru_cache(maxsize=32)
+def _pi_catalog(extensions: tuple[str, ...] = ()) -> list[tuple[str, str, int]]:
+    """Read pi's merged catalog for one exact extension set, including
+    built-in providers, custom models, AND anything an extension registers
+    (e.g. claude-bridge/* models, which only exist once pi-claude-bridge is
+    loaded).
+
+    `-ne` still disables AMBIENT discovery (rule 12) - but `extensions` are
+    passed straight back in as explicit `-e <path>` flags, same as a real
+    agent turn's own extension list, so a bridge-only model is not
+    structurally invisible to a cost-free `--list-models` probe. Cached per
+    exact extension tuple with `lru_cache`, so `agents.validate()` calling
+    this once per agent in a roster shells `pi` at most once per DISTINCT
+    extension set, not once per agent - most agents in one roster share the
+    same set (roster-wide `defaults.harness_engineering`), so this is
+    normally one subprocess call for the whole validate() pass, not five.
+    """
     try:
         result = subprocess.run(
-            [*PI_CMD, *NO_EXTENSION_DISCOVERY, "--list-models"],
+            [*PI_CMD, *NO_EXTENSION_DISCOVERY,
+             *[flag for ext in extensions for flag in ("-e", ext)],
+             "--list-models"],
             capture_output=True, text=True, encoding="utf-8",
             timeout=30, env=operator_env(), check=False,
         )
@@ -114,14 +130,21 @@ def _pi_catalog() -> list[tuple[str, str, int]]:
     return rows
 
 
-def resolve_model(pattern: str) -> tuple[str, str]:
+def resolve_model(pattern: str, extensions: tuple[str, ...] = ()) -> tuple[str, str]:
     """Resolve a model pattern to an explicit ``(provider, model_id)`` pair.
 
     Pi's catalog merges built-in models with ``~/.pi/agent/models.json``. Using
     that same merged view lets SSSF target direct providers such as
     ``openai/gpt-5.6-terra`` without re-registering built-in models locally.
+
+    ``extensions`` is the caller's own merged ``harness_engineering`` list (a
+    tuple - hashable, so it doubles as the catalog cache key). Pass the same
+    extensions an agent actually runs with; a bridge model (``claude-bridge/*``)
+    resolves only when the bridge extension that registers it is named here,
+    exactly like a real pi invocation. The default of ``()`` reproduces the
+    old no-extensions probe unchanged.
     """
-    catalog = [(provider, model_id) for provider, model_id, _ in _pi_catalog()]
+    catalog = [(provider, model_id) for provider, model_id, _ in _pi_catalog(extensions)]
     if "/" in pattern:
         provider, model_id = pattern.split("/", 1)
         if (provider, model_id) in catalog:
@@ -155,13 +178,18 @@ def _context_tokens(usage: dict) -> int:
                    for part in ("input", "output", "cacheRead", "cacheWrite")))
 
 
-def context_window(provider: str, model_id: str) -> int:
-    """The model's context ceiling from pi's merged model catalog."""
+def context_window(provider: str, model_id: str, extensions: tuple[str, ...] = ()) -> int:
+    """The model's context ceiling from pi's merged model catalog.
+
+    `extensions` is passed through to `_pi_catalog` for the same reason
+    `resolve_model` takes it: a bridge-only model's context window is only
+    listed once the extension that registers the model is loaded.
+    """
     registry = json.loads(Path(MODELS_JSON).read_text(encoding="utf-8"))
     for model in registry.get("providers", {}).get(provider, {}).get("models", []):
         if model.get("id") == model_id:
             return int(model.get("contextWindow") or 0)
-    for listed_provider, listed_model, window in _pi_catalog():
+    for listed_provider, listed_model, window in _pi_catalog(extensions):
         if listed_provider == provider and listed_model == model_id:
             return window
     return 0
@@ -264,7 +292,8 @@ def run(request: PiRequest, on_event: Callable[[dict], None] | None = None,
     can record it as killable — a hung coding agent is otherwise a pid you have
     to hunt for in `ps` while the run sits there.
     """
-    provider, model_id = resolve_model(request.model)
+    extensions = tuple(request.extensions)
+    provider, model_id = resolve_model(request.model, extensions=extensions)
     cmd = [
         *PI_CMD, *NO_EXTENSION_DISCOVERY, "-p", "--mode", "json",
         "--provider", provider, "--model", model_id,
@@ -283,7 +312,7 @@ def run(request: PiRequest, on_event: Callable[[dict], None] | None = None,
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     result = PiResult(session_id=request.session_id,
-                      context_window=context_window(provider, model_id))
+                      context_window=context_window(provider, model_id, extensions=extensions))
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or

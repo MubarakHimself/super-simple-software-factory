@@ -8,6 +8,7 @@ comments below refer to specs/worktrees.md.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ from adw_modules import gates, git_helper, permissions, session, worktrees
 from adw_modules.data_types import (
     AgentConfig,
     ConfigDefaults,
+    EventRecord,
     ObservabilityConfig,
     PhaseParams,
     PromptEngineering,
@@ -295,6 +297,21 @@ def test_render_is_headed_even_when_empty():
     assert "exit 0" in table
 
 
+def test_render_shows_a_title_column_before_the_adw_id():
+    # "an id tells me nothing - I want to know which worktree ran which
+    # ticket": TITLE leads, ADW_ID trails.
+    rows = [WorktreeRow(adw_id="deadbeef", branch="adw/deadbeef_x", title="Add a login flow",
+                        state="alive")]
+    table = worktrees.render(rows)
+    assert "TITLE" in table
+    assert "Add a login flow" in table
+    assert table.index("TITLE") < table.index("ADW_ID")
+    header_line = table.splitlines()[0]
+    row_line = next(line for line in table.splitlines() if "deadbeef" in line)
+    assert row_line.index("Add a login flow") < row_line.index("deadbeef")
+    assert header_line.index("TITLE") < header_line.index("ADW_ID")
+
+
 # ── inventory: the full outer join ───────────────────────────────────────────
 
 def test_inventory_joins_worktree_branch_and_session(main_repo, wcfg, tmp_path):
@@ -316,6 +333,42 @@ def test_inventory_joins_worktree_branch_and_session(main_repo, wcfg, tmp_path):
     assert row.status == "success"
     assert row.request == "add a feature"
     assert row.state == "unmerged"          # a real commit not in trunk
+
+
+def test_inventory_title_comes_from_the_trace_when_the_run_stamped_one(main_repo, wcfg, tmp_path):
+    db_path = tmp_path / "sssf.db"
+    tracer = Tracer(db_path, tmp_path / "events.jsonl")
+    tracer.session_start("aaaaaaaa", "tester", adw_name="adw_build")
+    tracer.event(EventRecord(adw_id="aaaaaaaa", type="log", name="branch",
+                             payload={"branch": "adw/aaaaaaaa_add-a-login-flow",
+                                      "path": "/tmp/x", "title": "Add a login flow"}))
+    tracer.session_finish("aaaaaaaa", ok=True)
+    tracer.conn.close()
+    worktrees.ensure_run_worktree(main_repo, "aaaaaaaa", "add a feature", wcfg)
+
+    rows = worktrees.inventory(main_repo, wcfg, db_path)
+
+    row = next(r for r in rows if r.adw_id == "aaaaaaaa")
+    assert row.title == "Add a login flow"
+
+
+def test_inventory_title_falls_back_to_humanized_slug_without_a_trace_title(
+        main_repo, wcfg, tmp_path):
+    # Telemetry recorded before this fix: the old-style bare {"branch": ...}
+    # payload, no "title" key at all.
+    db_path = tmp_path / "sssf.db"
+    tracer = Tracer(db_path, tmp_path / "events.jsonl")
+    tracer.session_start("aaaaaaaa", "tester", adw_name="adw_build")
+    tracer.event(EventRecord(adw_id="aaaaaaaa", type="log", name="branch",
+                             payload={"branch": "adw/aaaaaaaa_add-a-clamp-helper"}))
+    tracer.session_finish("aaaaaaaa", ok=True)
+    tracer.conn.close()
+    worktrees.ensure_run_worktree(main_repo, "aaaaaaaa", "add a clamp helper", wcfg)
+
+    rows = worktrees.inventory(main_repo, wcfg, db_path)
+
+    row = next(r for r in rows if r.adw_id == "aaaaaaaa")
+    assert row.title == "Add a clamp helper"
 
 
 def test_inventory_missing_db_is_not_fatal(main_repo, wcfg, tmp_path):
@@ -379,6 +432,101 @@ def test_paths_keep_session_runtime_in_the_main_repo_when_repo_root_is_a_worktre
         assert run.context_handoff_dir == handoff_before
         assert Path(run.session_dir).is_relative_to(run.main_root)
         assert Path(run.context_handoff_dir).is_relative_to(run.main_root)
+    finally:
+        run.tracer.conn.close()
+
+
+# ── trace recording: the branch/title event (worktree-naming ticket) ───────
+#
+# The pre-worktree `branch` PHASE's `ph.log(branch=...)` stamped a
+# `type=log, name=branch` event - morning-brief's collector still queries
+# exactly that shape (fetch_branch). Once branching moved inside a phase
+# named "worktree", `ph.log()` alone stamps `name="worktree"` instead (it
+# always takes the ENCLOSING phase's name) and that query silently stopped
+# matching anything. These pin `Run.enter_worktree` writing the event back
+# under the name every reader expects, carrying the run's title too - with no
+# assumption about which phase happens to be open when it runs.
+
+def _branch_events(run) -> list[dict]:
+    rows = run.tracer.conn.execute(
+        "SELECT payload_json FROM events WHERE adw_id=? AND type='log' AND name='branch'",
+        (run.adw_id,)).fetchall()
+    return [json.loads(r[0]) for r in rows]
+
+
+def test_enter_worktree_logs_a_branch_event_readers_can_find(main_repo, wcfg, monkeypatch):
+    monkeypatch.chdir(main_repo)
+    run = session.ensure(_sdlc_cfg(wcfg), adw_id="aaaaaaaa")
+    try:
+        rw = run.enter_worktree("Add a login flow\n\nsome body text")
+
+        payloads = _branch_events(run)
+        assert len(payloads) == 1
+        assert payloads[0]["branch"] == rw["branch"]
+        assert payloads[0]["path"] == rw["path"]
+        assert payloads[0]["title"] == "Add a login flow"
+    finally:
+        run.tracer.conn.close()
+
+
+def test_enter_worktree_logs_the_branch_event_regardless_of_the_open_phase_name(
+        main_repo, wcfg, monkeypatch):
+    # Regression coverage for the actual bug: ph.log() alone would have
+    # stamped name="worktree" here, not "branch" - this proves the event
+    # lands under the fixed name even though the ADW opens its phase as
+    # "worktree", exactly like every real writing ADW does.
+    monkeypatch.chdir(main_repo)
+    run = session.ensure(_sdlc_cfg(wcfg), adw_id="bbbbbbbb")
+    try:
+        with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                                   description="Cut or join this run's branch and its own working tree")) as ph:
+            ph.log(**run.enter_worktree("Add a login flow"))
+
+        names = {row[0] for row in run.tracer.conn.execute(
+            "SELECT name FROM events WHERE adw_id=? AND type='log'", (run.adw_id,)).fetchall()}
+        assert "branch" in names
+        assert len(_branch_events(run)) == 1
+    finally:
+        run.tracer.conn.close()
+
+
+def test_enter_worktree_rejoin_logs_a_fresh_branch_event_each_call(main_repo, wcfg, monkeypatch):
+    # A joined run (a second phase, or a fix-loop re-prompt) calls
+    # enter_worktree again - each call logs its own event rather than
+    # relying on the first one, so a reader always finds the latest.
+    monkeypatch.chdir(main_repo)
+    run = session.ensure(_sdlc_cfg(wcfg), adw_id="cccccccc")
+    try:
+        run.enter_worktree("Add a login flow")
+        run.enter_worktree("now write the tests")
+
+        payloads = _branch_events(run)
+        assert len(payloads) == 2
+        assert {p["title"] for p in payloads} == {"Add a login flow", "now write the tests"}
+        assert len({p["branch"] for p in payloads}) == 1   # same branch both times
+    finally:
+        run.tracer.conn.close()
+
+
+def test_enter_worktree_worktrees_disabled_still_logs_branch_and_title(main_repo, monkeypatch):
+    # worktrees.enabled: false keeps pre-worktree behaviour (repo_root ==
+    # main_root) - the trace-recording fix must not depend on the worktree
+    # layer being on.
+    monkeypatch.chdir(main_repo)
+    cfg = SSSFConfig(
+        defaults=ConfigDefaults(data_dir="adw_data"),
+        observability=ObservabilityConfig(db="adw_data/sssf.db"),
+        worktrees=WorktreesConfig(enabled=False),
+    )
+    run = session.ensure(cfg, adw_id="dddddddd")
+    try:
+        rw = run.enter_worktree("Add a login flow")
+
+        assert run.repo_root == run.main_root
+        payloads = _branch_events(run)
+        assert len(payloads) == 1
+        assert payloads[0]["branch"] == rw["branch"]
+        assert payloads[0]["title"] == "Add a login flow"
     finally:
         run.tracer.conn.close()
 

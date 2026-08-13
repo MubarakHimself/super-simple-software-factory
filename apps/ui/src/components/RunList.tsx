@@ -24,7 +24,10 @@ export function RunList({
   const q = filter.trim().toLowerCase();
   const filtered = q
     ? sessions.filter(
-        (s) => s.adw_id.toLowerCase().includes(q) || (s.request ?? "").toLowerCase().includes(q),
+        (s) =>
+          s.adw_id.toLowerCase().includes(q) ||
+          (s.title ?? "").toLowerCase().includes(q) ||
+          (s.request ?? "").toLowerCase().includes(q),
       )
     : sessions;
 
@@ -64,11 +67,15 @@ function RunRow({ session, selected, now }: { session: SessionSummary; selected:
     >
       <div className="flex h-[22px] items-center gap-1.5">
         <StatusDot color={dot} />
-        <span className="mono shrink-0 text-[11px] font-medium text-foreground">{session.adw_id}</span>
-        {showChip && <span className={cn("shrink-0 text-[10px] font-semibold", chipClass)}>{chipLabel}</span>}
-        <span className={cn("min-w-0 flex-1 truncate text-[11px]", showChip ? "text-foreground" : "text-muted-foreground")}>
-          {truncate(session.request, 60) || "(no request captured)"}
+        {/* Title first, id small/dim - "an id tells me nothing, I want to
+         * know which worktree ran which ticket". Falls back to the raw
+         * request for a run with no title (adw_prompt/adw_scout/adw_quality
+         * never cut a branch, so never stamp one). */}
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+          {session.title || truncate(session.request, 60) || "(no request captured)"}
         </span>
+        {showChip && <span className={cn("shrink-0 text-[10px] font-semibold", chipClass)}>{chipLabel}</span>}
+        <span className="mono shrink-0 text-[10px] text-[var(--color-text-meta)]">{session.adw_id}</span>
         {!hover ? (
           <span className="shrink-0 text-[10px] text-[var(--color-text-meta)]">
             {relativeTime(session.started_at, now)}

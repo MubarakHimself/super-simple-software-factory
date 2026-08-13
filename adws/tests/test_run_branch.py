@@ -155,3 +155,56 @@ def test_ensure_run_branch_keeps_different_runs_on_different_branches(tmp_repo):
     assert one != two
     assert git_helper.find_run_branch("aaaaaaaa") == one
     assert git_helper.find_run_branch("bbbbbbbb") == two
+
+
+# ── derive_title: the one title rule, pure logic ────────────────────────────
+# MAP.md's worktree-naming ticket: "the card's H1 when dispatched (extract
+# the first line), else the first ~8 words of the request" - one function,
+# no caller-side branching on which case it is.
+
+def test_derive_title_dispatched_prompt_recovers_the_card_h1_verbatim():
+    # dispatch.py's request_prompt() shape: "{title}\n\n{body}".
+    prompt = "Add a health endpoint\n\n## Agent Brief\n**Category:** enhancement\n..."
+    assert git_helper.derive_title(prompt) == "Add a health endpoint"
+
+
+def test_derive_title_direct_prompt_caps_at_max_words():
+    prompt = "Add a health endpoint returning 200 OK with current uptime info please"
+    assert git_helper.derive_title(prompt) == "Add a health endpoint returning 200 OK with"
+
+
+def test_derive_title_short_direct_prompt_is_returned_whole():
+    assert git_helper.derive_title("Fix the login bug") == "Fix the login bug"
+
+
+def test_derive_title_strips_a_leading_markdown_heading():
+    # prompt.md itself starting with an H1 - dispatch.py's own H1 parser
+    # strips the same "#\s+" prefix.
+    assert git_helper.derive_title("# Add the login flow\n\nbody text") == "Add the login flow"
+
+
+def test_derive_title_skips_leading_blank_lines():
+    assert git_helper.derive_title("\n\n  Add a login flow  \n\nbody") == "Add a login flow"
+
+
+def test_derive_title_empty_prompt_is_empty_string():
+    assert git_helper.derive_title("") == ""
+    assert git_helper.derive_title("   \n  \n") == ""
+
+
+def test_derive_title_respects_a_custom_max_words():
+    assert git_helper.derive_title("one two three four five", max_words=2) == "one two"
+
+
+# ── humanize_slug: the fallback when no trace title was recorded ───────────
+
+def test_humanize_slug_dashes_to_spaces_sentence_case():
+    assert git_helper.humanize_slug("add-a-clamp-helper") == "Add a clamp helper"
+
+
+def test_humanize_slug_single_word():
+    assert git_helper.humanize_slug("run") == "Run"
+
+
+def test_humanize_slug_empty_slug_is_returned_unchanged():
+    assert git_helper.humanize_slug("") == ""

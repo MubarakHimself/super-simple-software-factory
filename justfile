@@ -111,6 +111,17 @@ worktrees *ARGS:
 worktrees-prune *ARGS:
     uv run adws/worktrees.py --config {{config}} --prune {{ARGS}}
 
+# ── hygiene ─────────────────────────────────────────────────────────────────
+# Regenerable tool caches only (.ruff_cache/.mypy_cache/.pytest_cache/every
+# __pycache__) - never .venv, never adw_data, never a worktree (they live
+# outside the repo entirely). Prints every path it removes. One `uv run`
+# invocation, so it runs the same under cmd.exe (this justfile's
+# windows-shell) and sh - no OS-specific recipe body needed.
+
+# sweep regenerable caches - never .venv/adw_data/worktrees; pass --dry-run to preview
+clean *ARGS:
+    uv run adws/clean.py {{ARGS}}
+
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
 

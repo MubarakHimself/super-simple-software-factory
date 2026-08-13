@@ -462,6 +462,7 @@ function TracePage({
             now={now}
             latestEventAt={latestEventAt}
             branch={detail.data.branch}
+            title={detail.data.title}
           />
           <PhaseTimeline phases={detail.data.phases} activePhaseId={selectedPhaseId} onSelect={setSelectedPhaseId} />
           <WorkLog phases={detail.data.phases} events={events} running={running} activePhaseId={selectedPhaseId} />

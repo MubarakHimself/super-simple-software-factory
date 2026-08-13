@@ -1,0 +1,226 @@
+# sssf.shipping.config.yaml — the operator's roster (revised 2026-08-13 noon).
+#
+# NOT the running default. `adws/adw_sssf_config/sssf.config.yaml` (test lane,
+# ollama-cloud/kimi-k2.7-code throughout) stays the config every recipe uses
+# until the two readiness items below are cleared. Activate this file for one
+# run/session the designed way — no code change, no ambient state (MAP rule
+# 12):
+#   SSSF_CONFIG=adws/adw_sssf_config/sssf.shipping.config.yaml just <recipe> "<prompt>"
+#   uv run adws/adw_*.py --config adws/adw_sssf_config/sssf.shipping.config.yaml ...
+#
+# ── Roster (operator's noon dictation, 2026-08-13 — supersedes this file's own
+#    earlier-today morning roster; MAP.md "Roster" carries the same revision) ─
+#   planner    claude-bridge/claude-opus-5     operator's pick
+#   reviewer   claude-bridge/claude-opus-4-8   cross-family: xAI writes, Anthropic reviews
+#                                               (Opus 5 is an acceptable alternate —
+#                                               operator's pick per run, same as planner's)
+#   builder    xai/grok-4.5                    the workhorse. opencode-go/grok-4.5 is the
+#                                               SAME model on a SECOND quota pool — the
+#                                               designated fallback before/without the xai
+#                                               re-login. Full workhorse pool sits on
+#                                               opencode-go: GLM 5.2 / Kimi K2.7 / Qwen
+#                                               qwen3.8-max.
+#   scout      ollama-cloud/kimi-k2.7-code     the proven test lane, kept for recon
+#   documenter opencode-go/minimax-m3          a model not otherwise leaned on
+#                                               (Sonnet 5 is the alternate)
+#
+# Cross-family review (MAP rule 3) is satisfied: the family that writes (xAI)
+# is never the family that reviews (Anthropic). Planner and reviewer both sit
+# on claude-bridge — a review is never asked to grade its own family's plan
+# either, since the builder (xAI) is what actually wrote the diff being
+# reviewed.
+#
+# NO GPT / openai-codex ANYWHERE in this file. The Codex subscription has
+# lapsed ("overkill" — operator, 2026-08-13); GPT returns only deliberately,
+# for big ML batches, via the pre-batch panel — never a standing roster lane.
+#
+# Grok 4.6 (released 2026-08-13) is explicitly NOT used anywhere in this
+# roster, on either quota pool — operator's own rule: protect the weekly
+# limit. Stick to Grok 4.5 until the operator says otherwise (MAP.md "Dead
+# list").
+#
+# ── Before this config goes live (readiness, not yet cleared) ──────────────
+# 1. Grok re-login. `xai/grok-4.5` (builder) needs a fresh token — MAP.md
+#    "Lane status" recorded it revoked as of 2026-08-12. `pi auth check` LIES
+#    in both directions (MAP landmine) — the only real proof is a live round
+#    trip returning non-zero tokens, done once after re-login, before any
+#    batch leans on this lane. (`opencode-go/grok-4.5` is the fallback that
+#    works today, before/without this re-login.)
+# 2. Bridge round trip on the FIRST REAL run — never a test call (MAP rule 4:
+#    no Anthropic model may be called for testing). This file adds
+#    `pi-claude-bridge` to `defaults.harness_engineering` so it merges into
+#    EVERY agent's own list (the defaults/per-agent merge fix — see
+#    `adw_modules/agents.py:merge_unique` and `data_types.py`'s
+#    ConfigDefaults.harness_engineering / AgentConfig.harness_engineering).
+#    Registration was already verified with a cost-free `--list-models` probe
+#    (no generation, no Anthropic call — same shape as installer-wizard.md's
+#    V3 check, and the same probe `agent_pi._pi_catalog`/`resolve_model` now
+#    run for both planner and reviewer at `validate()` time, passing their own
+#    merged harness_engineering as `-e`): `claude-opus-5` and `claude-opus-4-8`
+#    both list under `--provider claude-bridge` once the extension loads.
+#    That is NOT the same as a real agent turn — the first actual
+#    planner/reviewer call through this config IS the round trip, and it must
+#    be a real ticket, not a probe (MAP rule 4 forbids spending Anthropic
+#    quota on a test).
+# 3. The bridge extension path below is this box's real, verified install
+#    (`~/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts`, resolved
+#    absolute because it lives outside the repo, under the user's pi home —
+#    unlike `subagents.ts`, which the repo carries and can reference
+#    relatively). A fresh host re-derives this path the same way `PI_PATH`
+#    is re-derived after a pi reinstall (MAP landmine): confirm the extension
+#    is actually installed there before pointing an agent at it.
+defaults:
+  coding_agent: pi
+  # Safety net only: every agent below sets its own model explicitly, so this
+  # is never actually read. It names the one already-verified lane (never the
+  # upstream starter's unresolvable google/gemini default) so a future agent
+  # added without a model: line fails onto something real, not silently onto
+  # a provider that was never registered on this box.
+  model: ollama-cloud/kimi-k2.7-code
+  thinking: medium
+  # Roster-wide: merges (union, order-stable, no duplicates) with each
+  # agent's own harness_engineering below — it does NOT replace it (readiness
+  # item 2 above depends on this). Every agent gains the bridge extension,
+  # harmlessly for the three not on a claude-bridge model: loading it only
+  # REGISTERS the claude-bridge provider (verified via --list-models, see
+  # above) and an AskClaude tool no non-bridge agent's own `tools:` allowlist
+  # names, so it is loaded-but-unused for them, same as any other extension
+  # tool nobody's allowlist requests.
+  harness_engineering:
+    - C:/Users/Mubarak/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts
+  tools:
+    - read
+    - bash
+    - edit
+    - write
+    - grep
+    - find
+    - ls
+  protected_files:
+    - adws/adw_modules/
+    - adws/adw_sssf_config/
+    - adws/adw_*.py
+  data_dir: adws/adw_data          # same runtime home as the test-lane config
+
+observability:
+  db: adws/adw_data/sssf.db        # same db as the test-lane config — one trace, any roster
+  poll_ms: 500
+
+worktrees:
+  enabled: true
+  root: ""
+  trunk: main
+  stale_after_minutes: 30
+
+agents:
+  - name: planner
+    model: claude-bridge/claude-opus-5   # operator's pick, 2026-08-13 noon; readiness item 2
+    thinking: high
+    color: "#a78bfa"
+    purpose: Turn a request into a plan the builder can implement without asking questions.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/planner/system.md
+      user: adws/adw_data/prompt_engineering/planner/user.md
+    harness_engineering:
+      - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
+                                                            # merges with defaults' pi-claude-bridge above
+    writes:
+      - specs/
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - subagent_create
+      - subagent_continue
+      - subagent_list
+      - subagent_remove
+
+  - name: builder
+    model: xai/grok-4.5              # readiness item 1: needs a fresh Grok login before this runs for
+                                      # real; opencode-go/grok-4.5 is the same model, second quota pool,
+                                      # the fallback before/without that re-login (MAP.md "Roster")
+    color: "#22d3ee"
+    purpose: Implement the plan exactly; report every changed file in the envelope.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/builder/system.md
+      user: adws/adw_data/prompt_engineering/builder/user.md
+    # No `writes` key: unrestricted, and the only agent that is. Still cannot
+    # touch defaults.protected_files.
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - edit
+      - write
+
+  - name: scout
+    model: ollama-cloud/kimi-k2.7-code   # the proven test lane, kept here for recon specifically
+    color: "#fbbf24"
+    purpose: Find and report where things live; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/scout/system.md
+      user: adws/adw_data/prompt_engineering/scout/user.md
+    harness_engineering:
+      - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
+    writes: []
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - subagent_create
+      - subagent_continue
+      - subagent_list
+      - subagent_remove
+
+  # No tester agent: running the suite is a known command, so it is a
+  # kind="code" phase over adw_modules/quality.py. See SKILL.md hard rule 8.
+
+  - name: reviewer
+    model: claude-bridge/claude-opus-4-8   # operator's pick, 2026-08-13 noon; Opus 5 is an acceptable
+                                            # alternate (same pick planner uses); readiness item 2
+    thinking: high
+    color: "#fb7185"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/reviewer/system.md
+      user: adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []                     # a reviewer that cannot fix cannot quietly fix
+    # No own harness_engineering list — gets defaults' pi-claude-bridge only,
+    # which is exactly what it needs to resolve claude-bridge/claude-opus-4-8.
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: documenter
+    model: opencode-go/minimax-m3    # "a model we don't lean on" — operator, 2026-08-13; Sonnet 5 is
+                                      # the alternate ("sitting there doing nothing" — operator)
+    color: "#e879f9"
+    purpose: Write up the change that was just made, from the diff; document only.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/documenter/system.md
+      user: adws/adw_data/prompt_engineering/documenter/user.md
+    writes:
+      - app_docs/
+      - docs/
+      - "**/*.md"
+      - "*.md"
+    tools:
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - edit

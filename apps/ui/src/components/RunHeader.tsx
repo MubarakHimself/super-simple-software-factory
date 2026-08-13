@@ -23,6 +23,7 @@ export function RunHeader({
   now,
   latestEventAt,
   branch,
+  title,
   baseRefLabel,
 }: {
   session: Session;
@@ -33,6 +34,7 @@ export function RunHeader({
   now: number;
   latestEventAt: string | null | undefined;
   branch: string | null;
+  title: string | null;
   baseRefLabel?: string | null;
 }) {
   const triple = buildStatusTriple(session, phases, processes, now, latestEventAt);
@@ -41,7 +43,15 @@ export function RunHeader({
 
   return (
     <div className="border-b border-border bg-chrome px-3 py-2">
-      <div className="flex items-center gap-2">
+      {/* Title first, id small/dim - the same rule as RunList: the human
+       * name is the headline, the id is a lookup key, not the label. */}
+      <div className="flex items-baseline gap-2">
+        <h1 className="min-w-0 truncate text-[13px] font-semibold text-foreground">
+          {title || session.request || "(untitled run)"}
+        </h1>
+        <span className="mono shrink-0 text-[10px] text-[var(--color-text-meta)]">{session.adw_id}</span>
+      </div>
+      <div className="mt-1 flex items-center gap-2">
         <StatusTriple dot={triple.dot} label={triple.label} sentence={triple.sentence} />
         {session.archived === 1 && (
           <Badge variant="dim" className="text-[10px]">

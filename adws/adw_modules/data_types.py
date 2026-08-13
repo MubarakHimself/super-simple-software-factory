@@ -337,6 +337,10 @@ class AgentConfig(BaseModel):
     color: str = ""                 # hex swatch for this agent's lane in the UI
     purpose: str = ""
     prompt_engineering: PromptEngineering
+    # pi extensions loaded into the harness (-e). Raw YAML on this field is
+    # per-agent only; `agents.load_config` MERGES it with
+    # `defaults.harness_engineering` (union, order-stable, no duplicates)
+    # before this model is constructed — see ConfigDefaults.harness_engineering.
     harness_engineering: list[str] = Field(default_factory=list)
     tools: list[str] | None = None    # allowlist; None = all tools usable
     # What this agent may MODIFY in the repo, enforced in code after every call
@@ -355,6 +359,15 @@ class ConfigDefaults(BaseModel):
     model: str = "google/gemini-3.6-flash"
     thinking: str = "medium"
     color: str = ""
+    # Roster-wide pi extensions. MERGES into every agent's own
+    # harness_engineering (union, order-stable, no duplicates) — it does NOT
+    # replace it. Composed in `agents.load_config` (merge_unique), before any
+    # AgentConfig is constructed, so this field and AgentConfig.harness_engineering
+    # never need to be reconciled again downstream. Getting this wrong (a plain
+    # setdefault/replace) is the exact landmine MAP rule 3 calls out: wiring an
+    # extension in here for one lane (e.g. pi-claude-bridge for a reviewer)
+    # would silently vanish for any agent that already names its own list
+    # (e.g. planner's subagents.ts) instead of gaining this one too.
     harness_engineering: list[str] = Field(default_factory=list)
     tools: list[str] | None = None    # roster-wide allowlist; None = all tools usable
     # Off-limits to every agent that has not named them in its own `writes`.
@@ -422,6 +435,7 @@ class WorktreeRow(BaseModel):
     adw_id: str
     branch: str = ""
     path: str = ""
+    title: str = ""                   # from the trace's branch event, else humanized slug
     state: WorktreeState = "no-tree"
     ahead: int = 0                    # commits on branch not in trunk — display only
     dirty: bool = False
