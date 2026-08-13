@@ -224,6 +224,21 @@ fully non-interactive CLI (`init --defaults --yes`, `add <c> --yes`, `search/vie
 registry MCP). Install the skill into `apps/ui`; UI-touching agents load it — this is the concrete
 case of "some agents need skills (the UI agents)". Docs: ui.shadcn.com/docs/skills, /docs/cli.
 
+**The standalone app — SHIPPED 2026-08-13 afternoon** (spec `specs/standalone-app.md`; operator
+direction: the app is the whole roof, self-embedded, ADE-class, whose distinction is deploying its
+factory to a server). Verified live, round after round: (1) **Terminal surface** — fifth surface,
+tabbed xterm.js, ptys owned by Electron main over origin-gated IPC, profile buttons
+(shell/claude/codex/pi — pi via PI_PATH, never by name), replay buffer so no output is ever lost
+(the silent-dead-profile race was caught and killed), proven inside the packaged exe;
+(2) **first-run Setup in the app** — instant launch (1-2s to window, zero network before first
+paint), background verify, non-blocking drift banner; the CLI wizard runs in an embedded pty as
+the Setup screen (keystroke gate fixed 2026-08-13 — Setup's pty now receives Enter/Ctrl-C);
+(3) **Server lens v1** — Settings pane: host/key config (main-process only), Deploy = the wizard's
+server target over SSH in a visible tab, Connect = app-managed loopback tunnel with honest failed
+states; remote SPA can see, never act. Stack: @lydell/node-pty prebuilds (zero compilers — proven
+under real Electron), pinned exact. NOT in v1 (recorded in spec): remote db sync, server fleet,
+auto-reconnect, key management, herdr (researched-later; sessions die with the app).
+
 ## Dead list — killed with reasons, do not resurrect
 
 | Killed | Why |

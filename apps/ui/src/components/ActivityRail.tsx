@@ -1,4 +1,4 @@
-import { Activity, Columns3, GitPullRequest, Settings as SettingsIcon } from "lucide-react";
+import { Activity, Columns3, GitPullRequest, Settings as SettingsIcon, SquareTerminal } from "lucide-react";
 import { navigate, surfacePath, type Surface } from "@/routes";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +12,7 @@ const ITEMS: { surface: Surface; icon: typeof Activity; label: string }[] = [
   { surface: "trace", icon: Activity, label: "Trace" },
   { surface: "gate", icon: GitPullRequest, label: "Gate" },
   { surface: "settings", icon: SettingsIcon, label: "Settings" },
+  { surface: "terminal", icon: SquareTerminal, label: "Terminal" },
 ];
 
 /** The whole navigation: four icon buttons, count badge each, 2px left

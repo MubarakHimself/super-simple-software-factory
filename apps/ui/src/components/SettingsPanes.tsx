@@ -1,6 +1,7 @@
 import type { ConfigResponse } from "@shared/types";
 import { relativeTime, tokenCount } from "@/lib/format";
 import { StatusTriple } from "@/components/StatusTriple";
+import { ServerPane } from "@/components/ServerPane";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
@@ -120,6 +121,16 @@ export function SettingsPanes({ config }: { config: ConfigResponse }) {
         <Field label="data_dir" value={config.observability.data_dir} />
         <Field label="sessions_dir" value={config.observability.sessions_dir} />
         <Field label="protected_files" value={config.observability.protected_files.join(", ") || "(none)"} />
+      </Section>
+
+      <Separator />
+
+      <Section id="server" title="Server">
+        <p className="mb-2 text-[11px] text-muted-foreground">
+          Desktop-only (spec 5): deploy this factory to a remote host over ssh, or connect through a port-forward to
+          view its live data. Read-only stays read-only across the tunnel - the far end is the same GET-only server.
+        </p>
+        <ServerPane />
       </Section>
 
       <Separator />

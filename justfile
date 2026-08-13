@@ -166,6 +166,12 @@ obs:
 # One Bun process: builds the SPA, then serves it plus the read-only JSON API
 # on 127.0.0.1 only. The db path is passed explicitly so the server can run
 # from the app dir. Needs bun.
+#
+# Builds ONLY dist/ (vite.config.ts, emptyOutDir:true) - never touches
+# dist-setup/, the desktop app's separately-built Setup page (spec 4.3
+# changelog). `just ui` and `just app`/`app-build` each own a different
+# output directory now, so running either one never destroys the other's
+# build - order and repetition are both safe.
 
 # boot the factory ui, http://127.0.0.1:4700  (Board / Trace / Gate / Settings)
 ui:
@@ -186,9 +192,17 @@ ui-dev:
 # postinstall download (`bun install` trusts it via package.json's
 # trustedDependencies), nothing compiles.
 
-# launch the desktop app (builds the ui, compiles the electron shell, opens the window)
+# launch the desktop app (builds the ui + the separate Setup bundle, compiles
+# the electron shell, opens the window). Two vite builds, two SEPARATE
+# output dirs (spec 4.3 changelog): vite.config.ts builds dist/ (the
+# dashboard SPA, absolute asset paths) and vite.setup.config.ts builds
+# dist-setup/ (setup.html, relative asset paths - it loads via file://,
+# spec 4.3) - see vite.setup.config.ts's own comment for why they cannot be
+# one build. Order between the two no longer matters (each empties only its
+# own directory), unlike before when a shared dist/ made this an ordering
+# contract that `just ui` alone could silently break.
 app:
-    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && bunx electron .
+    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && bunx electron .
 
 # package a portable Windows .exe of the desktop app into apps/ui/release/
 # CSC_IDENTITY_AUTO_DISCOVERY=false: this is an unsigned build - stops
@@ -197,4 +211,4 @@ app:
 # in the local Windows cert store. Without it the build can hang/fail with
 # "socket hang up" on a machine that has any signing identity at all.
 app-build:
-    cd apps/ui && bun install && bunx vite build && bunx tsc -p electron/tsconfig.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
+    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable

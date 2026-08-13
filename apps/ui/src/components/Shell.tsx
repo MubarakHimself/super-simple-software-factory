@@ -4,6 +4,8 @@ import { navigate, surfacePath, type Surface } from "@/routes";
 import { ActivityRail } from "@/components/ActivityRail";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import type { SetupStatus } from "@/types/factory";
 
 export interface PaletteItem {
   id: string;
@@ -11,7 +13,13 @@ export interface PaletteItem {
   sublabel?: string;
 }
 
-const SURFACE_KEYS: Record<string, Surface> = { "1": "board", "2": "trace", "3": "gate", "4": "settings" };
+const SURFACE_KEYS: Record<string, Surface> = {
+  "1": "board",
+  "2": "trace",
+  "3": "gate",
+  "4": "settings",
+  "5": "terminal",
+};
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -22,7 +30,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
  * The whole app frame (spec 5.1): 44px activity rail, 260px sidebar, flexible
  * main pane, optional 420px inspector. Owns the global keyboard shortcuts:
  * Ctrl+K opens a filter overlay over the sidebar (j/k or arrows navigate it,
- * Enter selects, Esc closes), 1..4 switch surface.
+ * Enter selects, Esc closes), 1..5 switch surface.
  */
 export function Shell({
   active,
@@ -64,6 +72,7 @@ export function Shell({
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
       {topBar}
+      <SetupDriftBanner />
       <div className="flex min-h-0 flex-1">
         <ActivityRail active={active} counts={counts} />
         <ResizablePanelGroup orientation="horizontal" className="min-w-0 flex-1">
@@ -95,6 +104,59 @@ export function Shell({
           onClose={() => setPaletteOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Instant launch's non-blocking half (spec 4 changelog): a machine that
+ * passed the local heuristic gets the dashboard immediately, and the real
+ * `--verify-only` drift check runs afterwards, in main, in the background.
+ * If THAT comes back unconverged, main pushes `setup:drift` once and this
+ * renders a small dismissible strip instead of main hijacking the window
+ * back to Setup - the operator decides whether to act on it now. Renders
+ * nothing in a browser (no bridge) or on the Setup/dashboard-boots-into-
+ * Setup path, where this event never fires in the first place.
+ */
+function SetupDriftBanner() {
+  const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  const [opening, setOpening] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.factory?.isDesktop !== true) return;
+    return window.factory.setup.onDrift((next) => {
+      setStatus(next);
+      setDismissed(false);
+    });
+  }, []);
+
+  if (!status || dismissed) return null;
+
+  const issueCount = status.checks.filter((c) => c.outcome !== "ok").length;
+  const detail = status.error ?? (issueCount > 0 ? `${issueCount} issue${issueCount === 1 ? "" : "s"}` : "an issue");
+
+  async function openSetup() {
+    setOpening(true);
+    try {
+      await window.factory!.setup.open();
+      // on success the window navigates away - this component unmounts.
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-warning)]/40 bg-elevated px-3 py-1.5 text-[11.5px]">
+      <span className="text-foreground">Setup found {detail} on this machine.</span>
+      <div className="flex shrink-0 items-center gap-2">
+        <Button size="sm" variant="secondary" disabled={opening} onClick={() => void openSetup()}>
+          {opening ? "Opening..." : "Open Setup"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
+          Dismiss
+        </Button>
+      </div>
     </div>
   );
 }

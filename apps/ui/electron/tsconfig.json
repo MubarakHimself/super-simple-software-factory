@@ -3,8 +3,8 @@
     "composite": true,
     "target": "ES2022",
     "lib": ["ES2022"],
-    "module": "ES2022",
-    "moduleResolution": "Bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "types": ["node"],
     "strict": true,
     "noUnusedLocals": true,
@@ -21,5 +21,6 @@
     "rootDir": ".",
     "outDir": "../dist-electron"
   },
-  "include": ["."]
+  "include": ["**/*.ts", "**/*.cts"],
+  "exclude": ["**/*.test.ts"]
 }

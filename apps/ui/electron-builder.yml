@@ -18,6 +18,21 @@ files:
   - "!**/*.ts"
   - "!**/*.map"
 asar: true
+# PACKAGING PROOF (spec 2): a .node file cannot be dlopen()'d from inside an
+# asar archive - Node needs it on a real path on disk. electron-builder's
+# own native-module heuristic already unpacks @lydell/node-pty's per-
+# platform package automatically for a bun-managed tree (verified by
+# actually spawning a real pty from a packaged `--win portable` build -
+# `release/win-unpacked/SDL Factory.exe --pty-smoke` -> PTY_SMOKE_OK,
+# native conpty.node loaded, cmd.exe spawned for real, echo round-tripped).
+# This entry makes that contract explicit instead of resting on an
+# undocumented heuristic that a future electron-builder or bun bump could
+# silently stop tripping - unpacks the whole platform package (the .node
+# files plus their sibling conpty.dll/OpenConsole.exe, which the native
+# module loads/spawns from disk at runtime), never the plain `@lydell/
+# node-pty` JS wrapper, which has no native code and is fine packed.
+asarUnpack:
+  - "**/node_modules/@lydell/node-pty-*/**"
 
 # --- Windows: buildable now, this is the UI phase's actual target ----------
 # Portable = single .exe, no installer, no admin rights, no code signing.

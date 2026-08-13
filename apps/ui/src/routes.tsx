@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 
-export type Surface = "trace" | "board" | "gate" | "settings";
+export type Surface = "trace" | "board" | "gate" | "settings" | "terminal";
 
 export interface RouteState {
   surface: Surface;
   adwId: string | null;
 }
 
-const SURFACES: Surface[] = ["trace", "board", "gate", "settings"];
+const SURFACES: Surface[] = ["trace", "board", "gate", "settings", "terminal"];
 
 function parse(pathname: string): RouteState {
   const parts = pathname.split("/").filter(Boolean);
@@ -45,6 +45,7 @@ export function tracePath(adwId?: string | null): string {
 export const boardPath = "/board";
 export const gatePath = "/gate";
 export const settingsPath = "/settings";
+export const terminalPath = "/terminal";
 
 export function surfacePath(surface: Surface): string {
   switch (surface) {
@@ -54,6 +55,8 @@ export function surfacePath(surface: Surface): string {
       return gatePath;
     case "settings":
       return settingsPath;
+    case "terminal":
+      return terminalPath;
     case "trace":
       return "/trace";
   }

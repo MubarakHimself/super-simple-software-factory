@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { BoardColumns } from "@/components/BoardColumns";
 import { GateCard } from "@/components/GateCard";
 import { SettingsPanes } from "@/components/SettingsPanes";
+import { TerminalSurface } from "@/components/TerminalSurface";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -242,6 +243,27 @@ export function App() {
     );
   }
 
+  if (route.surface === "terminal") {
+    return (
+      <Shell
+        active="terminal"
+        counts={counts}
+        topBar={topBar}
+        sidebar={
+          <Sidebar title="Terminal">
+            <div className="p-3 text-[11px] leading-relaxed text-muted-foreground">
+              Shell, Claude, Codex and pi open as tabs above the terminal pane. Default working directory is the
+              repo root. Sessions run in the desktop app's main process and die with the app - there is no
+              reattach in v1.
+            </div>
+          </Sidebar>
+        }
+      >
+        <TerminalSurface />
+      </Shell>
+    );
+  }
+
   // settings - its own component so this hook is never called conditionally
   // within App itself (Rules of Hooks: App must call the same hooks on every
   // render regardless of which surface is active).
@@ -268,6 +290,7 @@ function SettingsPage({
               ["roster", "Roster"],
               ["lanes", "Lanes"],
               ["observability", "Observability"],
+              ["server", "Server"],
               ["paths", "Paths and process"],
             ].map(([id, label]) => (
               <a key={id} href={`#${id}`} className="rounded-sm px-2 py-1 text-muted-foreground hover:bg-elevated-hover hover:text-foreground">

@@ -94,6 +94,9 @@ node_modules/.vite/
 
 # ─── Electron (apps/ui ADE build outputs) ──────────────────
 dist-electron/
+# Setup's own build output (spec 4.3 changelog: separate from dist/ - see
+# vite.setup.config.ts - so `just ui`'s dist/ rebuild can never delete it).
+dist-setup/
 /apps/ui/release/
 
 # Vue / Volar
