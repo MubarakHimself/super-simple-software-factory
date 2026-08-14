@@ -1,0 +1,135 @@
+/**
+ * The app-plane route table (spec 4, chunk K0). This is the ONE thing
+ * `index.ts` imports: `appRoutes`, spread into its own `routes` object
+ * (index.ts's first permitted edit), and `APP_TOKEN`, used at serve time to
+ * inject `window.__APP_TOKEN__` into `apps/ui-v2/dist/index.html` (index.ts's
+ * third permitted edit).
+ *
+ * Every other `server/app/*.ts` file this build adds (scoped reads, docs,
+ * skills, providers, jobs, the session bridge, ...) plugs its own route
+ * fragment in here as it lands - this file is the seam, not a dead end.
+ * It now carries the whole app plane: health/projects/readiness, the
+ * machine-scoped reads (skills, files, providers), every per-project read
+ * (live, runs, worklog, quality, worktrees, queue, gate, docs, seen, config),
+ * the two initialization writes with their job poll, and the Session bridge.
+ */
+import { hostname } from "node:os";
+import { acceptanceRoutes } from "./acceptance.ts";
+import { criteriaRoutes } from "./criteria.ts";
+import { getDocsFile, getDocsSearch, getDocsTree } from "./docs.ts";
+import { getFiles } from "./files.ts";
+import { APP_TOKEN, SELF_ORIGINS, appJson, appSafely, csrfGuard } from "./guard.ts";
+import { initFactory, initGit } from "./init.ts";
+import { getJobStatus } from "./jobs.ts";
+import { liveRoutes } from "./live.ts";
+import { mergeRoutes } from "./merge.ts";
+import { getModels } from "./models.ts";
+import { createProject, listProjects } from "./projects.ts";
+import { readManifest, seedBootProject } from "./manifest.ts";
+import { getProviders } from "./providers.ts";
+import { getReadiness } from "./readiness.ts";
+import { rosterRoutes } from "./roster.ts";
+import { seenRoutes } from "./seen.ts";
+import { sessionRoutes } from "./sessions/bridge.ts";
+import { getSkills } from "./skills.ts";
+import { terminalRoutes } from "./terminals.ts";
+import { worklogRoutes } from "./worklog.ts";
+import { worktreesRoutes } from "./worktrees.ts";
+
+/** Re-exported so `index.ts`'s permitted import
+ * (`import { APP_TOKEN, appRoutes } from "./app/routes.ts"`) is unchanged; the
+ * declaration moved to `guard.ts` to break the routes -> bridge -> routes
+ * cycle (see guard.ts's own note). */
+export { APP_TOKEN } from "./guard.ts";
+
+// Seeds `~/.sdl-factory/config.json` with the boot repo (spec 1.4) before any
+// route runs. This is a static import's top-level await, so Bun's module
+// loader finishes it before index.ts's own top-level code continues past its
+// `import { appRoutes, APP_TOKEN } from "./app/routes.ts"` line - meaning
+// index.ts's own `resolveDbPath()` call still runs afterward and is still
+// the thing that prints the clean "[ui] missing --db ..." message and exits
+// when `--db` is absent (seedBootProject swallows that same failure quietly
+// so it never prints a second, confusing copy of the same error).
+await seedBootProject();
+
+export const appRoutes = {
+  // The Session bridge (spec 1.3's own table), mounted here because this file
+  // is the app plane's one seam - "every other server/app/*.ts file plugs its
+  // own route fragment in here as it lands ... the session bridge" (K11's
+  // bridge.ts header hands this mount to K12).
+  ...sessionRoutes,
+
+  // The Terminal surface (the KISS correction): a plain shell over a plain
+  // pty, deliberately beside the Session bridge rather than inside it - it
+  // shares nothing but the idea of a pty. See terminals.ts's header.
+  ...terminalRoutes,
+
+  "/api/app/health": appSafely(async () => {
+    const manifest = await readManifest();
+    return appJson({
+      ok: true,
+      host: { name: hostname() },
+      projects: manifest.projects.length,
+      // "ready" is a statement about this process, and it is now true: the
+      // bridge's routes are mounted three lines above. The UI reads this to
+      // decide between a real Session and spec 2.3's honest scaffold line.
+      bridge: "ready" as const,
+    });
+  }),
+
+  "/api/app/projects": {
+    GET: appSafely(async () => listProjects()),
+    POST: csrfGuard(APP_TOKEN, SELF_ORIGINS, createProject),
+  },
+
+  "/api/app/projects/:id/readiness": {
+    GET: appSafely(getReadiness),
+  },
+
+  // Machine-scoped reads (spec 1.3): skills feed the slash menu, files feed
+  // the `@` menu and the palette, providers feed Settings.
+  "/api/app/skills": appSafely(getSkills),
+  "/api/app/files": appSafely(getFiles),
+  "/api/app/providers": appSafely(getProviders),
+  // The lanes pi knows on this machine, grouped by provider - what Roster's
+  // model dropdown is built from. Cost-free (`--list-models` prints a table and
+  // exits), cached per process, `?refresh=1` to re-probe.
+  "/api/app/models": appSafely(getModels),
+
+  // Per-project reads. Each module owns its own fragment; this file is the
+  // one place they are mounted.
+  ...liveRoutes, // live, runs, run detail, events/diff/gates/envelopes, config
+  ...worklogRoutes, // worklog, quality
+  ...worktreesRoutes,
+  ...criteriaRoutes, // queue + criteria
+  ...acceptanceRoutes, // gate + acceptance walk
+  // The Merge button's endpoint: `git merge --ff-only` in the main checkout +
+  // the run's queue card moved into `queue/done/`, atomically or not at all
+  // (dispatch.py: that move IS the merge event). The only route on this plane
+  // that writes to the repo, and it never forces.
+  ...mergeRoutes(APP_TOKEN, SELF_ORIGINS),
+  // Settings > Roster's Edit link: the model/thinking swap, written into
+  // `adws/adw_sssf_config/sssf.config.yaml` one line at a time. The config yaml
+  // is operator data; `adws/*.py` is code and no route touches it.
+  ...rosterRoutes(APP_TOKEN, SELF_ORIGINS),
+  ...seenRoutes(APP_TOKEN, SELF_ORIGINS), // GET previous / POST new snapshot
+
+  "/api/app/p/:id/docs/tree": appSafely(getDocsTree),
+  "/api/app/p/:id/docs/file": appSafely(getDocsFile),
+  "/api/app/p/:id/docs/search": appSafely(getDocsSearch),
+
+  // The two write endpoints that may ever create a job (spec 1.3), plus the
+  // job poll the init log strip reads.
+  "/api/app/p/:id/init/git": {
+    POST: csrfGuard(APP_TOKEN, SELF_ORIGINS, initGit),
+  },
+  "/api/app/p/:id/init/factory": {
+    POST: csrfGuard(APP_TOKEN, SELF_ORIGINS, initFactory),
+  },
+  "/api/app/jobs/:job_id": appSafely(getJobStatus),
+
+  // Unmatched /api/app/* paths fall through to index.ts's own fetch(), whose
+  // `pathname.startsWith("/api/")` branch already 404s with the same
+  // `{error}` + cache-control:no-store shape `appError` would produce - no
+  // need to duplicate that fallback here.
+};

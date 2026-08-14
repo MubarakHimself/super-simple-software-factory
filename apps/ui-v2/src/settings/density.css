@@ -1,0 +1,23 @@
+/**
+ * The one density control (spec 2.8 Appearance).
+ *
+ * Compact is the app's own geometry (spec 3.4) and stamps no class - the same
+ * three-state discipline `tokens.css` uses for the theme, where "the default
+ * is the absence of a class". Comfortable rebinds exactly the four row-height
+ * variables `@theme` already publishes, so `h-row`, `h-menurow` and `h-logrow`
+ * all follow with no `dense:` variant anywhere and no component edited.
+ *
+ * `html.density-comfortable` is (0,1,1) against `@theme`'s `:root,:host`
+ * (0,1,0) on the same element, so it wins regardless of stylesheet order -
+ * which matters because this file arrives with a lazily-loaded chunk.
+ *
+ * Type sizes are deliberately NOT touched: spec 3.3 fixes five steps and
+ * calls the scale a requirement. Density here means air, never a second
+ * typography.
+ */
+html.density-comfortable {
+  --spacing-row: 32px;
+  --spacing-menurow: 36px;
+  --spacing-logrow: 30px;
+  --spacing-chain: 30px;
+}

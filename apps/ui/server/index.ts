@@ -10,6 +10,7 @@
  */
 import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { APP_TOKEN, appRoutes } from "./app/routes.ts";
 import { buildObservabilityInfo, configPathFromRepoRoot, readConfig } from "./config.ts";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { availableScopes, computeGateItems, resolveDiff } from "./gate.ts";
@@ -29,7 +30,13 @@ import type {
 
 const PORT = 4700;
 const HOSTNAME = "127.0.0.1";
-const DIST_DIR = resolve(import.meta.dir, "..", "dist");
+// Directory existence must never re-route the served UI (spec 1.1 edit 2) -
+// `apps/ui/electron/main.ts` loads this same origin, so the moment ui-v2
+// builds, a presence check would silently switch `just app` from v1 to v2.
+// Only the explicit --ui-v2 flag (which only the new `ui2` recipe passes)
+// switches which dist is served; `just ui` / `just app` never pass it.
+const UI_V2 = Bun.argv.includes("--ui-v2");
+const DIST_DIR = UI_V2 ? resolve(import.meta.dir, "..", "..", "ui-v2", "dist") : resolve(import.meta.dir, "..", "dist");
 const BUILD_TIME = existsSync(DIST_DIR) ? statSync(DIST_DIR).mtime.toISOString() : null;
 
 let dbPath: string;
@@ -97,23 +104,38 @@ function strQuery(req: Request, key: string, fallback: string): string {
   return raw === null || raw.trim() === "" ? fallback : raw;
 }
 
+/** Reads `apps/ui-v2/dist/index.html` and injects the per-process CSRF token
+ * (spec 1.1 edit 3) before `</head>` - the only way the v2 SPA can present
+ * `X-App-Token` on its own writes. Only ever called when UI_V2 is true. */
+async function serveIndexWithToken(path: string): Promise<Response> {
+  const html = await Bun.file(path).text();
+  const tag = `<script>window.__APP_TOKEN__=${JSON.stringify(APP_TOKEN)}</script>`;
+  const injected = html.includes("</head>") ? html.replace("</head>", `${tag}</head>`) : `${html}${tag}`;
+  return new Response(injected, { headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
 async function serveStatic(req: Request): Promise<Response> {
   const { pathname } = new URL(req.url);
   if (!existsSync(DIST_DIR)) {
     return new Response(
-      `SDL Factory UI API is running on :${PORT}, but ./dist has not been built.\n` +
-        `Run "just ui" (builds then serves), or "just ui-dev" for the Vite dev server on :4710.\n`,
+      UI_V2
+        ? `SDL Factory UI API is running on :${PORT}, but ./ui-v2/dist has not been built.\n` +
+          `Run "just ui2" (builds then serves with --ui-v2), or "just ui2-dev" for the Vite dev server on :4720.\n`
+        : `SDL Factory UI API is running on :${PORT}, but ./dist has not been built.\n` +
+          `Run "just ui" (builds then serves), or "just ui-dev" for the Vite dev server on :4710.\n`,
       { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
     );
   }
   const candidate = resolve(join(DIST_DIR, pathname));
   if (candidate === DIST_DIR || candidate.startsWith(DIST_DIR + sep)) {
     if (existsSync(candidate) && statSync(candidate).isFile()) {
+      if (UI_V2 && candidate === join(DIST_DIR, "index.html")) return serveIndexWithToken(candidate);
       return new Response(Bun.file(candidate));
     }
   }
   const indexHtml = join(DIST_DIR, "index.html");
   if (existsSync(indexHtml)) {
+    if (UI_V2) return serveIndexWithToken(indexHtml);
     return new Response(Bun.file(indexHtml), { headers: { "content-type": "text/html; charset=utf-8" } });
   }
   return notFound("not found");
@@ -125,6 +147,11 @@ const server = (() => {
       hostname: HOSTNAME, // loopback only - the shipped visualizer's 0.0.0.0 bind is the landmine
       port: PORT,
       routes: {
+        // The app plane (spec 1.1 edit 1): all keys under /api/app/, read and
+        // write, behind the CSRF guard in app/guard.ts. `/api/*` below is
+        // unchanged.
+        ...appRoutes,
+
         "/api/health": safely(async () => {
           const [isRepo, branch, remote] = await Promise.all([
             repo.isRepo(),

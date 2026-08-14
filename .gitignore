@@ -154,6 +154,15 @@ temp/
 .netlify/
 *.tsbuildinfo
 
+# ─── Planning material — never ships to GitHub (operator rule 2026-08-14:
+# "only actual source code goes in") ─────────────────────────────────────
+.scratch/
+docs/design/inspiration/
+docs/design/walks/
+
+# roster editor safety backup (written beside the config on every UI edit)
+adws/adw_sssf_config/sssf.config.yaml.bak
+
 # sssf runtime
 adws/adw_data/sessions/
 # Unanchored: a trace db is never committed, wherever it turns up. Two empty

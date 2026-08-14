@@ -26,7 +26,7 @@ We add exactly four things (plus one gate layer):
 |---|---|
 | **A host** | Contabo VPS for v1. Installer makes the host swappable — laptop / server / container. Tailscale is a convenience, never a dependency. |
 | **A queue** | The Kanban — durable board of `ready-for-agent` briefs, the seam between laptop planning and the server factory. Local, **not** GitHub Issues. |
-| **A UI** | Board / Trace / Gate, one app, shadcn, T3 Code's five patterns (`docs/research/t3code-ui-notes.md`), plus a settings panel (roster config, provider auth/keys). Reads SQLite; pi RPC is an option, not the spine. Ships as a desktop app (Electron — Tauri needs the MSVC toolchain this laptop lacks). **Operator ruling 2026-08-12: it is a *control surface / dashboard*, not an "ADE" — the coding happens in the factory, never locally in this window.** |
+| **A UI** | Board / Trace / Gate, one app, shadcn, T3 Code's five patterns (`docs/research/t3code-ui-notes.md`), plus a settings panel (roster config, provider auth/keys). Reads SQLite; pi RPC is an option, not the spine. Ships as a desktop app (Electron — Tauri needs the MSVC toolchain this laptop lacks). ~~Operator ruling 2026-08-12: it is a *control surface / dashboard*, not an "ADE"~~ **Superseded — operator ratified 2026-08-13 evening: app v2 is ADE-class** (in-app diff, files, docs, GitHub actions, Kanban, terminals; whether the operator *drives* running sessions is deliberately open). The v2 design effort is charted by the wayfinder map at `.scratch/app-v2/map.md` — spec first, factory core untouchable. |
 | **A roster + lane balancer** | One provider account = one lane = one rate-limit bucket. See [Roster](#roster). |
 | **Skylos** | Deterministic AI-defect layer: quality block (`--ai-defects`) + gate (`verify --file --range`), three states pass/fail/incomplete, **fail-closed**. |
 
@@ -254,11 +254,43 @@ auto-reconnect, key management, herdr (researched-later; sessions die with the a
 | GitHub Issues as map/queue | The Kanban and the map would be the same thing in two places; nowhere to put traces or gates. |
 | Shepherd | Early alpha; wants to own traces/sessions/isolation — all owned. Kept one idea: `claude setup-token`. |
 | agent-os / design-os | Ideas absorbed (selective standards injection → doc-factory; design → its UI/design lens); tools not installed. |
-| AEC (prior project) | "Very, very poisonous. Don't even look at it." |
+| AEC (prior project) | "Very, very poisonous. Don't even look at it." *(Narrow 2026-08-13 exception, operator-supplied: its Claude-Design packet + screenshots are an aesthetics quarry for app v2 — `docs/design/inspiration/aec/`, hand-picked pages only. The architecture/code stays dead.)* |
 | A custom pi extension for the bridge/merge problem | Config-layer fix (rule 3's merge key), not a new extension. |
 | The 2026-08-12 "withdrawal" of cross-family review | Never ratified by the operator. Void — see rule 3. |
 
 ## Open questions
+
+- **Turbodiff-style e2e/UI verification (operator want, 2026-08-13 night).** Study done:
+  `docs/research/turbodiff-study.md` — capability filed, not deployed (the video trick is
+  portable: agent-authored Puppeteer script + headless Chrome + ffmpeg; no platform dependency).
+  The want, operator's lens: an automated verify step in the pipeline — backend feature shipped
+  where UI already exists → prove the feature end-to-end; UI shipped → prove it works *and looks
+  as it should* (Cursor-review-agent-like); fully automated, because the factory works the
+  Kanban autonomously. Adaptation is NOT simple ("not as simple as it seems"): turbodiff is
+  single-model claude-code with its own PR loop — ours is pi + roster + lanes; capture must be
+  **fail-closed** (turbodiff's silent-no-video on failed capture is the anti-pattern); phase
+  placement vs merge_check/gates undecided; non-web workloads can't be filmed this way.
+  Operator precondition: "first understand what and how." **Operator correction (same night):
+  NO blanket web-first rule** — "the factory is meant to be adaptable, through and through."
+  Work varies week to week: backend-only, backend+UI, ML, database schema, many agentic
+  harnesses. Whether/how this verification applies is a **per-task decision that originates
+  UPSTREAM**: the doc-factory / Pocock chain carries the documentation and instructions ("the
+  factory itself is mostly scaffolding"), so the ticket/card should declare the verification
+  lens and the factory executes it; adjustments may land upstream, in the factory, or both.
+  **RESOLVED — adoption REFUSED (operator, 2026-08-13 late night, after reading the full
+  analysis):** "Keep the software factory as is — it already ships code, it has verification
+  timelines. Retrofitting this means updating an entire section that is already working; it's
+  very surgical, a whole mess." turbodiff-style verify does NOT enter the factory. The want
+  survives as a possible **later, separate custom testing layer** — his sketch: a dedicated
+  local computer-use driver/section (CUA on his machine), coding stays in the factory; agentic
+  harnesses may need computer use and test APIs in the app ("might take genuinely longer
+  time") — deliberately unscheduled, "let me think through it." Two factory facts the analysis
+  found stand recorded regardless, unscheduled: (a) Gate-2 readers key on a phase named
+  `"quality"` that no dispatched ADW has — quality tile/brief block are null on every
+  dispatched run (~15-20 line fix, `collect_runs.py:422,462`, `gate.ts:168`); (b) an
+  `incomplete` run vanishes silently — no Gate card, no commit — against rule 11, already live
+  via skylos-on-Windows (`gate.ts:151`). Analysis filed at
+  `docs/research/verification-lens-analysis.md`.
 
 - **The daily loop, made legible.** How the operator's day actually runs — which skill fires when
   per entry path (greenfield / brownfield / import / small feature / big feature), and exactly what

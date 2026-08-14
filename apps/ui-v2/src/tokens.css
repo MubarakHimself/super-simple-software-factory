@@ -1,0 +1,421 @@
+/**
+ * tokens.css - the whole design language of app v2 (spec section 3).
+ *
+ * Tailwind v4, CSS-first: there is no tailwind.config.*. Raw values live in
+ * `:root` as bare CSS variables and `@theme inline` maps them onto utilities
+ * (`bg-canvas`, `text-t2`, `border-hairline`), so a theme switch is a variable
+ * rebinding and every utility follows without a `dark:` variant anywhere.
+ *
+ * Three viewer states, every theme-sensitive value written for all three
+ * (judge note 12's discipline, applied to every token rather than to a
+ * scrim):
+ *   1. system + dark OS  -> bare :root                (no class on <html>)
+ *   2. system + light OS -> @media (prefers-color-scheme: light) html:not(.dark)
+ *   3. explicit          -> html.light / html.dark    (Settings writes it)
+ * The hex values appear exactly once each, in the --d-* / --l-* palettes; the
+ * three blocks below only rebind, so the two palettes cannot drift apart.
+ */
+@import "tailwindcss";
+
+/* ── the two palettes, stated once (spec 3.2's table) ─────────────────── */
+:root {
+  /* dark */
+  --d-canvas: #0a0a0b;
+  --d-chrome: #0f0f11;
+  --d-raised: #17171a;
+  --d-overlay: #1c1c20;
+  --d-hairline: #232326;
+  --d-t1: #ededef;
+  --d-t2: #a0a0a8;
+  --d-t3: #6e6e76;
+  --d-accent: #f59e0b;
+  --d-accent-mix: 12%;
+  --d-on-accent: #17130a;
+  --d-run: #3b9eff;
+  --d-ok: #22c55e;
+  --d-fail: #ef4444;
+  --d-warn: #d9a441;
+  --d-neutral: #8e8e96;
+  --d-row-hover: rgba(255, 255, 255, 0.04);
+  --d-row-active: rgba(255, 255, 255, 0.07);
+  --d-scrim: rgba(0, 0, 0, 0.55);
+  --d-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  /* The terminal's 16 ANSI colors, in ANSI order, as one list: black red green
+     yellow blue magenta cyan white, then the eight bright ones. One custom
+     property instead of sixteen keeps the three rebinding blocks below one
+     line each, and `terminal/TerminalPane.tsx` splits it on the comma. Yellow
+     is the app's own amber, so a `WARN:` line and the accent are one color. */
+  --d-ansi: #3f3f46, #ef4444, #22c55e, #f59e0b, #3b9eff, #c084fc, #22d3ee, #d4d4d8, #52525b, #f87171,
+    #4ade80, #fbbf24, #60a5fa, #d8b4fe, #67e8f9, #fafafa;
+
+  /* light */
+  --l-canvas: #f7f7f8;
+  --l-chrome: #efeff1;
+  --l-raised: #ffffff;
+  --l-overlay: #ffffff;
+  --l-hairline: #e2e2e6;
+  --l-t1: #1a1a1e;
+  --l-t2: #55555e;
+  --l-t3: #8a8a93;
+  --l-accent: #b45309;
+  --l-accent-mix: 8%;
+  --l-on-accent: #ffffff;
+  --l-run: #2563eb;
+  --l-ok: #16a34a;
+  --l-fail: #dc2626;
+  --l-warn: #a16207;
+  --l-neutral: #71717b;
+  --l-row-hover: #f4f4f5;
+  --l-row-active: #e4e4e7;
+  --l-scrim: rgba(112, 114, 122, 0.32);
+  --l-shadow: 0 16px 40px rgba(30, 32, 38, 0.18);
+  --l-ansi: #27272a, #dc2626, #16a34a, #b45309, #2563eb, #9333ea, #0891b2, #52525b, #3f3f46, #b91c1c,
+    #15803d, #92400e, #1d4ed8, #7e22ce, #0e7490, #18181b;
+
+  /* state 1: bare :root is dark (spec 3.2 "Dark-first") */
+  color-scheme: dark;
+  --canvas: var(--d-canvas);
+  --chrome: var(--d-chrome);
+  --raised: var(--d-raised);
+  --overlay: var(--d-overlay);
+  --hairline: var(--d-hairline);
+  --t1: var(--d-t1);
+  --t2: var(--d-t2);
+  --t3: var(--d-t3);
+  --accent: var(--d-accent);
+  --accent-mix: var(--d-accent-mix);
+  --on-accent: var(--d-on-accent);
+  --run: var(--d-run);
+  --ok: var(--d-ok);
+  --fail: var(--d-fail);
+  --warn: var(--d-warn);
+  --neutral: var(--d-neutral);
+  --row-hover: var(--d-row-hover);
+  --row-active: var(--d-row-active);
+  --scrim: var(--d-scrim);
+  --shadow-overlay: var(--d-shadow);
+  --ansi: var(--d-ansi);
+
+  --accent-surface: color-mix(in srgb, var(--accent) var(--accent-mix), transparent);
+}
+
+/* state 2: the default "system" setting on a light OS */
+@media (prefers-color-scheme: light) {
+  html:not(.dark) {
+    color-scheme: light;
+    --canvas: var(--l-canvas);
+    --chrome: var(--l-chrome);
+    --raised: var(--l-raised);
+    --overlay: var(--l-overlay);
+    --hairline: var(--l-hairline);
+    --t1: var(--l-t1);
+    --t2: var(--l-t2);
+    --t3: var(--l-t3);
+    --accent: var(--l-accent);
+    --accent-mix: var(--l-accent-mix);
+    --on-accent: var(--l-on-accent);
+    --run: var(--l-run);
+    --ok: var(--l-ok);
+    --fail: var(--l-fail);
+    --warn: var(--l-warn);
+    --neutral: var(--l-neutral);
+    --row-hover: var(--l-row-hover);
+    --row-active: var(--l-row-active);
+    --scrim: var(--l-scrim);
+    --shadow-overlay: var(--l-shadow);
+    --ansi: var(--l-ansi);
+  }
+}
+
+/* state 3a: the operator chose light in Settings */
+html.light {
+  color-scheme: light;
+  --canvas: var(--l-canvas);
+  --chrome: var(--l-chrome);
+  --raised: var(--l-raised);
+  --overlay: var(--l-overlay);
+  --hairline: var(--l-hairline);
+  --t1: var(--l-t1);
+  --t2: var(--l-t2);
+  --t3: var(--l-t3);
+  --accent: var(--l-accent);
+  --accent-mix: var(--l-accent-mix);
+  --on-accent: var(--l-on-accent);
+  --run: var(--l-run);
+  --ok: var(--l-ok);
+  --fail: var(--l-fail);
+  --warn: var(--l-warn);
+  --neutral: var(--l-neutral);
+  --row-hover: var(--l-row-hover);
+  --row-active: var(--l-row-active);
+  --scrim: var(--l-scrim);
+  --shadow-overlay: var(--l-shadow);
+  --ansi: var(--l-ansi);
+}
+
+/* state 3b: the operator chose dark in Settings, on a light OS */
+html.dark {
+  color-scheme: dark;
+  --canvas: var(--d-canvas);
+  --chrome: var(--d-chrome);
+  --raised: var(--d-raised);
+  --overlay: var(--d-overlay);
+  --hairline: var(--d-hairline);
+  --t1: var(--d-t1);
+  --t2: var(--d-t2);
+  --t3: var(--d-t3);
+  --accent: var(--d-accent);
+  --accent-mix: var(--d-accent-mix);
+  --on-accent: var(--d-on-accent);
+  --run: var(--d-run);
+  --ok: var(--d-ok);
+  --fail: var(--d-fail);
+  --warn: var(--d-warn);
+  --neutral: var(--d-neutral);
+  --row-hover: var(--d-row-hover);
+  --row-active: var(--d-row-active);
+  --scrim: var(--d-scrim);
+  --shadow-overlay: var(--d-shadow);
+  --ansi: var(--d-ansi);
+}
+
+/* ── the utility surface (spec 3.3 typography, 3.4 geometry) ──────────── */
+@theme {
+  /* No webfont, T3's own choice kept. `ui-monospace` is deliberately absent:
+     some engines alias it to the proportional UI font (spec 3.3). */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, Menlo, "SF Mono", "DejaVu Sans Mono", "Liberation Mono",
+    monospace;
+
+  /* Five steps, and five is the whole scale (judge note 9 killed the sprawl).
+     The scale was raised one full step in the 2026-08-14 layout pass - the
+     operator's words were "the letters are too small - let them be bigger", so
+     body is 15px and nothing on a surface is under 12px any more. The line
+     boxes are kept to whole multiples of 4 so the fixed-height rows below stay
+     exact arithmetic rather than approximations. */
+  --text-meta: 12px;
+  --text-meta--line-height: 16px;
+  --text-mono: 13px;
+  --text-mono--line-height: 18px;
+  --text-body: 15px;
+  --text-body--line-height: 20px;
+  --text-head: 17px;
+  --text-head--line-height: 24px;
+  --text-hero: 24px;
+  --text-hero--line-height: 30px;
+
+  --radius-chip: 4px;
+  --radius-control: 6px;
+
+  /* Rows grew with the type: a 24px row cannot hold a 20px line box and its
+     hover chip. Second columns grew with the labels they carry. */
+  --spacing-topbar: 44px;
+  --spacing-sidebar: 248px;
+  --spacing-column: 300px;
+  --spacing-inspector: 420px;
+  --spacing-row: 28px;
+  --spacing-menurow: 32px;
+  --spacing-logrow: 26px;
+  --spacing-chain: 26px;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-chrome: var(--chrome);
+  --color-raised: var(--raised);
+  --color-overlay: var(--overlay);
+  --color-hairline: var(--hairline);
+  --color-t1: var(--t1);
+  --color-t2: var(--t2);
+  --color-t3: var(--t3);
+  --color-accent: var(--accent);
+  --color-accent-surface: var(--accent-surface);
+  --color-on-accent: var(--on-accent);
+  --color-run: var(--run);
+  --color-ok: var(--ok);
+  --color-fail: var(--fail);
+  --color-warn: var(--warn);
+  --color-neutral: var(--neutral);
+  --color-row-hover: var(--row-hover);
+  --color-row-active: var(--row-active);
+  --color-scrim: var(--scrim);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--t1);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  /* One accent, one focus ring, everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  ::selection {
+    background: var(--accent-surface);
+    color: var(--t1);
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  /* Hairlines are 1px, never heavier (spec 3.2). */
+  * {
+    border-color: var(--hairline);
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--row-active);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ── motion (spec 3.5): one duty-cycled pulse, and nothing else ───────── */
+@keyframes sdl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.sdl-pulse {
+  animation: sdl-pulse 1.6s steps(4, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sdl-pulse {
+    animation: none;
+  }
+}
+
+/* ── the one markdown renderer (spec 3.6: Docs = card inspector = brief) ──
+ * The measure is a variable, not a constant, because the two callers are not
+ * the same shape: the card inspector is a 420px rail where 100% IS the
+ * measure, and the Docs reader is a pane a metre wide where a measure is the
+ * only thing standing between the operator and a 130-character line. The
+ * reader sets `--md-measure` to the width of the column it laid out; anybody
+ * who sets nothing gets the comfortable 92ch cap. */
+.md {
+  max-width: var(--md-measure, 92ch);
+  color: var(--t1);
+  font-size: 16px;
+  line-height: 1.7;
+}
+.md > * + * {
+  margin-top: 16px;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 32px;
+  /* A heading jumped to from the reader's outline stops below the pane's top
+     edge, not welded to it. */
+  scroll-margin-top: 16px;
+}
+.md h1 {
+  font-size: 27px;
+}
+.md h2 {
+  font-size: 21px;
+}
+.md h3,
+.md h4 {
+  font-size: 18px;
+}
+.md a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+  text-decoration: underline;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  background: var(--row-active);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.md pre {
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md blockquote {
+  border-left: 2px solid var(--hairline);
+  padding-left: 12px;
+  color: var(--t2);
+}
+.md ul,
+.md ol {
+  padding-left: 24px;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li + li {
+  margin-top: 4px;
+}
+.md li.task-list-item {
+  list-style: none;
+  margin-left: -24px;
+}
+.md li.task-list-item input {
+  margin-right: 7px;
+  accent-color: var(--accent);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+.md table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md th,
+.md td {
+  border: 1px solid var(--hairline);
+  padding: 6px 12px;
+  text-align: left;
+}
+.md th {
+  color: var(--t2);
+  font-weight: 600;
+}
+.md img {
+  max-width: 100%;
+}

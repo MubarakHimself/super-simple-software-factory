@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'"
+    />
+    <title>SDL Factory</title>
+    <!--
+      Everything the app needs is bundled locally by vite - no CDN, no remote
+      script, style or font, ever.
+
+      'unsafe-inline' on script-src is load-bearing, not laziness. The server
+      injects a one-line inline script carrying window.__APP_TOKEN__ just
+      before this document's closing head tag when it serves
+      apps/ui-v2/dist/index.html (spec 1.1 edit 3), and that tag is the only
+      way the SPA learns its CSRF token. The theme bootstrap below is the
+      second inline script. Both are written by us, never by a request.
+
+      Nothing in this file may contain the literal characters of a closing
+      head tag inside a comment or a string: both vite's build and the
+      server's injection write immediately before the FIRST occurrence, so an
+      occurrence inside a comment silently swallows the whole app.
+    -->
+    <script>
+      // Applied before first paint so a stored preference never flashes the
+      // other theme. "system" stamps nothing - the default viewer state is
+      // prefers-color-scheme, never an explicit class (judge note 3).
+      try {
+        var t = localStorage.getItem("sdl-factory.theme");
+        if (t === "light" || t === "dark") document.documentElement.classList.add(t);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

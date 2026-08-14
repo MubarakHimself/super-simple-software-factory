@@ -181,6 +181,22 @@ ui:
 ui-dev:
     cd apps/ui && bun install && bunx vite
 
+# --- factory app v2 (web-first) ---------------------------------------------
+# Same one Bun process on 127.0.0.1:4700, same read-only /api/*, plus the app
+# plane at /api/app/*. The ONLY difference from `just ui` is the trailing
+# --ui-v2 flag, which is the only thing that switches which dist/ is served
+# (specs/app-v2-web.md 1.1 edit 2). Without it - `just ui`, `just app`, the
+# packaged .exe - the v1 SPA is served byte-for-byte as before, even after
+# apps/ui-v2/dist exists. Directory presence must never re-route the UI.
+
+# boot app v2, http://127.0.0.1:4700  (Home / Board / Runs / Gate / Docs / Settings)
+ui2:
+    cd apps/ui-v2 && bun install && bunx vite build && cd ../ui && bun run server/index.ts --db {{justfile_directory()}}/{{db}} --ui-v2
+
+# app v2 with hot reload, http://127.0.0.1:4720 (api still on 4700, run `just ui2` too)
+ui2-dev:
+    cd apps/ui-v2 && bun install && bunx vite
+
 # --- factory app (desktop shell) ---------------------------------------------
 # The control surface / dashboard as a desktop window (operator ruling: it is
 # NOT an "ADE" - the coding happens in the factory, never locally here). Same
