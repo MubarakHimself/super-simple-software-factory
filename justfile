@@ -257,7 +257,7 @@ ui3-dev:
 # own directory), unlike before when a shared dist/ made this an ordering
 # contract that `just ui` alone could silently break.
 app:
-    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && bunx electron .
+    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && (if exist dist-electron\ui-mode.json del /q dist-electron\ui-mode.json) && bunx electron .
 
 # package a portable Windows .exe of the desktop app into apps/ui/release/
 # CSC_IDENTITY_AUTO_DISCOVERY=false: this is an unsigned build - stops
@@ -266,4 +266,22 @@ app:
 # in the local Windows cert store. Without it the build can hang/fail with
 # "socket hang up" on a machine that has any signing identity at all.
 app-build:
-    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
+    cd apps/ui && bun install && bunx vite build && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && (if exist dist-electron\ui-mode.json del /q dist-electron\ui-mode.json) && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
+
+# launch the V3 desktop app: builds apps/ui-v3's SPA, compiles the electron
+# shell, and opens the window with SDL_UI=v3 - the explicit opt-in that makes
+# main.ts spawn the server with --ui-v3 (same never-dir-presence rule as ui3).
+# The Setup bundle is still built: a not-converged box gets the same Setup
+# screen regardless of UI generation.
+app3:
+    cd apps/ui-v3 && bun install && bunx vite build
+    cd apps/ui && bun install && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && set SDL_UI=v3&& bunx electron .
+
+# package the V3 desktop app as a portable Windows .exe (apps/ui/release/).
+# Writes dist-electron/ui-mode.json {"ui":"v3"} - the explicit build ARTIFACT
+# main.ts reads as the packaged default, so the .exe is v3 without anyone
+# setting env vars (never dir presence; `just app`/`app-build` delete it).
+# Icon: apps/ui/build/icon.ico - the amber mark.
+app3-build:
+    cd apps/ui-v3 && bun install && bunx vite build
+    cd apps/ui && bun install && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && echo {"ui":"v3"}> dist-electron\ui-mode.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable

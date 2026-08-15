@@ -176,6 +176,9 @@ const server = (() => {
           ]);
           return json({
             ok: true,
+            // which SPA generation this process serves - the desktop shell's
+            // v3 mode refuses to silently reuse a server showing another UI
+            ui: UI_V3 ? "v3" : UI_V2 ? "v2" : "v1",
             db: db.path,
             journal_mode: db.journalMode,
             read_only: true,

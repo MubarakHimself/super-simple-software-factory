@@ -54,6 +54,21 @@ const HEALTH_URL = `http://${HOSTNAME}:${PORT}/api/health`;
 const APP_URL = `http://${HOSTNAME}:${PORT}/`;
 const APP_ORIGIN = new URL(APP_URL).origin;
 
+/** v3 desktop mode - explicit opt-in only, mirroring the server's own
+ * explicit-flag rule: either the SDL_UI env (the `just app3` dev recipe) or a
+ * ui-mode.json marker deliberately written next to the compiled main by
+ * `just app3-build` (so the packaged .exe is v3 without anyone setting env
+ * vars). A build ARTIFACT, never directory presence. */
+function packagedUiModeIsV3(): boolean {
+  try {
+    const raw = readFileSync(join(import.meta.dirname, "ui-mode.json"), "utf-8");
+    return (JSON.parse(raw) as { ui?: string }).ui === "v3";
+  } catch {
+    return false;
+  }
+}
+const UI_V3 = process.env.SDL_UI === "v3" || packagedUiModeIsV3();
+
 const HEALTH_CHECK_TIMEOUT_MS = 1_500; // one probe
 const BOOT_TIMEOUT_MS = 20_000; // spawn-and-wait budget; leaves headroom under --smoke's ~30s
 const CONNECT_TIMEOUT_MS = 10_000; // ssh handshake + auth budget for the port-forward (spec 5.3)
@@ -73,6 +88,19 @@ function log(message: string): void {
  * network error, non-200, or malformed body is treated as "not healthy" -
  * this function never throws. Defaults to the local dashboard's health url;
  * `server:connect` (spec 5.3) passes the tunnel's forwarded url instead. */
+/** Which SPA generation the healthy server on :4700 says it serves ("v1" when
+ * the field is absent - servers predating the marker only ever served v1/v2). */
+async function servedUiIs(want: string): Promise<boolean> {
+  try {
+    const res = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS) });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { ui?: string };
+    return (body.ui ?? "v1") === want;
+  } catch {
+    return false;
+  }
+}
+
 async function checkHealth(url: string = HEALTH_URL): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
@@ -129,8 +157,10 @@ async function spawnServer(repoRoot: string): Promise<void> {
   if (!existsSync(dbPath)) {
     throw new Error(`sssf.db not found at ${dbPath}`);
   }
-  log(`no healthy server found - spawning: bun run server/index.ts --db ${dbPath}`);
-  const child = spawn("bun", ["run", "server/index.ts", "--db", dbPath], {
+  const serverArgs = ["run", "server/index.ts", "--db", dbPath];
+  if (UI_V3) serverArgs.push("--ui-v3"); // explicit flag only - never dir presence
+  log(`no healthy server found - spawning: bun ${serverArgs.join(" ")}`);
+  const child = spawn("bun", serverArgs, {
     cwd: uiDir,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -224,11 +254,17 @@ async function createWindow(): Promise<BrowserWindow> {
     ? { x: state.x, y: state.y, width: state.width, height: state.height }
     : { width: state.width, height: state.height };
 
+  // The mark (three rising amber bars) as the window/taskbar icon in dev;
+  // the packaged .exe carries the same mark via build/icon.ico. Guarded so a
+  // checkout without the generated icon still boots.
+  const iconPath = join(import.meta.dirname, "..", "build", "icon.png");
+
   const win = new BrowserWindow({
     ...bounds,
     minWidth: 1100,
     minHeight: 700,
     title: "SDL Factory",
+    ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     backgroundColor: "#0A0A0B", // spec's canvas color - avoids a white flash before load
     show: false,
     webPreferences: {
@@ -722,6 +758,16 @@ async function enterDashboard(
 ): Promise<boolean> {
   log(`checking ${HEALTH_URL} ...`);
   if (await checkHealth()) {
+    // v3 mode never silently reuses a server showing another UI generation -
+    // the operator would see v1/v2 in a window titled v3. Same explicit-flag
+    // spirit as the server's own never-dir-presence rule.
+    if (UI_V3 && !(await servedUiIs("v3"))) {
+      log(
+        "ERROR: a healthy server on :4700 is serving a different UI generation. " +
+          "Stop it (the `just ui`/`just ui2` window or its bun process) and relaunch `just app3`.",
+      );
+      return false;
+    }
     log("found a healthy server already running - reusing it, spawning nothing");
   } else {
     let healthy = false;

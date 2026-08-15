@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SDL Factory">
+  <!-- The operator's chosen mark (Gemini, 2026-08-13): three rising bars, single amber
+       accent on near-black. Bottom-aligned, equal widths, ascending heights. -->
+  <g fill="#F0A050">
+    <rect x="8"  y="36" width="13" height="20"/>
+    <rect x="25" y="26" width="13" height="30"/>
+    <rect x="42" y="12" width="13" height="44"/>
+  </g>
+</svg>

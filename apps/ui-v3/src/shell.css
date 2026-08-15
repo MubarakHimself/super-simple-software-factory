@@ -70,6 +70,9 @@
 .fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
 .fs-help:hover{color:var(--t2);}
 .fs-help svg{width:13px;height:13px;flex-shrink:0;}
+/* v3 shell addition: the operator's mark at the very foot of the sidebar */
+.fs-brand{display:flex;align-items:center;gap:7px;padding:6px 0 0 2px;font-family:var(--font-mono);font-size:10px;letter-spacing:0.5px;text-transform:uppercase;color:var(--t4);}
+.fs-brand img{display:block;opacity:0.85;}
 /* v3 shell addition: the line under the pulse. Red when a read failed; muted
    when it is the server's own sentence about something it cannot know. Both
    truncate to one line and carry the full text as the row's title. */

@@ -119,6 +119,12 @@ export function FactoryStatus({ health }: { health: Resource<FactoryHealth> }) {
         <HelpIcon />
         <span>Help</span>
       </button>
+      {/* The operator's mark - three rising amber bars (the parked
+          sdl-factory-mark, ratified into the app 2026-08-15). */}
+      <div className="fs-brand" aria-hidden="true">
+        <img src="/mark.svg" alt="" width={14} height={14} />
+        <span>SDL Factory</span>
+      </div>
       {helpOpen ? <Help onClose={() => setHelpOpen(false)} /> : null}
     </div>
   );
