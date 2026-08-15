@@ -32,6 +32,112 @@
   --scope-w:220px;                  /* settings-v3 */
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE OTHER FIVE THEMES — Settings → Appearance (L6).
+
+   The bare :root block above is Editorial Instrument, the app's default and
+   its only ORIGINAL palette. The five blocks below are the settings mock's
+   own theme-card list, each one a complete palette derived from that card's
+   own three-word description (`settings/appearance.ts`'s `THEMES` carries the
+   same six descriptions verbatim, so a palette here can be checked against
+   the sentence that named it). Every block redeclares the full colour +
+   font-family surface Editorial declares above (canvas through
+   shadow, plus the three font stacks) - the sizing/radius/width tokens
+   (`--text-*`, `--r-*`, `--sidebar-w`, the surface widths, `--row-h`,
+   `--font-mono`) are layout, not palette, and are left to cascade from the
+   bare :root above (`--row-h`/`--font-mono` are themselves overridden by
+   `appearance.ts`'s density/mono-font pickers, on top of whichever theme this
+   selects, via inline styles on the same root - inline always outranks these
+   attribute-selector blocks, which is why that layering works).
+
+   `[data-theme="…"]` is written onto `<html>` by `applyAppearance()` in
+   `settings/appearance.ts`, applied before first paint by `main.tsx` - see
+   both files' headers for why a theme picked in a browser must never flash
+   the wrong palette on the next boot.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Mission Console — cool dark · cyan · mono. A console/telemetry room: near-
+   navy canvas, cyan for the accent and the running-state blue folded into it,
+   the display font leaning mono the way a terminal-adjacent tool would. */
+:root[data-theme="mission"] {
+  --canvas:#0a0e14; --chrome:#0d1117; --raised:#121820; --overlay:#182029;
+  --hairline:#1e2732; --hairline-2:#2a3644;
+  --t1:#e6edf3; --t2:#8b98a5; --t3:#5b6672; --t4:#333c46;
+  --accent:#4fd1e8; --accent-dim:#1a3d44; --accent-surface:rgba(79,209,232,0.08); --on-accent:#04191d;
+  --run:#5b9cf0; --ok:#4fd18e; --fail:#f0605b; --warn:#e0b23f; --neutral:#6b7684;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(79,209,232,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.6);
+  --font-serif:"JetBrains Mono","Cascadia Mono","SF Mono",Consolas,monospace;
+  --font-sans:"Inter","Segoe UI",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+}
+
+/* Light Workshop — bright · indigo · grotesque. The one light theme drawn
+   with genuine daylight contrast rather than a dimmed dark palette; indigo
+   accent, a grotesque sans standing in for the display font instead of a
+   serif - "workshop", not "reading room". */
+:root[data-theme="workshop"] {
+  --canvas:#fafaf8; --chrome:#f0eee8; --raised:#ffffff; --overlay:#f5f3ee;
+  --hairline:#e2ded4; --hairline-2:#d0cabb;
+  --t1:#1f1b16; --t2:#5b5648; --t3:#8a8474; --t4:#b8b2a0;
+  --accent:#5b5bd6; --accent-dim:#e4e3f7; --accent-surface:rgba(91,91,214,0.08); --on-accent:#ffffff;
+  --run:#3d6fd1; --ok:#2f9e5c; --fail:#d3453f; --warn:#b8791f; --neutral:#726c5c;
+  --row-hover:rgba(20,15,5,0.03); --row-active:rgba(91,91,214,0.06);
+  --shadow:0 16px 48px rgba(20,15,5,0.12);
+  --font-serif:"Neue Haas Grotesk Display","Helvetica Neue","Segoe UI",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+}
+
+/* Twilight Press — deep purple · rose · serif. A print-shop-after-hours
+   register: purple canvas instead of Editorial's warm brown-black, a rose
+   accent, the serif kept (this is the theme that stays closest to Editorial's
+   own bookish register, one hue turn over). */
+:root[data-theme="twilight"] {
+  --canvas:#1a1520; --chrome:#211a29; --raised:#281f33; --overlay:#302640;
+  --hairline:#362c47; --hairline-2:#453758;
+  --t1:#f0e8f5; --t2:#a898b8; --t3:#6f5f82; --t4:#3f3450;
+  --accent:#e0729a; --accent-dim:#4a2635; --accent-surface:rgba(224,114,154,0.08); --on-accent:#1f0912;
+  --run:#8f8fe0; --ok:#6dbb96; --fail:#e2645f; --warn:#d9a15a; --neutral:#8577a0;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,114,154,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.55);
+  --font-serif:"Big Caslon","Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+}
+
+/* Carbon Grid — near-black · green · mono. The darkest of the six, and the
+   most literally "console": a phosphor-green accent against a canvas darker
+   than Mission's, mono leading the display font too. */
+:root[data-theme="carbon"] {
+  --canvas:#08090a; --chrome:#0b0d0e; --raised:#101314; --overlay:#151819;
+  --hairline:#1c2021; --hairline-2:#262b2c;
+  --t1:#d8f0dc; --t2:#83a68a; --t3:#526056; --t4:#2c3630;
+  --accent:#4ee08a; --accent-dim:#1a3d28; --accent-surface:rgba(78,224,138,0.08); --on-accent:#04140a;
+  --run:#4ecbe0; --ok:#4ee08a; --fail:#e0574e; --warn:#d9c14e; --neutral:#5c6b60;
+  --row-hover:rgba(255,255,255,0.02); --row-active:rgba(78,224,138,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.65);
+  --font-serif:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+}
+
+/* Paper Notebook — warm light · rust · serif. Editorial Instrument's light
+   twin: the same warm register, canvas and ink swapped so it reads as a page
+   rather than a lit room, rust standing in for amber. */
+:root[data-theme="paper"] {
+  --canvas:#f5f0e8; --chrome:#ede5d6; --raised:#fbf7f0; --overlay:#f0e9dc;
+  --hairline:#ddd2bc; --hairline-2:#c9bb9e;
+  --t1:#2b2318; --t2:#6b5d47; --t3:#968566; --t4:#c2b090;
+  --accent:#b5562f; --accent-dim:#f3ded2; --accent-surface:rgba(181,86,47,0.08); --on-accent:#fff8f2;
+  --run:#4a76a8; --ok:#5c8f4f; --fail:#b3392f; --warn:#a8781f; --neutral:#7d715c;
+  --row-hover:rgba(40,25,5,0.025); --row-active:rgba(181,86,47,0.05);
+  --shadow:0 16px 48px rgba(40,25,5,0.14);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+}
+
 /* ── the mocks' own reset ───────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box;}
 *{border-color:var(--hairline);}

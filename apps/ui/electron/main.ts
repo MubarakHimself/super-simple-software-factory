@@ -414,6 +414,34 @@ ipcMain.on("term:attach", (event, sessionId: unknown) => {
 });
 
 // ---------------------------------------------------------------------------
+// Native folder picker (L1) - the ONE additive IPC this wave adds. Add project
+// asks for a repo path, and typing a Windows path by hand into a text field is
+// how that journey failed in practice. This opens the OS directory dialog and
+// returns the chosen path; it reads nothing else, writes nothing, and spawns
+// nothing, so the whole surface of this channel is "the operator pointed at a
+// folder". APP_ORIGIN only, like every other write-adjacent channel: the
+// remote SPA reached through the tunnel must never be able to open a dialog on
+// this machine or learn a local path. The browser has no equivalent, and the
+// modal says so - its manual path field is the fallback and it works.
+// ---------------------------------------------------------------------------
+
+ipcMain.handle("dialog:pickFolder", async (event) => {
+  if (!isAppOrigin(event)) throw new Error("dialog:pickFolder: untrusted origin");
+  const win = mainWindow;
+  const options = {
+    title: "Choose the project folder",
+    buttonLabel: "Use this folder",
+    properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory">,
+  };
+  const result = win && !win.isDestroyed()
+    ? await dialog.showOpenDialog(win, options)
+    : await dialog.showOpenDialog(options);
+  const picked = result.filePaths[0];
+  if (result.canceled || !picked) return { canceled: true, path: null };
+  return { canceled: false, path: picked };
+});
+
+// ---------------------------------------------------------------------------
 // First-run Setup (spec 4). setup:run's command line is fully built here
 // (uv path resolved on disk, target matched against the fixed 3-value
 // enum) - the renderer only ever picks a target, exactly the profiles.ts

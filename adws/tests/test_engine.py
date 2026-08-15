@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import dispatch
 import engine
 import pytest
+import yaml
 from adw_modules import git_helper, worktrees
 
 # The stand-in for `uv run adws/dispatch.py` AND the ADW below it: the same
@@ -122,6 +123,27 @@ agents:
     model: xai/grok-4.5
 """
 
+# The same roster with a router: every agent but the builder runs on the one
+# default lane, and the BUILDER - the concurrency-critical agent - has a pool
+# across two others. Shaped that way on purpose: it is what makes the routing
+# arithmetic visible, because the lane a run occupies then differs by which pool
+# entry it was given. `lanes:` widens the shared lane so the pool, not the
+# roster's own model, is what holds a card back.
+POOL_ROSTER = """defaults:
+  coding_agent: pi
+  model: ollama-cloud/kimi-k2.7-code
+agents:
+  - name: scout
+  - name: builder
+  - name: reviewer
+router:
+  builder_pool:
+    - model: "xai/grok-4.5"
+    - model: "openrouter/glm-5.2"
+lanes:
+  ollama-cloud: { slots: 6 }
+"""
+
 BODY = """## Agent Brief
 
 **Category:** enhancement
@@ -184,7 +206,8 @@ def factory(tmp_path):
 
     return SimpleNamespace(root=root, origin=origin, queue=root / "queue", fake=fake,
                            roster=roster, marks=tmp_path / "marks",
-                           release=tmp_path / "release", gate=tmp_path / "gate.log")
+                           release=tmp_path / "release", gate=tmp_path / "gate.log",
+                           dispatched=[])
 
 
 @pytest.fixture
@@ -204,12 +227,45 @@ def _use_fake(monkeypatch, factory, mode: str = "done", code: int = 0,
               work: str | dict[str, str] | None = None) -> None:
     """Point the dispatch seam at the stand-in script. `work` is one spec for
     every card, or a per-card mapping (that is how two runs are made to collide
-    on the same file, or deliberately not to)."""
-    def command(_engine, card: Path) -> list[str]:
+    on the same file, or deliberately not to).
+
+    Every dispatch is recorded as `(card, the --config it was given, the builder
+    model that config carries)` - read HERE, while the file still exists,
+    because a derived roster is deleted the moment its run is reaped."""
+    def command(_engine, card: Path, config: str | None = None) -> list[str]:
         spec = work.get(card.name, "") if isinstance(work, dict) else (work or "")
+        factory.dispatched.append((card.name, config, _builder_model(config)))
         return [sys.executable, str(factory.fake), str(card), mode, str(code),
                 str(factory.marks), str(factory.release), spec]
     monkeypatch.setattr(engine, "dispatch_command", command)
+
+
+def _use_roster(factory, text: str) -> None:
+    """Rewrite the fixture roster in place. The engine reads it on its first
+    cycle, so a test may shape it after the `eng` fixture was built."""
+    factory.roster.write_text(text, encoding="utf-8")
+
+
+def _builder_model(config: str | None) -> str:
+    """The `model:` on a roster's builder agent, or "" if it has none (it
+    inherits `defaults.model`) or the file is gone."""
+    if not config or not Path(config).is_file():
+        return ""
+    data = yaml.safe_load(Path(config).read_text(encoding="utf-8")) or {}
+    for agent in data.get("agents") or []:
+        if isinstance(agent, dict) and agent.get("name") == "builder":
+            return str(agent.get("model", ""))
+    return ""
+
+
+def _routed(factory) -> list[str]:
+    """The builder model every dispatch was actually given, in dispatch order."""
+    return [model for _, _, model in factory.dispatched]
+
+
+def _configs(factory) -> list[str]:
+    """The `--config` path every dispatch was actually given, in order."""
+    return [config for _, config, _ in factory.dispatched]
 
 
 def _use_gate(monkeypatch, factory, green: bool = True, missing: bool = False) -> None:
@@ -503,6 +559,169 @@ def test_a_lane_override_narrows_it_and_the_slot_is_released_when_a_run_is_reape
     engine.run_cycle(eng)                          # 001 reaped -> its slot comes back
 
     assert _names(eng) == ["002-second.md"]
+
+
+# ── the router: which model this run's builder gets ─────────────────────────
+
+def test_the_lanes_block_replaces_the_default_slots_and_the_operators_override_still_wins(
+        factory, capsys):
+    """The roster's own `lanes:` block is the UI's way of writing what `--lanes`
+    says on a command line, so it replaces the default of 2 where it names a
+    lane - and `--lanes` / $SSSF_LANES still overrides it on top, because a
+    systemd `Environment=` line must be able to narrow a lane without editing a
+    file the laptop owns."""
+    _use_roster(factory, ROSTER + "lanes:\n"
+                                  "  ollama-cloud: { slots: 4 }\n"
+                                  "  xai: { slots: 1 }\n"
+                                  "  nowhere: { slots: 3 }\n"
+                                  "  broken: not-a-mapping\n"
+                                  "  empty: { slots: 0 }\n")
+
+    assert engine.config_lanes(factory.roster) == {"ollama-cloud": 4, "xai": 1, "nowhere": 3}
+    out = capsys.readouterr().out
+    assert "skipping 'broken'" in out and "skipping 'empty'" in out
+
+    instance = engine.Engine(main_root=factory.root, queue_dir=factory.queue,
+                             config=str(factory.roster))
+    engine.resolve_lanes(instance)
+
+    assert instance.lane_slots == {"ollama-cloud": 4, "xai": 1}
+    assert "the roster's lanes block names nowhere" in capsys.readouterr().out
+
+    narrowed = engine.Engine(main_root=factory.root, queue_dir=factory.queue,
+                             config=str(factory.roster), lane_overrides={"xai": 2})
+    engine.resolve_lanes(narrowed)
+
+    assert narrowed.lane_slots == {"ollama-cloud": 4, "xai": 2}
+
+
+def test_the_builder_pool_is_read_in_the_operators_own_order(factory):
+    _use_roster(factory, POOL_ROSTER)
+
+    assert engine.builder_pool(factory.roster) == ("xai/grok-4.5", "openrouter/glm-5.2")
+
+
+def test_a_malformed_pool_entry_is_named_and_skipped_and_the_rest_still_routes(factory, capsys):
+    """Fail-closed on the ENTRY, never on the loop: a typo in one pool line must
+    not stop a service that has a perfectly good model left to build on."""
+    _use_roster(factory, ROSTER + 'router:\n'
+                                  '  builder_pool:\n'
+                                  '    - model: "kimi-k2.7-code"\n'      # no provider
+                                  '    - model: "xai/"\n'                # no model
+                                  '    - model: 7\n'                     # not a string
+                                  '    - not-a-mapping\n'
+                                  '    - model: "xai/grok-4.5"\n')
+
+    assert engine.builder_pool(factory.roster) == ("xai/grok-4.5",)
+    assert capsys.readouterr().out.count("malformed builder_pool entry") == 4
+
+
+def test_a_pool_the_roster_has_no_builder_for_is_named_once_and_ignored(factory, capsys):
+    _use_roster(factory, "defaults:\n  model: ollama-cloud/kimi-k2.7-code\n"
+                         "agents:\n  - name: reviewer\n"
+                         'router:\n  builder_pool:\n    - model: "xai/grok-4.5"\n')
+    instance = engine.Engine(main_root=factory.root, queue_dir=factory.queue,
+                             config=str(factory.roster))
+
+    engine.resolve_lanes(instance)
+
+    assert instance.builder_pool == ()
+    assert "no agent named 'builder' to route" in capsys.readouterr().out
+
+
+def test_the_builder_pool_routes_each_run_to_the_lane_with_the_most_free_slots(
+        factory, eng, monkeypatch, capsys):
+    """The router's whole arithmetic, in one wave of five cards.
+
+    xai and openrouter start with 2 slots each (the default; the shared
+    ollama-cloud lane is widened to 6 by the roster's `lanes:` block so it is
+    never what holds anything back). Free slots decide, ties go to the
+    operator's own pool order, a pool entry whose lane is full is simply not
+    picked - and when every one of them is full the card takes the normal hold
+    path and says so.
+    """
+    _use_roster(factory, POOL_ROSTER)
+    _use_fake(monkeypatch, factory, mode="hold")
+    for name in ("001-a.md", "002-b.md", "003-c.md", "004-d.md", "005-e.md"):
+        _publish(factory, name, _card())
+    eng.cap = 9
+
+    engine.run_cycle(eng)
+
+    assert eng.lane_slots == {"ollama-cloud": 6, "openrouter": 2, "xai": 2}
+    assert _routed(factory) == ["xai/grok-4.5",          # 2 free each -> pool order
+                                "openrouter/glm-5.2",    # xai down to 1
+                                "xai/grok-4.5",          # 1 free each -> pool order again
+                                "openrouter/glm-5.2"]    # xai full, so it is not picked
+    assert _names(eng) == ["001-a.md", "002-b.md", "003-c.md", "004-d.md"]
+    # Each run occupies the lanes ITS derived roster draws on - the shared
+    # default lane plus the one lane it was routed to, and never the other.
+    assert eng.children[0].lanes == ("ollama-cloud", "xai")
+    assert eng.children[1].lanes == ("ollama-cloud", "openrouter")
+
+    out = capsys.readouterr().out
+    assert "router: 001-a.md builder -> xai/grok-4.5 (xai: 2 free of 2)" in out
+    assert ("holding 005-e.md: waiting for lane: no lane in the builder pool has a free slot "
+            "(xai 0 of 2, openrouter 0 of 2)") in out
+
+    engine.run_cycle(eng)                       # the hold is said once, not per cycle
+    assert "waiting for lane" not in capsys.readouterr().out
+
+
+def test_the_derived_roster_is_written_passed_to_dispatch_and_deleted_on_reap(
+        factory, eng, monkeypatch):
+    """The run gets its OWN copy of the roster with the chosen model in it - the
+    operator's file is never edited - and that copy is deleted the moment the
+    run is reaped."""
+    _use_roster(factory, POOL_ROSTER)
+    _use_fake(monkeypatch, factory, mode="done", work="feature.txt:one")
+    _use_gate(monkeypatch, factory)
+    _publish(factory, "001-first.md", _card())
+
+    engine.run_cycle(eng)
+
+    derived = Path(_configs(factory)[0])
+    assert derived != factory.roster and derived.is_file()
+    assert _routed(factory) == ["xai/grok-4.5"]
+    assert eng.children[0].derived_config == derived
+    copy = yaml.safe_load(derived.read_text(encoding="utf-8"))
+    assert [agent["name"] for agent in copy["agents"]] == ["scout", "builder", "reviewer"]
+    assert copy["defaults"]["model"] == "ollama-cloud/kimi-k2.7-code"      # untouched
+    assert factory.roster.read_text(encoding="utf-8") == POOL_ROSTER       # and so is the roster
+
+    _wait_for_children(eng)
+    engine.run_cycle(eng)                       # reap -> integrate -> park
+
+    assert not derived.exists()
+    assert (factory.queue / "done" / "001-first.md").is_file()
+
+
+def test_a_roster_with_no_router_block_dispatches_exactly_as_it_always_did(
+        factory, eng, monkeypatch):
+    """No pool, no routing, no derived file, no change of any kind: the card is
+    dispatched with the operator's own roster path, exactly as before the router
+    existed."""
+    _use_fake(monkeypatch, factory, mode="hold")
+    _publish(factory, "001-first.md", _card())
+
+    engine.run_cycle(eng)
+
+    assert eng.builder_pool == ()
+    assert _configs(factory) == [str(factory.roster)]
+    assert _routed(factory) == [""]                       # the builder still inherits
+    assert eng.children[0].derived_config is None
+    assert eng.children[0].lanes == ("ollama-cloud", "xai")
+
+
+def test_the_real_command_line_carries_whichever_roster_the_run_was_given(factory, eng):
+    """The seam's real value (what the stand-in stands in FOR): `--config` is
+    the engine's roster when nothing routed the run, and this run's own derived
+    copy when something did."""
+    card = _publish(factory, "001-first.md", _card())
+
+    assert engine.dispatch_command(eng, card)[-2:] == ["--config", str(factory.roster)]
+    assert engine.dispatch_command(eng, card, "derived.yaml")[-2:] == ["--config",
+                                                                       "derived.yaml"]
 
 
 # ── the status protocol: claim, then terminal, each committed and pushed ────

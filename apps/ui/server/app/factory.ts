@@ -41,6 +41,7 @@ import { readConfig } from "../config.ts";
 import { readCards, shippedFromMain } from "./cards.ts";
 import { appError, appJson, appSafely } from "./guard.ts";
 import { appHome } from "./manifest.ts";
+import { readRouterAndLanes } from "./roster.ts";
 import { getScope, param } from "./scoped.ts";
 
 /** `adws/engine.py`'s own `DEFAULT_LANE_SLOTS` (a slot counts one RUN; inner
@@ -79,16 +80,30 @@ export function parseLaneSlots(value: string): Map<string, number> {
   return slots;
 }
 
+/** What the Lanes tab may write, in words the tab prints verbatim. */
+const LANE_WRITES_REASON =
+  "slots and the on/off switch are written into the config's `lanes:` block, one lane at a time; " +
+  "the engine's own concurrency cap is set on the engine service, not here";
+
 /** `engine.py:roster_lanes` - the distinct provider prefixes of the roster's
- * `provider/model` strings (`defaults.model` plus any per-agent `model:`).
- * A model string with no `/` names no provider and is skipped, never guessed. */
+ * `provider/model` strings (`defaults.model` plus any per-agent `model:`),
+ * PLUS the same prefixes of `router.builder_pool`: a pool entry draws on its
+ * provider account exactly like a roster model does, so it is a lane.
+ * A model string with no `/` names no provider and is skipped, never guessed.
+ *
+ * Slot precedence, most local first: `SSSF_LANES` in THIS process's
+ * environment, then the config's `lanes.<name>.slots`, then engine.py's
+ * DEFAULT_LANE_SLOTS. `slots_config` carries the config's own number
+ * separately, because that is the one the Lanes tab edits - the tab must be
+ * able to show what the file says even when this process's env disagrees. */
 export async function readLanes(configPath: string, env: string | null): Promise<LanesResponse> {
   const overrides = parseLaneSlots(env ?? "");
-  const base: Omit<LanesResponse, "lanes" | "reason"> = {
+  const base: Omit<LanesResponse, "lanes" | "reason" | "lanes_block_present"> = {
     config_path: configPath,
     slots_default: DEFAULT_LANE_SLOTS,
     env,
-    writes_supported: false,
+    writes_supported: true,
+    writes_reason: LANE_WRITES_REASON,
   };
 
   let parsed;
@@ -98,41 +113,66 @@ export async function readLanes(configPath: string, env: string | null): Promise
     return {
       ...base,
       lanes: [],
+      writes_supported: false,
+      writes_reason: "there is no config file to write a `lanes:` block into",
+      lanes_block_present: false,
       reason: `no lanes could be derived: ${configPath} could not be read (${(error as Error).message}) - a lane is a provider prefix of that roster's models`,
     };
   }
 
-  const byLane = new Map<string, { models: Set<string>; agents: Set<string> }>();
-  const add = (model: string | null, agent: string) => {
+  // The two optional blocks. They are read from the same file, and a file that
+  // parsed for readConfig parses here too - but a throw is still an empty
+  // block, never a lane list that silently loses its slot counts.
+  let blocks: Awaited<ReturnType<typeof readRouterAndLanes>>;
+  try {
+    blocks = await readRouterAndLanes(configPath);
+  } catch {
+    blocks = { pool: [], pool_present: false, pool_reason: null, lanes: {}, lanes_present: false, lanes_reason: null };
+  }
+
+  const byLane = new Map<string, { models: Set<string>; pool: Set<string>; agents: Set<string> }>();
+  const add = (model: string | null, agent: string, fromPool = false) => {
     if (!model || !model.includes("/")) return;
     const lane = model.split("/", 1)[0]!.trim();
     if (!lane) return;
-    const entry = byLane.get(lane) ?? { models: new Set<string>(), agents: new Set<string>() };
-    entry.models.add(model);
+    const entry = byLane.get(lane) ?? { models: new Set<string>(), pool: new Set<string>(), agents: new Set<string>() };
+    (fromPool ? entry.pool : entry.models).add(model);
     entry.agents.add(agent);
     byLane.set(lane, entry);
   };
   add(parsed.defaults.model, "defaults");
   for (const agent of parsed.roster) add(agent.model, agent.name);
+  for (const item of blocks.pool) add(item.model, "builder pool", true);
 
   const lanes: LaneRow[] = [...byLane.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, entry]) => ({
-      name,
-      slots: overrides.get(name) ?? DEFAULT_LANE_SLOTS,
-      slots_source: overrides.has(name) ? ("SSSF_LANES" as const) : ("default" as const),
-      models: [...entry.models].sort(),
-      agents: [...entry.agents].sort(),
-      free: null,
-    }));
+    .map(([name, entry]) => {
+      const configured = blocks.lanes[name]?.slots ?? null;
+      return {
+        name,
+        slots: overrides.get(name) ?? configured ?? DEFAULT_LANE_SLOTS,
+        slots_source: overrides.has(name)
+          ? ("SSSF_LANES" as const)
+          : configured !== null
+            ? ("config" as const)
+            : ("default" as const),
+        slots_config: configured,
+        enabled: blocks.lanes[name]?.enabled ?? true,
+        models: [...entry.models].sort(),
+        pool_models: [...entry.pool].sort(),
+        agents: [...entry.agents].sort(),
+        free: null,
+      };
+    });
 
   return {
     ...base,
     lanes,
+    lanes_block_present: blocks.lanes_present,
     reason:
       lanes.length === 0
         ? `no provider/model lanes in ${configPath} - every model there is a bare id with no provider prefix`
-        : null,
+        : blocks.lanes_reason,
   };
 }
 

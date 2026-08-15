@@ -15,6 +15,12 @@
  *                                           server's own reason underneath
  *   - engine running / stopped           -> the mock's own sentence
  *
+ * Below Help sits the CONNECTION line: the mark, small, beside the machine
+ * this app is actually talking to - "this machine · <hostname>", "connected ·
+ * <server>", "not connected · <server>", or the honest unknown while the read
+ * is out. Its source is `GET /api/app/factory/machines`, derived once in
+ * `connection.ts` so the footer and the first-run surface cannot disagree.
+ *
  * A count the server could not know is NEVER printed as a zero. `lanes_active:
  * null` means the clause about lanes is dropped from the sentence, and the
  * reason line carries why. `source: "local-derived"` is stated inline rather
@@ -24,10 +30,12 @@
 import { useState } from "react";
 import type { FactoryHealth } from "../lib/api.ts";
 import { formatUptime, plural } from "../lib/format.ts";
-import type { Resource } from "../lib/poll.ts";
+import { useResource, type Resource } from "../lib/poll.ts";
 import { Dot, type Tone } from "../shared/Dot.tsx";
 import { HelpIcon } from "../shared/Icons.tsx";
+import { connectionLine, type MachinesResponse } from "./connection.ts";
 import { Help } from "./Help.tsx";
+import "./onboarding.css";
 
 const NOTHING = "—";
 
@@ -91,6 +99,13 @@ function strip(health: Resource<FactoryHealth>): Strip {
 export function FactoryStatus({ health }: { health: Resource<FactoryHealth> }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const view = strip(health);
+  // The row under Help used to be the app's own name — a caption that told the
+  // operator nothing he did not already know, in the one place where "which
+  // machine am I looking at?" belongs. It is the connection now, from the same
+  // machines read Settings > Machines renders (see connection.ts), including
+  // the honest unknown.
+  const machines = useResource<MachinesResponse>("machines", "/api/app/factory/machines");
+  const connection = connectionLine(machines);
 
   return (
     <div className="factory-status">
@@ -120,10 +135,13 @@ export function FactoryStatus({ health }: { health: Resource<FactoryHealth> }) {
         <span>Help</span>
       </button>
       {/* The operator's mark - three rising amber bars (the parked
-          sdl-factory-mark, ratified into the app 2026-08-15). */}
-      <div className="fs-brand" aria-hidden="true">
-        <img src="/mark.svg" alt="" width={14} height={14} />
-        <span>SDL Factory</span>
+          sdl-factory-mark, ratified into the app 2026-08-15) - now beside the
+          connection rather than beside the app's own name. The title carries
+          the server's own longer sentence; the strip is 240px wide and the
+          short truth is what has to fit. */}
+      <div className="fs-connection" title={connection.detail ?? undefined}>
+        <img src="/mark.svg" alt="" width={14} height={14} aria-hidden="true" />
+        <span className="fs-conn-text">{connection.text}</span>
       </div>
       {helpOpen ? <Help onClose={() => setHelpOpen(false)} /> : null}
     </div>

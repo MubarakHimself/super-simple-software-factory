@@ -75,9 +75,9 @@ const LABEL: Record<Pane, string> = {
  */
 const IDLE_LINE: Record<Pane, string> = {
   roster: "Nothing changed yet — model and thinking level save into the config file as you pick them.",
-  lanes: "Nothing to save here — this tab has no writes; the lane switches move on screen only.",
-  providers: "Nothing to save here — every write on this tab needs the factory machine's connection.",
-  machines: "Nothing to save here — the server row is read from this machine's own settings file.",
+  lanes: "Nothing changed yet — slots save into the config file's lanes: block as you set them.",
+  providers: "Nothing changed yet — providers save on this machine; sending a key to a server is a separate step.",
+  machines: "Nothing changed yet — servers save into this machine's own settings file as you add them.",
   appearance: "Nothing changed yet — these preferences save in this browser profile only.",
 };
 

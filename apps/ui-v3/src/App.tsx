@@ -26,6 +26,14 @@ export interface ShellValue {
   projects: Project[];
   /** Re-read `/api/app/projects` (after an add, a rename, a removal). */
   refreshProjects: () => void;
+  /** What a surface that just added a project should call INSTEAD of
+   * `refreshProjects()` + navigate. The list read is asynchronous, so
+   * navigating straight to the new id lands on a project the list does not
+   * carry yet; this holds the server's own answer until the read catches up,
+   * so the first paint after an add is the project, never "project not
+   * found". (Settings' own add modal still calls `refreshProjects` — see this
+   * lane's report.) */
+  onProjectAdded: (project: Project) => void;
   /** The one 2s poll. Board and Runs read this, never a second copy of it. */
   live: Resource<Live>;
   /** The factory-status endpoint, shared so a surface can render the
@@ -45,10 +53,14 @@ export function useShell(): ShellValue {
 
 export function App({
   projects,
+  projectsReading,
   refreshProjects,
   onProjectAdded,
 }: {
   projects: Project[];
+  /** True while a re-read of the project list is in flight — the difference
+   * between "this id is not registered" and "the list has not answered yet". */
+  projectsReading: boolean;
   refreshProjects: () => void;
   onProjectAdded: (project: Project) => void;
 }) {
@@ -78,16 +90,39 @@ export function App({
     [navigate, pathname],
   );
 
+  /** A project left this machine's list. Re-read, then leave the id that is
+   * gone: the next project if there is one, the first-run surface if there is
+   * not. Never sit on a route whose project no longer exists. */
+  const onProjectRemoved = useCallback(
+    (removedId: string) => {
+      refreshProjects();
+      if (removedId !== projectId) return;
+      const next = projects.find((entry) => entry.id !== removedId);
+      navigate(next ? `/p/${encodeURIComponent(next.id)}/home` : "/", { replace: true });
+    },
+    [navigate, projectId, projects, refreshProjects],
+  );
+
   const value = useMemo<ShellValue>(
-    () => ({ projectId, project, projects, refreshProjects, live, health, openAddProject }),
-    [projectId, project, projects, refreshProjects, live, health, openAddProject],
+    () => ({ projectId, project, projects, refreshProjects, onProjectAdded, live, health, openAddProject }),
+    [projectId, project, projects, refreshProjects, onProjectAdded, live, health, openAddProject],
   );
 
   // A deep link into a project this manifest does not have. Say so, and offer
-  // the one honest way out rather than redirecting somewhere unasked.
+  // the one honest way out rather than redirecting somewhere unasked - but
+  // only once a completed read has failed to find it. While the list is being
+  // re-read (the moment right after an add, or after a removal), the honest
+  // word is "opening", not "not found".
   if (!project) {
-    if (projects.length === 0) return <Navigate to="/" replace />;
+    if (projects.length === 0 && !projectsReading) return <Navigate to="/" replace />;
     const first = projects[0];
+    if (projectsReading) {
+      return (
+        <div className="app">
+          <EmptyState heading="Opening project" sentence="Reading this machine's project list." />
+        </div>
+      );
+    }
     return (
       <div className="app">
         <EmptyState
@@ -109,6 +144,7 @@ export function App({
           health={health}
           onSwitchProject={switchProject}
           onAddProject={openAddProject}
+          onProjectRemoved={onProjectRemoved}
         />
         <div className="main-col">
           <TopBar projectId={projectId} projects={projects} onSwitchProject={switchProject} />

@@ -76,6 +76,112 @@ export interface RosterEditBody {
   thinking?: string | null;
 }
 
+// ── the vocabulary law ───────────────────────────────────────────────────────
+//
+// Not a type - the one rule both Roster and Lanes read, and the correction of a
+// confirmed bug. A PROVIDER is an account, a lane, a rate-limit bucket:
+// Ollama Cloud, OpenCode, OpenRouter, xAI, Anthropic-via-claude-code,
+// OpenAI-via-codex. A FAMILY is the MODEL's family: Kimi, GLM, Grok, Qwen,
+// Claude, GPT, DeepSeek, Gemini.
+//
+// The two are independent. `ollama-cloud/kimi-k2.7-code` is served by the
+// Ollama Cloud ACCOUNT and is a KIMI model; the old code read the provider
+// prefix and called it a family, which is how "Ollama Cloud" ended up shown as
+// a review family. Cross-family review compares the FAMILY of the reviewer's
+// model against the FAMILY of every builder model - never the account names.
+//
+// So the family is read from the model id (everything after the last `/`) and
+// from nothing else. A model whose id matches nothing here has NO family, and
+// the surface says exactly that rather than guessing.
+
+export interface ModelFamily {
+  /** stable key, for comparing two models */
+  id: string;
+  /** what a human reads: family, then who makes it */
+  label: string;
+}
+
+/** The matches, in order. Each is a substring of the model id, lowercased.
+ * The aliases beyond the plain family word are model names the family actually
+ * ships under (`moonshot` for Kimi; `sonnet`/`opus`/`haiku` for Claude), so a
+ * roster naming one of those is not reported as unknown. */
+const FAMILY_RULES: { match: RegExp; family: ModelFamily }[] = [
+  { match: /kimi|moonshot/, family: { id: "kimi", label: "Kimi (Moonshot)" } },
+  { match: /glm/, family: { id: "glm", label: "GLM (Z.ai)" } },
+  { match: /grok/, family: { id: "grok", label: "Grok (xAI)" } },
+  { match: /qwen/, family: { id: "qwen", label: "Qwen (Alibaba)" } },
+  { match: /claude|sonnet|opus|haiku/, family: { id: "claude", label: "Claude (Anthropic)" } },
+  { match: /deepseek/, family: { id: "deepseek", label: "DeepSeek" } },
+  { match: /gemini/, family: { id: "gemini", label: "Gemini (Google)" } },
+  { match: /gpt/, family: { id: "gpt", label: "GPT (OpenAI)" } },
+];
+
+/** The part of a `provider/model` string that names the MODEL. */
+export function modelId(model: string): string {
+  const at = model.lastIndexOf("/");
+  return (at === -1 ? model : model.slice(at + 1)).trim();
+}
+
+/** The provider ACCOUNT a model draws on - the lane, never the family. */
+export function providerOf(model: string): string | null {
+  if (!model.includes("/")) return null;
+  return model.split("/", 1)[0]!.trim() || null;
+}
+
+/** The model's family, or null when its id matches no family this app knows.
+ * Null is a real answer here: "unknown family - check manually". */
+export function familyOf(model: string): ModelFamily | null {
+  const id = modelId(model).toLowerCase();
+  if (!id) return null;
+  for (const rule of FAMILY_RULES) if (rule.match.test(id)) return rule.family;
+  return null;
+}
+
+export const UNKNOWN_FAMILY = "unknown family - check manually";
+
+// ── the builder's model pool (`router.builder_pool`) ─────────────────────────
+
+/** One entry of the pool. The shared config schema the factory's engine reads:
+ *
+ *   router:
+ *     builder_pool:
+ *       - model: "ollama-cloud/kimi-k2.7-code"
+ *       - model: "xai/grok-4.5"
+ */
+export interface BuilderPoolEntry {
+  model: string;
+}
+
+/** `GET /api/app/p/:id/config/router`. */
+export interface RouterRead {
+  builder_pool: BuilderPoolEntry[];
+  present: boolean;
+  /** the builder agent's resolved model - the pool's first entry mirrors it */
+  builder_model: string | null;
+  max_pool: number;
+  config_path: string;
+  reason: string | null;
+}
+
+export interface RouterEditResult {
+  builder_pool: BuilderPoolEntry[];
+  backup: string;
+  changed: string[];
+}
+
+// ── the lanes block (`lanes.<name>.slots` / `.enabled`) ──────────────────────
+
+export interface LaneBlockEntry {
+  slots?: number;
+  enabled?: boolean;
+}
+
+export interface LaneEditResult {
+  lanes: Record<string, LaneBlockEntry>;
+  backup: string;
+  changed: string[];
+}
+
 // ── the model catalog (pi's own) ────────────────────────────────────────────
 
 export interface CatalogModel {
@@ -105,10 +211,17 @@ export interface ModelCatalog {
 // ── lanes ───────────────────────────────────────────────────────────────────
 
 export interface LaneRow {
+  /** a PROVIDER account (one rate-limit bucket), never a model family */
   name: string;
+  /** the slot count that applies, after `SSSF_LANES` and the config block */
   slots: number;
-  slots_source: "default" | "SSSF_LANES";
+  slots_source: "default" | "SSSF_LANES" | "config";
+  /** what the config's `lanes:` block says - the number this tab edits */
+  slots_config: number | null;
+  enabled: boolean;
   models: string[];
+  /** `router.builder_pool` models drawing on this lane */
+  pool_models: string[];
   agents: string[];
   /** null here always: free slots are the running engine's own count */
   free: number | null;
@@ -119,8 +232,10 @@ export interface LanesResponse {
   config_path: string;
   slots_default: number;
   env: string | null;
-  /** false today - the toggles and the retry budget have no field to write to */
+  /** true once slots and the on/off switch have a home: the `lanes:` block */
   writes_supported: boolean;
+  writes_reason: string;
+  lanes_block_present: boolean;
   reason: string | null;
 }
 

@@ -64,4 +64,8 @@ export interface HomeSession {
 
 export interface RunsPayload {
   runs?: HomeSession[];
+  /** present only on the `{factory:"absent"}` shape - the honest "this folder
+   * has no adws/ yet" answer, which Home's empty state names rather than
+   * showing as an ordinary quiet day. */
+  factory?: "present" | "absent";
 }

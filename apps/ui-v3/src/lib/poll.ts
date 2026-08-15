@@ -14,14 +14,30 @@
  * renders what it has plus the line saying the last read failed.
  *
  * ── The Sync bus ───────────────────────────────────────────────────────────
- * The topbar's Sync button means "re-read every data source on screen". Every
- * mounted `useResource` registers its reader here, so a surface joins Sync by
- * doing nothing at all beyond using this hook. `requestSyncAll()` awaits all
- * of them and publishes an honest result (how many sources, how many failed) -
- * never a spinner that ends in silence.
+ * The topbar's Sync button is two things at once (the operator's own words:
+ * "that button does a lot - providers, machines, kanban, docs... it's like a
+ * status update"):
+ *
+ *   1. THE REPO — `POST /api/app/p/:id/sync` (`server/app/sync.ts`): a real
+ *      `git fetch` + `merge --ff-only` in the project's own checkout. Never
+ *      pushes, never forces; dirty or diverged is a named, honest outcome.
+ *   2. EVERYTHING ON SCREEN — every mounted `useResource` registers its
+ *      reader here, so a surface joins Sync by doing nothing at all beyond
+ *      using this hook. `requestSyncAll()` re-reads all of them alongside the
+ *      repo call.
+ *
+ * `areas` tracks WHEN each of the two named areas the popover reports on
+ * (`board`, `docs`) last finished re-reading, and whether that re-read
+ * failed - derived from the same key `useResource` already carries, via
+ * `areaForKey()` below. A source that is not currently mounted (the operator
+ * is on a different surface) contributes nothing to `areas` and the popover
+ * says "not open right now" rather than inventing a timestamp for it. Machine
+ * and provider freshness live entirely in their own panes (Settings ->
+ * Machines / Providers) - this bus does not touch either, and the popover
+ * says so with a link rather than a number this bus cannot honestly produce.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { apiGet } from "./api.ts";
+import { apiGet, apiPost, type RepoSyncResult } from "./api.ts";
 
 export interface Resource<T> {
   data: T | null;
@@ -42,21 +58,49 @@ interface Held<T> {
 
 /** A mounted reader: re-reads its source, rejects if that read failed. */
 type Reader = () => Promise<void>;
-const readers = new Set<Reader>();
+/** Reader -> the `useResource` key it was registered under, so a sync can
+ * derive which named area (if any) a given reader belongs to. */
+const readers = new Map<Reader, string>();
 
 export type SyncStatus = "idle" | "syncing" | "done" | "failed";
+
+/** The two named areas the popover reports freshness for — the ones the
+ * operator can actually be looking at on screen (Board reads the `|cards`
+ * key, Docs reads `|docs-tree` / `|docs-file|…`). Machines and providers are
+ * deliberately not areas here: their freshness lives in their own panes. */
+export type SyncArea = "board" | "docs";
+
+export interface AreaState {
+  /** epoch ms this area last finished re-reading, or null if it has never
+   * been open during a sync. */
+  at: number | null;
+  failed: boolean;
+}
 
 export interface SyncState {
   status: SyncStatus;
   /** epoch ms of the last completed sync, or null before the first one. */
   at: number | null;
-  /** how many sources the last (or current) sync covers. */
+  /** how many sources the last (or current) sync covers (readers + the repo call). */
   sources: number;
   /** how many of those failed. */
   failed: number;
+  /** the repo half — null until the first sync completes, or when it was not
+   * attempted (no project id yet). */
+  repo: RepoSyncResult | null;
+  areas: Record<SyncArea, AreaState>;
 }
 
-let syncState: SyncState = { status: "idle", at: null, sources: 0, failed: 0 };
+const NO_AREA: AreaState = { at: null, failed: false };
+
+let syncState: SyncState = {
+  status: "idle",
+  at: null,
+  sources: 0,
+  failed: 0,
+  repo: null,
+  areas: { board: NO_AREA, docs: NO_AREA },
+};
 const watchers = new Set<() => void>();
 
 function publish(next: SyncState): void {
@@ -81,14 +125,59 @@ export function useSyncState(): SyncState {
   return useSyncExternalStore(subscribeSync, syncSnapshot, syncSnapshot);
 }
 
-/** Re-reads every mounted resource. Resolves when they have all answered. */
-export async function requestSyncAll(): Promise<void> {
+/** `${projectId}|cards` -> "board", `${projectId}|docs-tree` /
+ * `${projectId}|docs-file|…` -> "docs", everything else -> not an area this
+ * bus reports on (still re-read, just not surfaced by name in the popover). */
+function areaForKey(key: string): SyncArea | null {
+  const suffix = key.includes("|") ? key.slice(key.indexOf("|") + 1) : key;
+  if (suffix === "cards") return "board";
+  if (suffix.startsWith("docs")) return "docs";
+  return null;
+}
+
+/** Re-reads every mounted resource AND the project's repo (when a project id
+ * is given). Resolves when everything has answered. `projectId` is optional
+ * because the topbar's Sync button always has one, but a caller before a
+ * project exists should not have to invent one. */
+export async function requestSyncAll(projectId?: string | null): Promise<void> {
   if (syncState.status === "syncing") return;
-  const current = [...readers];
-  publish({ status: "syncing", at: syncState.at, sources: current.length, failed: 0 });
-  const results = await Promise.allSettled(current.map((read) => read()));
-  const failed = results.filter((result) => result.status === "rejected").length;
-  publish({ status: failed > 0 ? "failed" : "done", at: Date.now(), sources: current.length, failed });
+  const current = [...readers.entries()]; // [reader, key][]
+  publish({ ...syncState, status: "syncing", sources: current.length + (projectId ? 1 : 0), failed: 0 });
+
+  const [repoOutcome, ...readOutcomes] = await Promise.allSettled([
+    projectId
+      ? apiPost<{ repo: RepoSyncResult }>(`/api/app/p/${encodeURIComponent(projectId)}/sync`)
+      : Promise.resolve(null),
+    ...current.map(([read]) => read()),
+  ]);
+
+  const now = Date.now();
+  const areas: Record<SyncArea, AreaState> = { ...syncState.areas };
+  current.forEach(([, key], index) => {
+    const area = areaForKey(key);
+    if (!area) return;
+    areas[area] = { at: now, failed: readOutcomes[index]?.status === "rejected" };
+  });
+
+  const repo =
+    repoOutcome.status === "fulfilled"
+      ? (repoOutcome.value?.repo ?? syncState.repo)
+      : projectId
+        ? ({ status: "failed", detail: (repoOutcome.reason as Error).message, branch: null, before_sha: null, after_sha: null } satisfies RepoSyncResult)
+        : syncState.repo;
+
+  const failedReads = readOutcomes.filter((result) => result.status === "rejected").length;
+  const repoFailed = repo !== null && (repo.status === "failed" || repo.status === "not-a-repo");
+  const failed = failedReads + (repoFailed ? 1 : 0);
+
+  publish({
+    status: failed > 0 ? "failed" : "done",
+    at: now,
+    sources: current.length + (projectId ? 1 : 0),
+    failed,
+    repo,
+    areas,
+  });
 }
 
 /* ── the hook ───────────────────────────────────────────────────────────── */
@@ -140,7 +229,7 @@ export function useResource<T>(key: string | null, path: string | null, interval
       const failure = await read();
       if (failure) throw new Error(failure);
     };
-    readers.add(reader);
+    readers.set(reader, key);
 
     void read();
     const timer = intervalMs ? window.setInterval(() => void read(), intervalMs) : null;

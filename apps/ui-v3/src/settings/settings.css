@@ -91,33 +91,95 @@
 .form-select{padding-right:34px;}
 .form-select.compact{min-width:170px;}
 
-/* ── roster table ── */
-.roster-table{width:100%;border-collapse:collapse;}
-.roster-table th{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;text-align:left;padding:8px 10px;border-bottom:1px solid var(--hairline-2);font-weight:normal;}
-.roster-table td{padding:10px;font-size:var(--text-body);color:var(--t1);border-bottom:1px solid var(--hairline);vertical-align:middle;}
-.roster-table td.mono{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);}
-.roster-table td.role{color:var(--t2);}
-.roster-table tr:hover td{background:var(--row-hover);}
-.roster-table .roster-select{height:38px;padding:0 40px 0 14px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;min-width:180px;max-width:100%;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;}
-.roster-table .roster-select:focus{outline:none;border-color:var(--accent);}
-.roster-table .role-select{height:30px;padding:0 24px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:inherit;appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
-.roster-table .role-select:focus{outline:none;border-color:var(--accent);}
-/* v3 settings addition: same chevron clearance as .form-select above - pi's
-   thinking words run to "minimal"/"medium", longer than the drawing's. */
-.roster-table .role-select{padding-right:30px;min-width:96px;}
-.roster-table .remove-btn{height:26px;padding:0 8px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:color .15s,border-color .15s;}
-.roster-table .remove-btn:hover:not(:disabled){color:var(--fail);border-color:var(--fail);}
-.roster-table .remove-btn:disabled{color:var(--t4);cursor:default;}
-/* v3 settings addition: the roster's real rows carry a purpose sentence and an
-   inherited/own marker - the two facts `/config` returns that the illustrated
-   table had no column for. Both sit under the name, never in a new column. */
-.roster-table .rt-name{display:flex;flex-direction:column;gap:2px;}
-.roster-table .rt-agent{font-size:var(--text-body);color:var(--t1);}
-.roster-table .rt-purpose{font-size:var(--text-meta);color:var(--t3);line-height:1.45;max-width:42ch;}
-.roster-table .rt-source{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:var(--text-meta);color:var(--t4);}
-.roster-table .rt-source .rt-clear{color:var(--accent);cursor:pointer;}
-.roster-table .rt-source .rt-clear:hover{opacity:0.8;}
-.roster-table .rt-busy{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);}
+/* ── the two selects (were scoped to .roster-table; the roster is now rows) ── */
+.roster-select{height:38px;padding:0 40px 0 14px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;width:100%;min-width:0;max-width:100%;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;}
+.roster-select:focus{outline:none;border-color:var(--accent);}
+.roster-select:disabled{color:var(--t3);cursor:default;}
+.role-select{height:30px;padding:0 30px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:inherit;appearance:none;cursor:pointer;min-width:96px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
+.role-select:focus{outline:none;border-color:var(--accent);}
+.role-select:disabled{color:var(--t3);cursor:default;}
+.rt-clear{color:var(--accent);cursor:pointer;font-size:var(--text-meta);}
+.rt-clear:hover:not(:disabled){opacity:0.8;}
+.rt-clear:disabled{color:var(--t4);cursor:default;}
+.rt-busy{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);white-space:nowrap;}
+
+/* ── the pipeline: five full-width agent rows on one grid ──────────────────
+   The drawing's roster was a <table> of "workhorses" with an add button. The
+   factory's roster is five named agents in run order, one of which (the
+   builder) opens into a pool - a table cannot hold that without a colspan row
+   that breaks the column rhythm. One grid, declared once and shared by the
+   header and every row, is what keeps the columns aligned down the whole pane
+   AND lets the pool sit full-width underneath its own row.
+
+   The columns are sized so nothing is orphaned at 1280px or at 1920px: the
+   agent and its model take the room (fr), the three facts take exactly what
+   they need (max-content), and the model column is the one that gives. */
+.agent-list{display:flex;flex-direction:column;}
+/* The header and the rows are separate grid containers (a row can be followed
+   by the pool, which a single grid could not hold), so the track sizes must be
+   EXPLICIT - `max-content` would size each container to its own content and
+   the header would sit off its column, which is exactly the "spread came out
+   poorly" the drawing's table had. Fixed widths on the three fact columns,
+   the growth on the two that carry sentences. */
+.agent-head,.agent-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(250px,1.2fr) 108px 150px 148px;align-items:center;gap:24px;}
+.agent-head{padding:8px 10px;border-bottom:1px solid var(--hairline-2);font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.agent-block{border-bottom:1px solid var(--hairline);}
+.agent-block:last-child{border-bottom:none;}
+.agent-row{padding:14px 10px;}
+.agent-list>.agent-row{border-bottom:1px solid var(--hairline);}
+.agent-row:hover{background:var(--row-hover);}
+.agent-row.missing{align-items:start;}
+
+.agent-row .ar-who{min-width:0;display:grid;grid-template-columns:20px 1fr;gap:2px 8px;align-items:baseline;}
+.agent-row .ar-step{grid-row:span 2;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);border:1px solid var(--hairline);border-radius:var(--r-chip);height:20px;display:flex;align-items:center;justify-content:center;align-self:center;}
+.agent-row .ar-name{font-size:var(--text-body);color:var(--t1);font-weight:500;}
+.agent-row .ar-role{font-size:var(--text-meta);color:var(--t3);line-height:1.45;}
+.agent-row .ar-model{min-width:0;}
+.agent-row .ar-source{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:5px;font-size:var(--text-meta);color:var(--t4);}
+.agent-row .ar-source .mono{font-family:var(--font-mono);color:var(--t3);}
+.agent-row .ar-source .ar-sep{color:var(--t4);}
+.agent-row .ar-thinking .ar-source{margin-top:4px;}
+.agent-row .ar-missing{grid-column:2 / -1;font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+.agent-row .ar-missing strong{color:var(--t1);font-family:var(--font-mono);font-weight:600;}
+.agent-row .ar-missing .mono{font-family:var(--font-mono);color:var(--t3);}
+.agent-extra-label{padding:14px 10px 6px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;border-top:1px solid var(--hairline-2);}
+
+/* The family, read from the model name and never from the provider account. */
+.family-chip{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);background:var(--raised);border:1px solid var(--hairline);border-radius:var(--r-chip);padding:2px 8px;white-space:nowrap;}
+.family-chip.unknown{color:var(--warn);border-color:rgba(217,164,65,0.3);background:rgba(217,164,65,0.08);}
+
+/* ── the builder's model pool ── */
+.pool-pane{margin:0 10px 16px;padding:14px 16px;border:1px solid var(--hairline-2);border-left:2px solid var(--accent-dim);border-radius:0 var(--r-control) var(--r-control) 0;background:var(--raised);}
+.pool-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;}
+.pool-head .pool-title{font-family:var(--font-serif);font-size:var(--text-body);font-weight:600;color:var(--t1);}
+.pool-head .pool-count{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+.pool-empty{display:flex;flex-direction:column;gap:10px;align-items:flex-start;font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+.pool-empty .mono{font-family:var(--font-mono);color:var(--t1);}
+.pool-row{display:grid;grid-template-columns:88px minmax(200px,1fr) max-content max-content max-content;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--hairline);}
+.pool-row:last-of-type{border-bottom:none;}
+.pool-row .pool-index{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.pool-row .pool-index.primary{color:var(--accent);}
+.pool-row .pool-select{height:34px;}
+.pool-row .pool-provider{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.pool-row .pool-actions{display:flex;align-items:center;gap:6px;}
+.pool-btn{height:26px;min-width:26px;padding:0 8px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);transition:color .15s,border-color .15s;}
+.pool-btn:hover:not(:disabled){color:var(--accent);border-color:var(--accent);}
+.pool-btn.danger:hover:not(:disabled){color:var(--fail);border-color:var(--fail);}
+.pool-btn:disabled{color:var(--t4);cursor:default;}
+.pool-foot{display:flex;align-items:center;gap:12px;margin-top:12px;}
+.pool-add{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-size:var(--text-meta);color:var(--accent);border:1px dashed var(--accent-dim);border-radius:var(--r-chip);background:transparent;cursor:pointer;transition:border-color .15s,opacity .15s;}
+.pool-add:hover:not(:disabled){border-color:var(--accent);}
+.pool-add:disabled{color:var(--t4);border-color:var(--hairline);cursor:default;}
+.pool-add svg{width:12px;height:12px;flex-shrink:0;}
+.pool-note{font-size:var(--text-meta);color:var(--t3);}
+/* Adding is a pick from the same catalog, not a button that would have to
+   choose a model for the operator. */
+.pool-pick{height:30px;min-width:200px;color:var(--accent);border-color:var(--accent-dim);border-style:dashed;}
+.pool-pick:disabled{color:var(--t4);border-color:var(--hairline);border-style:solid;}
+.pool-drift{margin-bottom:10px;padding:10px 12px;border-radius:var(--r-chip);background:rgba(217,164,65,0.08);border:1px solid rgba(217,164,65,0.3);font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+.pool-drift strong{font-family:var(--font-mono);color:var(--t1);font-weight:600;}
+.pool-drift .rt-clear{margin-left:8px;}
+.pool-pane .section-note{margin-top:12px;}
 
 /* ── auth badge ── */
 .auth-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
@@ -135,6 +197,18 @@
 .review-family-box .rf-badge.fail{background:rgba(220,100,90,0.12);color:var(--fail);border:1px solid rgba(220,100,90,0.3);}
 .review-family-box .rf-body{font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
 .review-family-box .rf-body strong{color:var(--t1);font-weight:600;}
+/* v3 settings addition: the comparison itself, named model by model. The box
+   used to print one provider prefix; the rule is per MODEL, so every model the
+   builder can draw is listed with the family read from its name, and a clash
+   is marked on its own line rather than summarised away. */
+.review-family-box .rf-grid{margin-top:12px;padding-top:10px;border-top:1px solid var(--hairline);display:flex;flex-direction:column;gap:6px;}
+.review-family-box .rf-grid-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
+.review-family-box .rf-line{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:var(--text-meta);color:var(--t2);}
+.review-family-box .rf-line .mono{font-family:var(--font-mono);color:var(--t1);}
+.review-family-box .rf-line .rf-arrow{color:var(--t4);}
+.review-family-box .rf-line .rf-unknown{color:var(--warn);}
+.review-family-box .rf-line.clash .mono{color:var(--fail);}
+.review-family-box .rf-clash-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--fail);background:rgba(220,100,90,0.12);border:1px solid rgba(220,100,90,0.3);border-radius:var(--r-chip);padding:1px 7px;}
 
 /* ── lane rows ── */
 .lane-row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--hairline);}
@@ -153,7 +227,24 @@
 .lane-row .lane-models{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
 .lane-row .lane-models .lm-model{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t1);overflow:hidden;text-overflow:ellipsis;}
 .lane-row .lane-models .lm-agents{font-size:var(--text-meta);color:var(--t3);}
-.lane-row .lane-slots{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);white-space:nowrap;}
+/* v3 settings addition: slots are EDITABLE now (the config's `lanes:` block),
+   so the row carries a control and the one line saying where the number came
+   from - and a lane switched off dims rather than disappearing, because it is
+   still a lane the roster names. */
+.lane-list{display:flex;flex-direction:column;}
+.lane-row{flex-wrap:wrap;}
+.lane-row.off .lane-id,.lane-row.off .lane-models{opacity:0.5;}
+.lane-row .lane-slots-edit{display:flex;flex-direction:column;gap:4px;flex-shrink:0;}
+.lane-row .lane-slots-edit .lse-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.lane-row .lane-slots-edit .role-select{min-width:64px;}
+.lane-row .lane-slots-edit .lse-source{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t4);white-space:nowrap;}
+.lane-row .lane-pinned{flex-basis:100%;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--warn);padding-left:164px;}
+
+/* v3 settings addition: a value that is real but not editable here. It reads as
+   a fact with its source under it, never as a disabled input the operator will
+   click at. */
+.honest-value{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-family:var(--font-mono);font-size:var(--text-body);color:var(--t2);text-align:right;flex-shrink:0;}
+.honest-value .hv-note{font-family:var(--font-sans);font-size:var(--text-meta);color:var(--t3);}
 
 /* ── info callout ── */
 .lane-callout{padding:14px 16px;border-left:2px solid var(--accent-dim);background:var(--accent-surface);border-radius:0 var(--r-control) var(--r-control) 0;margin-bottom:20px;}

@@ -403,6 +403,11 @@ export interface GitInfo {
 
 export interface HealthResponse {
   ok: true;
+  /** which SPA generation this process serves. `server/index.ts` has emitted
+   * this field since the v3 shell landed (it refuses to reuse a server showing
+   * another UI); the type never grew it, which was the one pre-existing
+   * `tsc -p tsconfig.server.json` error. Additive, so no caller changes. */
+  ui: "v1" | "v2" | "v3";
   db: string;
   journal_mode: string;
   read_only: true;
@@ -570,15 +575,28 @@ export interface CardsResponse {
 
 export interface LaneRow {
   /** the provider prefix of a roster `provider/model` string, e.g.
-   * "ollama-cloud" - one provider account = one lane = one quota pool */
+   * "ollama-cloud" - one provider account = one lane = one quota pool.
+   * A PROVIDER, never a model family: "ollama-cloud" is an account, and the
+   * family of what it serves is read from the model name (see FamilyId). */
   name: string;
-  /** concurrent runs this lane carries (engine.py's DEFAULT_LANE_SLOTS, or an
-   * `SSSF_LANES` override read from this process's environment) */
+  /** the slot count that applies: `lanes.<name>.slots` from the config when
+   * the block names it, an `SSSF_LANES` override when this process carries
+   * one, otherwise engine.py's DEFAULT_LANE_SLOTS */
   slots: number;
-  slots_source: "default" | "SSSF_LANES";
+  slots_source: "default" | "SSSF_LANES" | "config";
+  /** what the config's `lanes:` block says for this lane, or null when the
+   * block does not name it - this is the number the Lanes tab edits */
+  slots_config: number | null;
+  /** `lanes.<name>.enabled`; true when the block is silent (a lane exists by
+   * virtue of a model naming its provider, so present = on unless said otherwise) */
+  enabled: boolean;
   /** the roster model strings drawing on this lane */
   models: string[];
-  /** the roster agents drawing on this lane ("defaults" when inherited) */
+  /** the `router.builder_pool` model strings drawing on this lane (a pool
+   * entry is a real draw on its provider account, exactly like a roster model) */
+  pool_models: string[];
+  /** the roster agents drawing on this lane ("defaults" when inherited,
+   * "builder pool" when the draw comes from `router.builder_pool`) */
   agents: string[];
   /** null locally: free slots are the running engine's own count, and this
    * machine has no engine to ask */
@@ -592,10 +610,73 @@ export interface LanesResponse {
   slots_default: number;
   /** `SSSF_LANES` as this process sees it, or null */
   env: string | null;
-  /** the Lanes tab's toggles/retry budget have no field in any config file
-   * today - false keeps the UI from pretending a switch is wired */
-  writes_supported: false;
+  /** true once the config file can carry a `lanes:` block - slots and the
+   * enable switch are written there by `POST /config/lanes` */
+  writes_supported: boolean;
+  /** what exactly is writable, in words, for the tab to print verbatim */
+  writes_reason: string;
+  /** whether the file already carries a `lanes:` block */
+  lanes_block_present: boolean;
   reason: string | null;
+}
+
+/** One entry of `router.builder_pool` - the shared config schema both this app
+ * and the factory's engine read. Ordered; entry #1 is the builder's own
+ * `model:`, mirrored, so the engine has one place to read the whole pool. */
+export interface BuilderPoolEntry {
+  model: string;
+}
+
+/** `GET /api/app/p/:id/config/router`. The builder is the concurrency-critical
+ * agent - longest running, run in parallel - so it is the one agent with a
+ * POOL of provider/model entries instead of a single model. */
+export interface RouterRead {
+  builder_pool: BuilderPoolEntry[];
+  /** whether the file carries a `router:` block at all */
+  present: boolean;
+  /** the builder agent's resolved model, or null when the roster names no
+   * agent called `builder` */
+  builder_model: string | null;
+  /** the largest pool this endpoint will write */
+  max_pool: number;
+  config_path: string;
+  /** set when a `router:` block exists but is not a list of `{model: ...}` */
+  reason: string | null;
+}
+
+export interface RouterEditBody {
+  /** the whole ordered pool, 0-5 entries. `[]` removes `builder_pool` (and the
+   * `router:` block with it when nothing else is in it). */
+  builder_pool: { model: string }[];
+}
+
+export interface RouterEditResult {
+  builder_pool: BuilderPoolEntry[];
+  backup: string;
+  changed: string[];
+}
+
+/** One lane's entry in the config's `lanes:` block. */
+export interface LaneBlockEntry {
+  slots?: number;
+  /** written only when the lane is switched OFF; a lane the block is silent
+   * about is on */
+  enabled?: boolean;
+}
+
+export interface LaneEditBody {
+  /** the lane (provider account) name - it must already be a lane of this
+   * config, because a lane exists by a model naming its provider */
+  lane: string;
+  /** absent = leave alone; null = drop the key so the default applies again */
+  slots?: number | null;
+  enabled?: boolean | null;
+}
+
+export interface LaneEditResult {
+  lanes: Record<string, LaneBlockEntry>;
+  backup: string;
+  changed: string[];
 }
 
 /** A provider definition as it is git-tracked in the repo
@@ -622,6 +703,108 @@ export interface ProviderDefinitionsResponse {
   providers: ProviderDefinition[];
   dir: string;
   reason: string | null;
+}
+
+// -- providers v3: the two buckets (server/app/providers-v3.ts) ---------------
+// A PROVIDER is an ACCOUNT / LANE (Ollama Cloud, OpenCode Go, OpenRouter,
+// Claude-via-the-claude-CLI, Codex). Never a model family. Nothing in these
+// shapes ever carries a key: a stored credential is described by a sha256
+// fingerprint and by nothing else.
+
+export type ProviderBucket = "api-key" | "signed-in";
+
+/** What is true about a bucket-A provider on THIS laptop's own pi install.
+ * `stored` is the honest middle state the operator asked for: the key is on
+ * file, nothing here could apply it, and sync will write it where it matters. */
+export interface ProviderLocalState {
+  state: "applied" | "stored" | "missing";
+  reason: string;
+  /** the id has an entry in ~/.pi/agent/auth.json (presence only - never read) */
+  pi_auth_entry: boolean;
+  /** the id has a providers.<id> block in ~/.pi/agent/models.json */
+  pi_models_entry: boolean;
+}
+
+export interface ProviderApiKeyRow {
+  id: string;
+  label: string;
+  bucket: "api-key";
+  /** the drawn caption, and it reflects what really happens */
+  auth_mechanism: string;
+  api: string;
+  base_url: string;
+  models: { id: string; name: string | null }[];
+  /** sha256 of the key, first 12 hex. Non-reversible; the key never leaves the
+   * server's own module. */
+  key_fingerprint: string;
+  added_at: string;
+  updated_at: string;
+  /** preset id the shape came from, or "operator" */
+  source: string;
+  local: ProviderLocalState;
+}
+
+/** Bucket B: an OAuth/subscription login. No key field, because there is no
+ * key - only a local auth artifact this app reads for existence and mtime. */
+export interface ProviderSignedInRow {
+  id: "claude" | "codex";
+  label: string;
+  bucket: "signed-in";
+  auth_mechanism: string;
+  cli: string;
+  cli_path: string | null;
+  detected: boolean;
+  detail: string;
+  artifact_path: string;
+  artifact_present: boolean;
+  artifact_mtime: string | null;
+  /** whether something exists locally that a sync could carry to a machine */
+  token_available: boolean;
+  /** where that something is - a path or an env var name, never a value */
+  token_source: string | null;
+  how_to_sign_in: string;
+  sync_note: string;
+}
+
+/** A starting point for the Add form. Every field is editable; `source_note`
+ * says whether the endpoint was verified or is the vendor's published one. */
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  api: string;
+  base_url: string;
+  auth_header: boolean;
+  compat: Record<string, unknown> | null;
+  models: string[];
+  source_note: string;
+}
+
+export interface ProviderSyncResult {
+  provider_id: string;
+  bucket: ProviderBucket;
+  state: "applied" | "needs-you" | "failed";
+  reason: string;
+}
+
+export interface ProviderSyncRun {
+  machine_id: string;
+  machine_name: string;
+  at: string;
+  ok: boolean;
+  results: ProviderSyncResult[];
+}
+
+export interface ProvidersV3Response {
+  api_key: ProviderApiKeyRow[];
+  signed_in: ProviderSignedInRow[];
+  presets: ProviderPreset[];
+  /** last sync outcome per machine id, so a reload still knows */
+  sync: Record<string, ProviderSyncRun>;
+  registry_path: string;
+  pi_auth_path: string;
+  pi_models_path: string;
+  reason: string | null;
+  catalog_note: string;
 }
 
 export interface MachineRow {
@@ -678,4 +861,122 @@ export interface FactoryHealth {
   runs_running: number | null;
   factory: "present" | "absent";
   factory_reason: string;
+}
+
+/* ── machines: the registry, the probe, the one-click deploy ────────────────
+ * Additive beside `MachineRow` / `MachinesResponse` above, which describe the
+ * older read-only `/api/app/factory/machines`. These describe
+ * `/api/app/machines` — the registry the app can actually add to, reach and
+ * deploy onto (`apps/ui/server/app/machines.ts`).
+ *
+ * Nothing here ever carries a credential. A machine's password is used once,
+ * in memory, on the connect that installs this app's generated key, and is
+ * never persisted or echoed; `key_path` names a file on THIS laptop, and its
+ * contents never leave it. */
+
+/** What one live reachability check learned. Every field is null unless this
+ * process just proved it. */
+export interface MachineProbe {
+  reachable: boolean;
+  checked_at: string;
+  latency_ms: number | null;
+  /** the server's own error when unreachable, verbatim */
+  error: string | null;
+  os: string | null;
+  /** `systemctl is-active sdl-engine`, or "unknown" when systemd could not
+   * answer - never a guess */
+  engine: string | null;
+  factory_head: string | null;
+  factory_branch: string | null;
+}
+
+/** One `STEP <name> OK|FAIL <detail>` line from `deploy/bootstrap.sh`. */
+export interface DeployStep {
+  name: string;
+  state: "ok" | "fail";
+  detail: string;
+  at: string;
+}
+
+/** The deploy job's poll shape - `jobs.ts`'s pattern, over SSH. */
+export interface DeployJobView {
+  job_id: string;
+  machine_id: string;
+  state: "running" | "done" | "failed";
+  steps: DeployStep[];
+  /** the raw remote output, capped; `dropped` counts what fell off the front */
+  lines: string[];
+  dropped: number;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  error: string | null;
+  repo_url: string;
+  branch: string;
+  dir: string;
+}
+
+/** `GET /api/app/machines/:machine_id/deploy/status` before any deploy ran. */
+export interface DeployNone {
+  machine_id: string;
+  state: "none";
+  reason: string;
+}
+
+export interface MachineRegistryRow {
+  id: string;
+  name: string;
+  kind: "local" | "server";
+  role: string;
+  host: string | null;
+  port: number | null;
+  user: string | null;
+  /** path on this laptop to the private key this app authenticates with */
+  key_path: string | null;
+  /** true when this app generated that key (and installed its public half) */
+  key_generated: boolean;
+  added_at: string | null;
+  last_connected_at: string | null;
+  /** where the factory checkout lives on that box, once a deploy has run */
+  repo_dir: string | null;
+  /** `SHA256:...` of the host key this app pinned when the machine was added;
+   * every later connection must be answered by that key. null = nothing pinned
+   * yet (a record from before pinning existed, or the local row) */
+  host_fingerprint: string | null;
+  /** null when this read did not probe; the reason says which */
+  probe: MachineProbe | null;
+  probe_reason: string | null;
+  /** the most recent deploy this app started for that machine, if any */
+  deploy: DeployJobView | null;
+}
+
+export interface MachinesRegistryResponse {
+  machines: MachineRegistryRow[];
+  default_machine: string | null;
+  /** project id -> machine id, from the project manifest's own entries */
+  bindings: Record<string, string>;
+  registry_path: string;
+  key_dir: string;
+  /** set only when there is no server registered: the honest sentence */
+  reason: string | null;
+}
+
+/** `POST /api/app/machines`. Exactly one of `password` / `key_path`. */
+export interface NewMachineRequest {
+  name?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  /** used ONCE to install this app's key, then dropped - never stored */
+  password?: string;
+  /** an existing private key on this laptop, used instead of a password */
+  key_path?: string;
+}
+
+/** `POST /api/app/machines/:machine_id/deploy`. The repository URL is not a
+ * field: the server clones what this project's own `origin` points at. */
+export interface MachineDeployRequest {
+  project_id?: string;
+  branch?: string;
+  dir?: string;
 }

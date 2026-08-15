@@ -24,17 +24,20 @@ import { APP_TOKEN, SELF_ORIGINS, appJson, appSafely, csrfGuard } from "./guard.
 import { initFactory, initGit } from "./init.ts";
 import { getJobStatus } from "./jobs.ts";
 import { liveRoutes } from "./live.ts";
+import { machinesRoutes } from "./machines.ts";
 import { mergeRoutes } from "./merge.ts";
 import { getModels } from "./models.ts";
 import { createProject, listProjects } from "./projects.ts";
 import { readManifest, seedBootProject } from "./manifest.ts";
 import { getProviders } from "./providers.ts";
+import { providersV3Routes } from "./providers-v3.ts";
 import { getReadiness } from "./readiness.ts";
 import { rosterRoutes } from "./roster.ts";
 import { seenRoutes } from "./seen.ts";
 import { sessionRoutes } from "./sessions/bridge.ts";
 import { shipRoutes } from "./ship.ts";
 import { getSkills } from "./skills.ts";
+import { syncRoutes } from "./sync.ts";
 import { terminalRoutes } from "./terminals.ts";
 import { worklogRoutes } from "./worklog.ts";
 import { worktreesRoutes } from "./worktrees.ts";
@@ -131,6 +134,22 @@ export const appRoutes = {
   // `main`. The only write in this app that touches `main`, and the only
   // place `adws/ship_report.py` is shelled.
   ...shipRoutes(APP_TOKEN, SELF_ORIGINS),
+  // MACHINES (J1): the registry of servers this app can actually reach, the
+  // one-time-password key bootstrap, and the one-click deploy that turns a bare
+  // Ubuntu box into a running factory. The only routes here that open a network
+  // connection off this machine, and the only ones that hold a credential -
+  // in memory, for one connect, never on disk (see machines.ts's header).
+  ...machinesRoutes(APP_TOKEN, SELF_ORIGINS),
+  // SYNC (topbar): `git fetch` + `merge --ff-only` in the project's own
+  // checkout, never a push and never a force. See sync.ts's header for why
+  // this is only the repo half of what the button reports.
+  ...syncRoutes(APP_TOKEN, SELF_ORIGINS),
+  // PROVIDERS v3 (J6.1): the two buckets - API-key accounts stored on this
+  // laptop and applied to pi's own auth store, and the two signed-in CLIs whose
+  // login state is probed read-only - plus the sync that writes both onto a
+  // machine over L2's SSH helpers. Supersedes `/api/app/providers` for v3; that
+  // read-only binary probe stays mounted above for the parked v1/v2 SPAs.
+  ...providersV3Routes(APP_TOKEN, SELF_ORIGINS),
 
   "/api/app/p/:id/docs/tree": appSafely(getDocsTree),
   "/api/app/p/:id/docs/file": appSafely(getDocsFile),

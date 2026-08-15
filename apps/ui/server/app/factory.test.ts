@@ -56,12 +56,17 @@ describe("readLanes", () => {
 
     expect(lanes.lanes.map((lane) => lane.name)).toEqual(["ollama-cloud", "xai"]);
     expect(lanes.slots_default).toBe(2);
-    expect(lanes.writes_supported).toBe(false);
+    // slots and the on/off switch have a home now: the config's `lanes:` block
+    expect(lanes.writes_supported).toBe(true);
+    expect(lanes.lanes_block_present).toBe(false);
     expect(lanes.reason).toBeNull();
 
     const ollama = lanes.lanes[0]!;
     expect(ollama.slots).toBe(2);
     expect(ollama.slots_source).toBe("default");
+    expect(ollama.slots_config).toBeNull();
+    expect(ollama.enabled).toBe(true);
+    expect(ollama.pool_models).toEqual([]);
     expect(ollama.models).toEqual(["ollama-cloud/kimi-k2.7-code"]);
     // `builder` has no model: of its own, so it draws on the default lane -
     // and `scout`, whose model is a bare id with no provider, draws on none
@@ -88,6 +93,58 @@ describe("readLanes", () => {
     // a lane the roster does not use is not invented into existence
     expect(lanes.lanes.some((lane) => lane.name === "nowhere")).toBe(false);
     expect(lanes.env).toBe("xai=3, nowhere=9");
+  });
+
+  test("a builder-pool entry is a lane too, and the `lanes:` block sets its slots", async () => {
+    const root = await makeRoot();
+    const path = await writeRoster(
+      root,
+      `${ROSTER}
+router:
+  builder_pool:
+    - model: ollama-cloud/kimi-k2.7-code
+    - model: zai/glm-5.2
+lanes:
+  zai: { slots: 3 }
+  xai: { slots: 1, enabled: false }
+`,
+    );
+    const lanes = await readLanes(path, null);
+
+    // zai is in no agent's model: line - it is a lane only because the pool
+    // draws on it, which is a real draw on that provider account
+    expect(lanes.lanes.map((lane) => lane.name)).toEqual(["ollama-cloud", "xai", "zai"]);
+    expect(lanes.lanes_block_present).toBe(true);
+
+    const zai = lanes.lanes.find((lane) => lane.name === "zai")!;
+    expect(zai.models).toEqual([]);
+    expect(zai.pool_models).toEqual(["zai/glm-5.2"]);
+    expect(zai.agents).toEqual(["builder pool"]);
+    expect(zai.slots).toBe(3);
+    expect(zai.slots_source).toBe("config");
+    expect(zai.slots_config).toBe(3);
+    expect(zai.enabled).toBe(true);
+
+    const xai = lanes.lanes.find((lane) => lane.name === "xai")!;
+    expect(xai.slots).toBe(1);
+    expect(xai.enabled).toBe(false);
+
+    // the pool model that is also the builder's own model does not invent a
+    // second lane, and its provider still lists both draws
+    const ollama = lanes.lanes.find((lane) => lane.name === "ollama-cloud")!;
+    expect(ollama.pool_models).toEqual(["ollama-cloud/kimi-k2.7-code"]);
+    expect(ollama.agents).toEqual(["builder", "builder pool", "defaults"]);
+  });
+
+  test("SSSF_LANES in this process beats the config block, and says which number it used", async () => {
+    const root = await makeRoot();
+    const path = await writeRoster(root, `${ROSTER}\nlanes:\n  xai: { slots: 4 }\n`);
+    const lanes = await readLanes(path, "xai=6");
+    const xai = lanes.lanes.find((lane) => lane.name === "xai")!;
+    expect(xai.slots).toBe(6);
+    expect(xai.slots_source).toBe("SSSF_LANES");
+    // the file's own number is still reported - it is the one the tab edits
+    expect(xai.slots_config).toBe(4);
   });
 
   test("an unreadable roster is an empty lane list with the reason, not a throw", async () => {

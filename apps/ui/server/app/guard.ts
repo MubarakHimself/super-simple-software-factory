@@ -34,12 +34,22 @@ export interface AppApiError {
  */
 export const APP_TOKEN: string = crypto.randomUUID();
 
-/** The app's own origin, plus the ui2-dev Vite origin (spec section 4:
- * "Vite dev server: 4720, proxying /api to 4700") - both are loopback ports
- * bound by the operator's own tooling, never a third party's page. */
+/** The app's own origin, plus the dev Vite origins - one per UI generation,
+ * so a dev server can run beside the API (spec section 4: "Vite dev server:
+ * 4720, proxying /api to 4700"). All are loopback ports bound by the
+ * operator's own tooling, never a third party's page.
+ *
+ * 4730 is `ui3-dev`. It belongs here for the same reason 4720 does, and its
+ * absence was a real break: `apps/ui-v3/vite.config.ts` proxies with
+ * `changeOrigin: false`, so the browser's own `http://127.0.0.1:4730` Origin
+ * reaches this check verbatim and every write from the v3 dev SPA - add
+ * project, roster, lanes, providers, machines - answered 403 "origin
+ * mismatch". `just ui3` (built SPA on 4700) was unaffected, which is why it
+ * survived this long. */
 export const SELF_ORIGINS: ReadonlySet<string> = new Set([
   "http://127.0.0.1:4700",
   "http://127.0.0.1:4720",
+  "http://127.0.0.1:4730",
 ]);
 
 /** Every `/api/app/*` JSON response: `cache-control: no-store` (spec 1.3 -

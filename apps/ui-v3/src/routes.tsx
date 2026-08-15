@@ -6,8 +6,13 @@
  * There is no Terminal route and no Gate route: v3 drops the Terminal by
  * design, and the merge queue lives inside Runs as its right-hand rail.
  *
- * Default: no projects -> Add project; otherwise /p/<first>/home. **The
- * default is never Runs** - the app must never open onto a run in flight.
+ * Default: no projects -> the first-run surface (`shell/Onboarding.tsx`);
+ * otherwise /p/<first>/home. **The default is never Runs** - the app must
+ * never open onto a run in flight.
+ *
+ * "No projects" is a real state again: the server used to register its own
+ * repo on every boot (see `server/app/manifest.ts`'s header), so this branch
+ * was unreachable on any machine that had ever launched the app.
  *
  * ── The surface seam ───────────────────────────────────────────────────────
  * The shell owns this file; each Phase 2 chunk owns one surface directory and
@@ -21,13 +26,14 @@
  * chunk that wants a different entry file only has to name it one of these.
  * The stubs shipped with the shell already occupy the first name in each list.
  */
-import { Suspense, lazy, useCallback, useMemo, useState, type ComponentType } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { App } from "./App.tsx";
 import type { Project } from "./lib/api.ts";
 import { useResource } from "./lib/poll.ts";
 import { AddProject } from "./shell/AddProject.tsx";
 import { EmptyState, ReadFailure } from "./shell/EmptyState.tsx";
+import { Onboarding } from "./shell/Onboarding.tsx";
 import { SURFACE_NOUN } from "./shell/TopBar.tsx";
 
 type Loader = () => Promise<{ default: ComponentType }>;
@@ -73,11 +79,12 @@ function Surface({ name }: { name: keyof typeof SURFACE_ROOTS }) {
   );
 }
 
-/** First run: no projects on this machine, so the only thing to do is add one. */
+/** First run: no projects on this machine. The surface is the app until one
+ * exists (`shell/Onboarding.tsx`); the modal opens from its one button. */
 function FirstRun({ onAdded }: { onAdded: (project: Project) => void }) {
   const navigate = useNavigate();
   return (
-    <AddProject
+    <Onboarding
       onAdded={(project) => {
         onAdded(project);
         navigate(`/p/${encodeURIComponent(project.id)}/home`, { replace: true });
@@ -86,12 +93,47 @@ function FirstRun({ onAdded }: { onAdded: (project: Project) => void }) {
   );
 }
 
+/** `/add` — the modal on its own, for a deep link into "add a project" that
+ * did not come from the first-run surface. Kept as a bare modal on purpose:
+ * this route means "do this one thing", not "start here". */
+function AddProjectRoute({ onAdded }: { onAdded: (project: Project) => void }) {
+  const navigate = useNavigate();
+  return (
+    <AddProject
+      onAdded={(project) => {
+        onAdded(project);
+        navigate(`/p/${encodeURIComponent(project.id)}/home`, { replace: true });
+      }}
+      onCancel={() => navigate("/", { replace: true })}
+    />
+  );
+}
+
 export function AppRoutes() {
   const { data, error, loading, refresh } = useResource<Project[]>("projects", "/api/app/projects");
+  // "A re-read is in flight" - the difference between a project id this
+  // machine does not have and one the list has not answered about yet. Any
+  // surface that adds or removes a project goes through `refreshProjects`, so
+  // this covers all of them without each one inventing its own flag.
+  const [reading, setReading] = useState(false);
+  const refreshProjects = useCallback(() => {
+    setReading(true);
+    refresh();
+  }, [refresh]);
+  useEffect(() => {
+    setReading(false);
+  }, [data, error]);
   // A project the server just handed back from POST /api/app/projects, held
   // until the list read catches up - so the first paint after an add is the
   // new project, not "project not found".
   const [pending, setPending] = useState<Project | null>(null);
+  // A landed list read is the end of `pending`'s job. Without this, a project
+  // added and then removed would keep coming back from this state - the exact
+  // shape of the phantom this wave is here to kill. Keyed on `data` alone: a
+  // FAILED re-read must not drop a project the server already confirmed.
+  useEffect(() => {
+    setPending(null);
+  }, [data]);
   const projects = useMemo(() => {
     const listed = data ?? [];
     return pending && !listed.some((project) => project.id === pending.id) ? [...listed, pending] : listed;
@@ -100,9 +142,9 @@ export function AppRoutes() {
   const onProjectAdded = useCallback(
     (project: Project) => {
       setPending(project);
-      refresh();
+      refreshProjects();
     },
-    [refresh],
+    [refreshProjects],
   );
 
   if (loading) return null;
@@ -125,10 +167,17 @@ export function AppRoutes() {
           path="/"
           element={first ? <Navigate to={`/p/${encodeURIComponent(first.id)}/home`} replace /> : <FirstRun onAdded={onProjectAdded} />}
         />
-        <Route path="/add" element={<FirstRun onAdded={onProjectAdded} />} />
+        <Route path="/add" element={<AddProjectRoute onAdded={onProjectAdded} />} />
         <Route
           path="/p/:projectId"
-          element={<App projects={projects} refreshProjects={refresh} onProjectAdded={onProjectAdded} />}
+          element={
+            <App
+              projects={projects}
+              projectsReading={reading}
+              refreshProjects={refreshProjects}
+              onProjectAdded={onProjectAdded}
+            />
+          }
         >
           <Route index element={<Navigate to="home" replace />} />
           <Route path="home" element={<Surface name="home" />} />

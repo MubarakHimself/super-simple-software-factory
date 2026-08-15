@@ -30,7 +30,7 @@ import { formatUptime } from "../lib/format.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
 import { Dot, type Tone } from "../shared/Dot.tsx";
 import { BookmarkIcon } from "../shared/Icons.tsx";
-import { ReadFailure } from "../shell/EmptyState.tsx";
+import { EmptyState, ReadFailure } from "../shell/EmptyState.tsx";
 import type { CardsPayload, HomeCard, HomeLiveRun, HomeSession, RunsPayload, ShipReportPayload } from "./types.ts";
 import "./home.css";
 
@@ -150,6 +150,57 @@ function ShippingReport({ projectId, ship }: { projectId: string; ship: Resource
   );
 }
 
+/**
+ * A project with nothing to show. The mock fills this screen with sample runs;
+ * a real one has to say which KIND of nothing this is, because the three have
+ * different next moves and only one of them is the operator's:
+ *
+ *   · no factory in the folder  -> nothing can run here at all, yet
+ *   · cards are ready           -> the factory picks them up by itself
+ *   · no cards                  -> publishing a batch is what fills the Board
+ *
+ * Never "no data yet" on its own, and never a fabricated row.
+ */
+function NothingYet({ projectId, factoryAbsent, readyCount }: { projectId: string; factoryAbsent: boolean; readyCount: number }) {
+  const boardPath = `/p/${encodeURIComponent(projectId)}/board`;
+  if (factoryAbsent) {
+    return (
+      <div className="home-empty">
+        <EmptyState
+          heading="No factory here"
+          sentence="This project has no adws/ in it yet, so there is nothing for the engine to run — the factory installer is what puts the roster, the queue seam and the config in place."
+        />
+      </div>
+    );
+  }
+  if (readyCount > 0) {
+    return (
+      <div className="home-empty">
+        <EmptyState
+          heading="Nothing running"
+          sentence={`${readyCount} ${readyCount === 1 ? "card is" : "cards are"} ready. The factory picks them up by itself when a lane frees up — there is no dispatch button anywhere.`}
+        >
+          <Link className="es-action" to={boardPath}>
+            Open the Board
+          </Link>
+        </EmptyState>
+      </div>
+    );
+  }
+  return (
+    <div className="home-empty">
+      <EmptyState
+        heading="Nothing queued yet"
+        sentence="Publish a batch from your planning session — the cards land on the Board and the factory starts on its own."
+      >
+        <Link className="es-action" to={boardPath}>
+          Open the Board
+        </Link>
+      </EmptyState>
+    </div>
+  );
+}
+
 function RunGroup({ header, tone, pulse, rows }: { header: string; tone: Tone; pulse?: boolean; rows: Row[] }) {
   if (rows.length === 0) return null;
   return (
@@ -195,6 +246,20 @@ export default function Home() {
   const sessions = Array.isArray(rawRuns) ? rawRuns : [];
   const failedSessions = sessions.filter((s) => s.status === "fail").sort(byRecency);
 
+  // Every group is empty and no read failed: this project genuinely has
+  // nothing to show, and Home says which kind of nothing it is rather than
+  // rendering a page of headings with no rows under them.
+  const nothingToShow =
+    runningRuns.length === 0 &&
+    doneCards.length === 0 &&
+    integratedCards.length === 0 &&
+    shippedCards.length === 0 &&
+    blockedCards.length === 0 &&
+    failedSessions.length === 0;
+  const settled = !cardsRes.loading && !runsRes.loading && !cardsRes.error && !runsRes.error;
+  const factoryAbsent = runsRes.data?.factory === "absent";
+  const readyCount = items.filter((card) => card.state === "ready").length;
+
   return (
     <div className="home-scroll">
       <div className="home-content fade-in">
@@ -228,6 +293,10 @@ export default function Home() {
         <RunGroup header="Shipped" tone="ok" rows={shippedCards.map((c) => cardRow(c, "ok", projectId))} />
         <RunGroup header="Failed" tone="fail" rows={failedSessions.map((s) => failedRow(s, projectId))} />
         <RunGroup header="Blocked" tone="warn" rows={blockedCards.map((c) => cardRow(c, "warn", projectId))} />
+
+        {nothingToShow && settled ? (
+          <NothingYet projectId={projectId} factoryAbsent={factoryAbsent} readyCount={readyCount} />
+        ) : null}
       </div>
     </div>
   );

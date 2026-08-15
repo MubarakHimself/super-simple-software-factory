@@ -44,8 +44,19 @@ interface TunnelStatus {
   message: string | null;
 }
 
+interface FolderPick {
+  canceled: boolean;
+  path: string | null;
+}
+
 interface FactoryBridge {
   isDesktop: true;
+  /** L1 - the native directory dialog behind Add project's "Browse…". Resolves
+   * `{canceled:true, path:null}` when the operator closed it without choosing;
+   * rejects when the page is not this app's own origin. A browser has no such
+   * thing, so the modal feature-detects this and falls back to its manual path
+   * field rather than drawing a button that cannot work. */
+  pickFolder(): Promise<FolderPick>;
   term: {
     open(profileId: string, cwd?: string): Promise<{ sessionId: string }>;
     input(sessionId: string, data: string): void;
@@ -93,6 +104,7 @@ interface FactoryBridge {
 
 const factory: FactoryBridge = {
   isDesktop: true,
+  pickFolder: () => ipcRenderer.invoke("dialog:pickFolder") as Promise<FolderPick>,
   term: {
     open: (profileId, cwd) => ipcRenderer.invoke("term:open", profileId, cwd) as Promise<{ sessionId: string }>,
     input: (sessionId, data) => {

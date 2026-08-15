@@ -65,11 +65,14 @@ One cycle (~60s), in order:
        exactly what killed no-mistakes-the-tool).
     6. Scan `queue/*.md` for `ready-for-agent` cards whose `Needs:` are
        satisfied (`dispatch.needs_satisfied`), oldest NNN first.
-    7. While live children < cap AND every lane the roster uses has a free
+    7. While live children < cap AND every lane the run draws on has a free
        slot, spawn `dispatch.py <card>` as a NON-blocking child, wait briefly
        for its ready->running claim to land, and commit + push that claim in
        the same cycle - a card the server is already building must never still
-       look free on the laptop.
+       look free on the laptop. When the roster carries a `router.builder_pool`,
+       the builder's model is CHOSEN here first (the pool entry whose lane has
+       the most free slots) and the run gets its own derived copy of the roster
+       with that model in it.
     8. Sleep, and go again.
 
 `--once` runs exactly one cycle and does NOT wait for the children it started:
@@ -105,6 +108,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,6 +140,13 @@ DEFAULT_CAP = 2
 # provider account is already more than two concurrent calls against that
 # quota pool.
 DEFAULT_LANE_SLOTS = 2
+
+# The one agent the router pool belongs to. The builder is the concurrency-
+# critical agent - it is the longest-running one and the one that actually runs
+# in parallel across runs (operator's roster ruling, 2026-08-15) - so it is the
+# one whose model is chosen per run. Every other agent runs on whatever the
+# roster says, once, and the engine never rewrites it.
+BUILDER_AGENT = "builder"
 
 # The roster every dispatch this engine starts will use. `SSSF_CONFIG` is the
 # factory's ONE way of naming a different one (the justfile reads the same
@@ -220,11 +231,33 @@ def integration_branch() -> str:
 @dataclass
 class Child:
     """One live `dispatch.py` process, the card it is running, and the lanes
-    its roster draws on (one slot of each is occupied for as long as it runs)."""
+    its roster draws on (one slot of each is occupied for as long as it runs).
+
+    `derived_config` is this run's own copy of the roster - written by the
+    router with the builder's chosen model in it, deleted when the child is
+    reaped BY A RUNNING ENGINE. An invocation that exits with this child still
+    live (`--once`, Ctrl-C, a service stop) leaves the file behind and names it
+    in the log: the dispatch is still reading it, so deleting it on the way out
+    would break the run. None means the run was dispatched on the operator's
+    roster exactly as it stands, which is every run on a roster with no
+    `router.builder_pool`.
+    """
     card: Path
     process: subprocess.Popen
     started: float          # time.monotonic() at spawn
     lanes: tuple[str, ...] = ()
+    derived_config: Path | None = None
+
+
+@dataclass
+class Plan:
+    """What ONE card is about to be dispatched with: the roster path to pass as
+    `--config`, the lanes that roster draws on (the slots this run will occupy),
+    and the derived copy to delete when it is reaped (None = the operator's own
+    roster, nothing to clean up)."""
+    config: str
+    lanes: tuple[str, ...] = ()
+    derived: Path | None = None
 
 
 @dataclass
@@ -261,6 +294,10 @@ class Engine:
     lane_slots: dict[str, int] = field(default_factory=dict)
     lanes: tuple[str, ...] = ()
     lanes_resolved: bool = False
+    # The roster's `router.builder_pool`, in the operator's own order, already
+    # validated - empty means no routing at all and the engine behaves exactly
+    # as it did before the router existed.
+    builder_pool: tuple[str, ...] = ()
     opened: bool = False    # first-cycle-only work (roster + stranded scan) has run
 
 
@@ -400,19 +437,31 @@ def parse_lanes(value: str) -> dict[str, int]:
     return slots
 
 
-def roster_lanes(config: str | Path) -> tuple[str, ...]:
+def _roster_yaml(config: str | Path) -> dict:
+    """A roster as plain data, or `{}` when it is not a mapping at all.
+
+    Read DIRECTLY, not through `agents.load_config`, and every reader below
+    goes through here for the same reason: these are SCHEDULING inputs, and a
+    roster that fails validation must still tell the engine which quota pools it
+    would touch (dispatch is the thing that refuses an invalid roster, per card
+    and visibly - see `specs/dispatch.md`). Raises exactly what `read_text` and
+    `yaml.safe_load` raise; the callers that must survive an unreadable roster
+    catch those by name.
+    """
+    data = yaml.safe_load(Path(config).read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def _lanes_of(data: dict) -> tuple[str, ...]:
     """Every lane a roster draws on: the distinct provider prefixes of its
     `provider/model` strings (`defaults.model` plus any per-agent `model:`).
 
-    The yaml is read DIRECTLY, not through `agents.load_config`: this is a
-    scheduling input, and a roster that fails validation must still tell the
-    engine which quota pools it would touch (dispatch is the thing that refuses
-    an invalid roster, per card and visibly - see `specs/dispatch.md`). A model
-    string with no `/` names no provider and is skipped rather than guessed at.
+    Takes DATA, not a path, because the router asks the same question about a
+    roster that exists only in memory - the derived copy it is about to write
+    for one run. One rule, one implementation, so a routed run's slots are
+    counted exactly like an unrouted one's. A model string with no `/` names no
+    provider and is skipped rather than guessed at.
     """
-    data = yaml.safe_load(Path(config).read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        return ()
     models: list[object] = []
     defaults = data.get("defaults")
     if isinstance(defaults, dict):
@@ -422,6 +471,103 @@ def roster_lanes(config: str | Path) -> tuple[str, ...]:
         models += [agent.get("model") for agent in agents if isinstance(agent, dict)]
     return tuple(sorted({str(m).split("/", 1)[0].strip()
                          for m in models if isinstance(m, str) and "/" in m}))
+
+
+def roster_lanes(config: str | Path) -> tuple[str, ...]:
+    """`_lanes_of` for a roster on disk - the lanes one dispatch would occupy."""
+    return _lanes_of(_roster_yaml(config))
+
+
+def _lane_of(model: str) -> str:
+    """The lane a `provider/model` string draws on: its provider prefix."""
+    return model.split("/", 1)[0].strip()
+
+
+def _is_provider_model(model: str) -> bool:
+    """The one shape a pool entry may have: `<provider>/<model>`, both halves
+    non-empty. Anything else names no lane, so the router cannot schedule it."""
+    provider, _, name = model.strip().partition("/")
+    return bool(provider.strip() and name.strip())
+
+
+def builder_pool(config: str | Path) -> tuple[str, ...]:
+    """The roster's optional `router.builder_pool`: the models the BUILDER may
+    run on, in the operator's own order (the order that breaks ties below).
+
+        router:
+          builder_pool:
+            - model: "ollama-cloud/kimi-k2.7-code"
+            - model: "xai/grok-4.5"
+
+    Absent block, absent key, or anything that is not a list -> `()`, which is
+    "no routing" and byte-for-byte the behaviour this engine had before the
+    router existed. A bare `"provider/model"` string is read the same way as the
+    one-key mapping; anything whose model is not `<provider>/<model>` is named
+    in one line and SKIPPED - the rest of the pool still routes. Fail-closed on
+    the entry, never on the loop: a typo in one pool line must not stop a
+    service that has four other perfectly good models to build on.
+    """
+    router = _roster_yaml(config).get("router")
+    if not isinstance(router, dict):
+        return ()
+    entries = router.get("builder_pool")
+    if not isinstance(entries, list):
+        return ()
+    pool: list[str] = []
+    for entry in entries:
+        model = entry.get("model") if isinstance(entry, dict) else entry
+        if not isinstance(model, str) or not _is_provider_model(model):
+            log(f"router: skipping a malformed builder_pool entry ({entry!r}) - an entry is "
+                f"{{model: \"provider/model\"}}, both halves non-empty. The rest of the pool "
+                f"still routes.")
+            continue
+        pool.append(model.strip())
+    return tuple(pool)
+
+
+def config_lanes(config: str | Path) -> dict[str, int]:
+    """The roster's optional top-level `lanes:` block - `lane -> slots`.
+
+        lanes:
+          ollama-cloud: { slots: 2 }
+          xai: { slots: 2 }
+
+    This is the roster UI's way of writing down what `--lanes` says on a command
+    line, so it REPLACES the default slot count for the lanes it names, and
+    `--lanes` / `$SSSF_LANES` still override it on top (ops keeps the last
+    word - a systemd `Environment=` line must be able to narrow a lane without
+    editing a file the laptop owns).
+
+    A malformed entry is named in one line and skipped, and that lane keeps its
+    default: a service must not die of one bad line in a roster, and a lane
+    silently running at a count the operator did not write is the failure this
+    log line exists to prevent.
+    """
+    block = _roster_yaml(config).get("lanes")
+    if not isinstance(block, dict):
+        return {}
+    slots: dict[str, int] = {}
+    for name, entry in block.items():
+        count = entry.get("slots") if isinstance(entry, dict) else None
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            log(f"lanes: skipping {str(name)!r} in the roster's lanes block - an entry is "
+                f"<lane>: {{slots: N}} with N at least 1, and this one is {entry!r}. That "
+                f"lane keeps its default of {DEFAULT_LANE_SLOTS}.")
+            continue
+        slots[str(name).strip()] = count
+    return slots
+
+
+def _builder_agent(data: dict) -> dict | None:
+    """The roster's `builder` entry, as the mutable dict the derived copy swaps
+    a model into - or None when the roster has no such agent."""
+    agents = data.get("agents")
+    if not isinstance(agents, list):
+        return None
+    for agent in agents:
+        if isinstance(agent, dict) and str(agent.get("name", "")).strip() == BUILDER_AGENT:
+            return agent
+    return None
 
 
 def worktrees_enabled(config: str | Path) -> bool:
@@ -449,53 +595,192 @@ def worktrees_enabled(config: str | Path) -> bool:
 
 
 def resolve_lanes(engine: Engine) -> None:
-    """Read the roster once and turn it into `lane -> slots`.
+    """Read the roster once and turn it into `lane -> slots`, plus the builder
+    pool the router will schedule against.
 
-    Default `DEFAULT_LANE_SLOTS` for every lane the roster uses; `--lanes` /
-    `$SSSF_LANES` override per lane. A roster that cannot be read at all leaves
-    lane slots unenforced and says so: dispatch refuses such a card anyway (it
-    validates the config per card), so failing closed here would only turn one
-    visible refusal into a silent stall.
+    Default `DEFAULT_LANE_SLOTS` for every lane the roster uses (its own models
+    plus every lane its builder pool names); the roster's own `lanes:` block
+    replaces that count where it names a lane; `--lanes` / `$SSSF_LANES` then
+    override on top, so ops keeps the last word. An override for a lane nothing
+    in the roster uses is named and ignored, from either source.
+
+    A roster that cannot be read at all leaves lane slots unenforced and says
+    so: dispatch refuses such a card anyway (it validates the config per card),
+    so failing closed here would only turn one visible refusal into a silent
+    stall.
     """
     if engine.lanes_resolved:
         return
     engine.lanes_resolved = True
     try:
-        engine.lanes = roster_lanes(engine.config)
+        lanes = roster_lanes(engine.config)
+        pool = builder_pool(engine.config)
+        block = config_lanes(engine.config)
+        has_builder = _builder_agent(_roster_yaml(engine.config)) is not None
     except (OSError, yaml.YAMLError, ValueError) as error:
         log(f"lane slots not enforced: cannot read the roster {engine.config} "
             f"({_one_line(str(error))}). The cap still bounds parallelism.")
         return
+    if pool and not has_builder:
+        log(f"router: {engine.config} has a builder_pool but no agent named "
+            f"{BUILDER_AGENT!r} to route - the pool is ignored and every run uses the roster "
+            f"exactly as it stands.")
+        pool = ()
+    engine.builder_pool = pool
+    engine.lanes = tuple(sorted(set(lanes) | {_lane_of(model) for model in pool}))
     engine.lane_slots = {lane: DEFAULT_LANE_SLOTS for lane in engine.lanes}
-    for lane, slots in engine.lane_overrides.items():
-        if lane not in engine.lane_slots:
-            log(f"--lanes names {lane}, which this roster does not use - ignored "
-                f"(roster lanes: {', '.join(engine.lanes) or 'none'})")
-            continue
-        engine.lane_slots[lane] = slots
+    for source, overrides in (("the roster's lanes block", block),
+                              ("--lanes", engine.lane_overrides)):
+        for lane, slots in overrides.items():
+            if lane not in engine.lane_slots:
+                log(f"{source} names {lane}, which this roster does not use - ignored "
+                    f"(roster lanes: {', '.join(engine.lanes) or 'none'})")
+                continue
+            engine.lane_slots[lane] = slots
     if not engine.lanes:
         log(f"no provider/model lanes found in {engine.config} - lane slots not enforced")
         return
     shape = ", ".join(f"{lane}={engine.lane_slots[lane]}" for lane in engine.lanes)
     log(f"lanes: {shape} (a slot counts one RUN; inner subagents draw on their parent's "
         f"lane and are not counted, which is why the default is {DEFAULT_LANE_SLOTS})")
+    if engine.builder_pool:
+        log(f"router: builder pool = {', '.join(engine.builder_pool)} - every run's builder "
+            f"goes to whichever of those lanes has the most free slots, ties in that order")
 
 
-def full_lane(engine: Engine) -> tuple[str, int, int] | None:
+def lane_free(engine: Engine, lane: str) -> tuple[int, int]:
+    """`(free, slots)` for one lane. Children each occupy one slot of every lane
+    they use, for as long as they live."""
+    slots = engine.lane_slots.get(lane, DEFAULT_LANE_SLOTS)
+    used = sum(1 for child in engine.children if lane in child.lanes)
+    return max(slots - used, 0), slots
+
+
+def full_lane(engine: Engine, lanes: tuple[str, ...] | None = None) -> tuple[str, int, int] | None:
     """The first lane with no free slot, as `(lane, free, slots)`, or None when
-    every lane the roster uses can carry one more run.
+    every lane in `lanes` can carry one more run. `None` asks about the roster's
+    own lanes, which is every run on a roster with no builder pool.
 
-    Children each occupy one slot of every lane they use, for as long as they
-    live. Deterministic order (the roster's lanes are sorted), so the same
-    full lane is named every time rather than whichever one iteration reached
-    first.
+    Deterministic order (the roster's lanes are sorted, and a derived roster's
+    lanes are sorted by the same rule), so the same full lane is named every
+    time rather than whichever one iteration reached first.
     """
-    for lane in engine.lanes:
-        slots = engine.lane_slots.get(lane, DEFAULT_LANE_SLOTS)
-        used = sum(1 for child in engine.children if lane in child.lanes)
-        if used >= slots:
-            return lane, max(slots - used, 0), slots
+    for lane in (engine.lanes if lanes is None else lanes):
+        free, slots = lane_free(engine, lane)
+        if free <= 0:
+            return lane, free, slots
     return None
+
+
+# ── the router: which model this run's builder gets ─────────────────────────
+
+def pick_pool_model(engine: Engine) -> str | None:
+    """The pool entry whose lane has the most free slots right now, or None when
+    every one of them is full.
+
+    Deterministic arithmetic, and nothing more: no history, no usage log, no
+    model judging where work should go. Ties go to the operator's own pool
+    order (strictly-greater wins keep the earlier entry), so a pool that is
+    tied - the normal state of an idle factory - always starts at the top of the
+    list the operator wrote.
+    """
+    best: str | None = None
+    most = 0
+    for model in engine.builder_pool:
+        free, _ = lane_free(engine, _lane_of(model))
+        if free > most:
+            best, most = model, free
+    return best
+
+
+def derive_config(engine: Engine, card: Path, model: str) -> tuple[Path, tuple[str, ...]] | None:
+    """This run's OWN copy of the roster, with the builder's model swapped for
+    `model`; answers `(path, the lanes that copy draws on)`.
+
+    A copy, never an edit: the operator's roster is a file the laptop owns and
+    git tracks, and two runs routed to two different models in the same cycle
+    would otherwise be writing over each other's roster while dispatch is
+    reading it. The copy is a temp file (utf-8, named after the card so a leaked
+    one is identifiable), passed as `--config` to exactly one dispatch and
+    deleted when that child is reaped by a running engine - an invocation that
+    exits with the child still live leaves it, and says so (`_drop_derived`).
+
+    Nothing else in the roster is touched, so the run's own record names the
+    model without any extra plumbing: the ADW loads THIS file, and the model it
+    reports in `agent_start` / the sessions table is the one chosen here.
+
+    None (logged, one line) when the roster cannot be read or the copy cannot be
+    written. The engine dispatches on the roster it MEANT to or not at all -
+    silently falling back to the roster's own builder model would run a card on
+    a lane the router just decided was full.
+    """
+    try:
+        data = _roster_yaml(engine.config)
+        agent = _builder_agent(data)
+        if agent is None:
+            log(f"router: {card.name} not dispatched this cycle - {engine.config} has no agent "
+                f"named {BUILDER_AGENT!r} to route {model} to")
+            return None
+        agent["model"] = model
+        handle, name = tempfile.mkstemp(prefix=f"sssf-{card.stem}-", suffix=".yaml")
+        os.close(handle)
+        path = Path(name)
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    except (OSError, yaml.YAMLError, ValueError) as error:
+        log(f"router: {card.name} not dispatched this cycle - the derived roster for {model} "
+            f"could not be written ({_one_line(str(error))})")
+        return None
+    return path, _lanes_of(data)
+
+
+def _hold(engine: Engine, card: Path, reason: str) -> None:
+    """One card held, named once per changed reason."""
+    _say_once(engine, f"lane:{card.name}", f"holding {card.name}: {reason}")
+
+
+def plan_run(engine: Engine, card: Path) -> Plan | None:
+    """What this card is about to run on, or None when it is HELD (already
+    logged, once per changed reason).
+
+    With no builder pool this is exactly the lane check it has always been, and
+    the plan is the operator's roster as it stands. With a pool, the builder's
+    model is chosen FIRST - the pool entry whose lane has the most free slots -
+    and then the lanes checked are the ones that CHOICE draws on: a pool entry
+    whose lane is full is simply not picked, and only when every one of them is
+    full does the card take the normal hold path.
+    """
+    if not engine.builder_pool:
+        held = full_lane(engine)
+        if held is not None:
+            _hold(engine, card, f"waiting for lane: {held[0]} ({held[1]} free of {held[2]})")
+            return None
+        engine.waiting.pop(f"lane:{card.name}", None)
+        return Plan(engine.config, engine.lanes)
+
+    model = pick_pool_model(engine)
+    if model is None:
+        shape = []
+        for lane in dict.fromkeys(_lane_of(entry) for entry in engine.builder_pool):
+            free, slots = lane_free(engine, lane)
+            shape.append(f"{lane} {free} of {slots}")
+        _hold(engine, card, f"waiting for lane: no lane in the builder pool has a free slot "
+                            f"({', '.join(shape)})")
+        return None
+
+    derived = derive_config(engine, card, model)
+    if derived is None:
+        return None
+    path, lanes = derived
+    held = full_lane(engine, lanes)
+    if held is not None:
+        path.unlink(missing_ok=True)
+        _hold(engine, card, f"waiting for lane: {held[0]} ({held[1]} free of {held[2]})")
+        return None
+    free, slots = lane_free(engine, _lane_of(model))
+    log(f"router: {card.name} builder -> {model} ({_lane_of(model)}: {free} free of {slots}) "
+        f"- the run's own copy of the roster carries it, so its record names it too")
+    engine.waiting.pop(f"lane:{card.name}", None)
+    return Plan(str(path), lanes, path)
 
 
 # ── git: the transport, and the only thing this file mutates in the checkout ─
@@ -1120,17 +1405,21 @@ def integrate_finished(engine: Engine) -> None:
 
 # ── running cards ────────────────────────────────────────────────────────────
 
-def dispatch_command(engine: Engine, card: Path) -> list[str]:
+def dispatch_command(engine: Engine, card: Path, config: str | None = None) -> list[str]:
     """The child's command line. Its own function because it is one of the two
     places this file touches the outside world - the tests swap in a stand-in
     script here, so the suite never launches a real ADW, a real harness, or
-    `uv`."""
+    `uv`.
+
+    `config` is this run's roster: the derived copy when the router chose a
+    builder model for it, and the operator's own roster otherwise.
+    """
     target = _repo_path(engine, card) or str(card)
     return ["uv", "run", str(Path("adws") / "dispatch.py"), target,
-            "--config", engine.config]
+            "--config", config or engine.config]
 
 
-def spawn(engine: Engine, card: Path) -> Child | None:
+def spawn(engine: Engine, card: Path, plan: Plan | None = None) -> Child | None:
     """Starts one dispatch as a non-blocking child and returns immediately -
     that is the whole difference between the engine and `just work`.
 
@@ -1142,18 +1431,23 @@ def spawn(engine: Engine, card: Path) -> Child | None:
     dies on a cp1252 console.
 
     The child carries the lanes its roster draws on, so the slots it occupies
-    are released the moment it is reaped and not one cycle later.
+    are released the moment it is reaped and not one cycle later - and the
+    derived roster it was given, so that copy is deleted at the same moment.
     """
-    cmd = dispatch_command(engine, card)
+    plan = plan or Plan(engine.config, engine.lanes)
+    cmd = dispatch_command(engine, card, plan.config)
     env = operator_env()
     env["PYTHONIOENCODING"] = "utf-8"
     try:
         process = subprocess.Popen(cmd, cwd=engine.main_root, env=env)
     except OSError as error:
         log(f"could not start {cmd[0]} for {card.name}: {error}")
+        if plan.derived is not None:
+            plan.derived.unlink(missing_ok=True)
         engine.refused.add(card.name)
         return None
-    child = Child(card=card, process=process, started=time.monotonic(), lanes=engine.lanes)
+    child = Child(card=card, process=process, started=time.monotonic(), lanes=plan.lanes,
+                  derived_config=plan.derived)
     engine.children.append(child)
     log(f"dispatched {card.name} (pid {process.pid})")
     return child
@@ -1182,6 +1476,29 @@ def await_claim(engine: Engine, child: Child) -> str | None:
         time.sleep(CLAIM_POLL)
 
 
+def _drop_derived(child: Child) -> None:
+    """Delete a finished run's derived roster. It exists for exactly one
+    dispatch, and nothing reads it after that process exits. A delete that fails
+    is one line and nothing more - it is a temp file, and the run it belonged to
+    is already over.
+
+    This is the ONLY place a derived roster is deleted, and it is reached only
+    from `reap` - that is, only while this engine is still running. An
+    invocation that exits with live children (`--once`, Ctrl-C, a systemd stop)
+    leaves their derived rosters in the temp directory: the still-running
+    dispatch is reading the file, so deleting it on the way out would be worse
+    than leaving it, and no later invocation reconstructs a `Child` to own it.
+    `--once` says so in its own log line. A derived roster carries no credential -
+    it is the roster with one `model:` swapped."""
+    if child.derived_config is None:
+        return
+    try:
+        child.derived_config.unlink(missing_ok=True)
+    except OSError as error:
+        log(f"could not delete the derived roster {child.derived_config} ({error}) - it is a "
+            f"temp file and nothing reads it once its run has exited")
+
+
 def reap(engine: Engine) -> None:
     """Collects every child that finished and records what it did.
 
@@ -1207,6 +1524,7 @@ def reap(engine: Engine) -> None:
         if code is None:
             live.append(child)
             continue
+        _drop_derived(child)
         status = card_status(child.card)
         elapsed = int(time.monotonic() - child.started)
         log(f"finished {child.card.name} exit={code} status={status or '?'} after {elapsed}s")
@@ -1233,8 +1551,8 @@ def reap(engine: Engine) -> None:
 
 def run_cycle(engine: Engine) -> None:
     """One turn: name a committer, be on the working line, reap, adopt,
-    publish, pull, integrate, scan, dispatch within cap and lane slots,
-    publish.
+    publish, pull, integrate, scan, route and dispatch within cap and lane
+    slots, publish.
 
     The order is the whole failure design. The identity preflight comes first,
     because every record this engine keeps is a commit and a checkout that
@@ -1273,16 +1591,12 @@ def run_cycle(engine: Engine) -> None:
     for card in ready_cards(engine):
         if len(engine.children) >= engine.cap:
             break
-        held = full_lane(engine)
-        if held is not None:
-            lane, free, slots = held
-            _say_once(engine, f"lane:{card.name}",
-                      f"holding {card.name}: waiting for lane: {lane} ({free} free of {slots})")
+        plan = plan_run(engine, card)
+        if plan is None:
             continue
-        child = spawn(engine, card)
+        child = spawn(engine, card, plan)
         if child is None:
             continue
-        engine.waiting.pop(f"lane:{card.name}", None)
         status = await_claim(engine, child)
         if status is not None:
             commit_card(engine, card, status)
@@ -1365,11 +1679,22 @@ def main(argv: list[str] | None = None) -> int:
                         f"does not wait for them - a run takes minutes and a cycle takes "
                         f"seconds. Whatever finishes writes {dispatch.DONE} to its card, and "
                         f"the next invocation integrates it straight off the queue on disk.")
+                    left = [str(child.derived_config) for child in engine.children
+                            if child.derived_config is not None]
+                    if left:
+                        log(f"--once: {len(left)} derived roster(s) stay on disk - the runs still "
+                            f"reading them outlive this invocation, and only a running engine "
+                            f"reaps a child. Delete them once those runs are over: "
+                            f"{', '.join(left)}")
                 return 0
             time.sleep(args.interval)
     except KeyboardInterrupt:
+        left = [str(child.derived_config) for child in engine.children
+                if child.derived_config is not None]
         log("stopped. Live runs are left alone; their cards are reconciled by "
-            "`just worktrees`.")
+            "`just worktrees`."
+            + (f" {len(left)} derived roster(s) stay on disk for the runs still reading them: "
+               f"{', '.join(left)}" if left else ""))
         return 0
 
 

@@ -106,14 +106,16 @@ Every `--interval` seconds, in this order:
    `TEMPLATE.md` is not a card) for `Status: ready-for-agent` whose `Needs:` are all satisfied,
    **oldest NNN first**. Malformed cards are skipped silently - they are the Board's "Unparsed"
    bucket, the same rule `dispatch.pick_next` follows.
-7. **Dispatch.** While live children < `--cap` **and every lane the roster uses has a free slot**
-   (5.3), spawn `uv run adws/dispatch.py <card> --config <config>` as a **non-blocking** child (cwd =
+7. **Route, then dispatch.** While live children < `--cap` **and every lane the run draws on has a
+   free slot** (5.3), spawn `uv run adws/dispatch.py <card> --config <config>` as a **non-blocking**
+   child (cwd =
    repo root; env = `operator_env()` plus `PYTHONIOENCODING=utf-8`, a per-child pin, never an ambient
    interpreter setting). stdout and stderr are inherited, so an ADW's console output lands in the
    same journal as the engine's own lines; the authoritative per-run trace is SQLite, read by the UI.
-   Then wait up to 10s for that child's `ready-for-agent -> running` write-back, and commit + push it
-   in the **same** cycle - a card the server is already building must never still look free on the
-   laptop's Board.
+   When the roster carries a `router.builder_pool`, the builder's model is chosen **first** and
+   `<config>` is this run's own derived copy of the roster (5.4). Then wait up to 10s for that
+   child's `ready-for-agent -> running` write-back, and commit + push it in the **same** cycle - a
+   card the server is already building must never still look free on the laptop's Board.
 8. **Sleep**, and go again.
 
 **Steps 2-3 come before the pull deliberately.** They are the engine's recovery: they clear the
@@ -323,6 +325,103 @@ scheduling input, and dispatch is the thing that refuses an invalid roster, per 
   cap still bounds parallelism, and dispatch will refuse such a card by itself - failing closed here
   would turn one visible refusal into a silent stall.
 
+Slot counts come from three places, each one overriding the one before it:
+
+| Source | What |
+|---|---|
+| the default | `2` for every lane the roster uses - its own `provider/model` strings, plus every lane its builder pool names (5.4) |
+| the roster's own `lanes:` block | `lanes: { xai: { slots: 2 } }` - an optional top-level block the roster UI writes; **replaces** the default for the lanes it names |
+| `--lanes` / `$SSSF_LANES` | replaces both. Ops keeps the last word: a systemd `Environment=` line must be able to narrow a lane without editing a file the laptop owns |
+
+An entry naming a lane nothing in the roster uses is logged and ignored, from *either* source. A
+malformed `lanes:` entry (not `<lane>: {slots: N}`, or `N < 1`) is named in one line and skipped, and
+that lane keeps its default - a service must not die of one bad line in a roster, and the log line is
+what keeps a lane from silently running at a count the operator did not write. `--lanes` is stricter
+and still refuses its own malformed value **at startup** (it is one invocation's argument, not a file
+the factory has to keep running on).
+
+### 5.4 The router: which model a run's builder gets
+
+**Deterministic arithmetic now.** The smart batch planner - a model looking at the whole board and
+deciding what should run where - stays behind usage data per MAP.md; what ships here is free-slot
+counting and nothing else. No history, no usage-log crawl (that idea is on MAP.md's dead list), no
+agent anywhere near the decision.
+
+The roster may carry an optional top-level `router:` block:
+
+```yaml
+router:
+  builder_pool:                              # ordered, 1-5 entries (the roster UI's own bound)
+    - model: "ollama-cloud/kimi-k2.7-code"
+    - model: "xai/grok-4.5"
+```
+
+**The pool belongs to the BUILDER and to no other agent.** The builder is the concurrency-critical
+one - longest-running, and the one that actually runs in parallel across runs (the operator's roster
+ruling, 2026-08-15). Planner, scout, documenter and reviewer each run on the one model the roster
+gives them; the reviewer's cross-family rule is enforced against the whole pool where the roster is
+written, not here.
+
+For each card the engine is about to dispatch:
+
+```
+   builder_pool           lane_free(lane) = slots - (live children drawing on it)
+   ------------
+   xai/grok-4.5        -> xai         2 free of 2   \
+   openrouter/glm-5.2  -> openrouter  2 free of 2   / most free wins; a tie takes pool order
+        |
+        v
+   copy the roster, swap the BUILDER's model:  <tmp>/sssf-003-slug-xxxx.yaml   (utf-8)
+        |
+        v
+   uv run adws/dispatch.py queue/003-slug.md --config <that copy>
+        |
+        v
+   the child is reaped  ->  the copy is deleted
+```
+
+- **Most free slots wins; ties go to the operator's own pool order** (a strictly-greater comparison,
+  so the earlier entry keeps a tie - which is the normal state of an idle factory).
+- **A pool entry whose lane is full is simply not picked**, and the next one is considered. **Only
+  when every pool lane is full** does the card take the normal hold path, with the counts on it:
+  `holding 003-third.md: waiting for lane: no lane in the builder pool has a free slot (xai 0 of 2,
+  openrouter 0 of 2)`.
+- **The run gets its own DERIVED copy of the roster**, written to a temp path in utf-8 and named
+  after the card, and *that* path is what is passed as `--config` to its dispatch. A copy, never an
+  edit: the operator's roster is a file the laptop owns and git tracks, and two runs routed to two
+  different models in the same cycle would otherwise be writing over each other's roster while
+  dispatch is reading it. Nothing else in the file is touched.
+- **The slots a routed run occupies are the derived roster's lanes** - read by exactly the same rule
+  as any other roster's (`_lanes_of`: the distinct provider prefixes of `defaults.model` plus every
+  per-agent `model:`). So a run routed to `xai` occupies the shared default lane *and* `xai`, and not
+  `openrouter`. That is what makes the arithmetic above mean anything from one dispatch to the next.
+- **The copy is deleted when the child is reaped.** A delete that fails is one line and nothing more
+  (it is a temp file, and its run is over). `--once` deliberately leaves the copies of the runs it
+  did not wait for: those processes are still reading them.
+- **Which model was picked is recorded twice**: one log line -
+  `router: 003-third.md builder -> xai/grok-4.5 (xai: 2 free of 2)` - and, with no extra plumbing,
+  the run's own record, because the ADW loads the derived roster and reports *that* model in its
+  `agent_start` event and its sessions row. Nothing is written into the CARD: `queue/*.md` has
+  exactly one writer while a run is live (dispatch), and a second writer racing it over a status
+  write-back is precisely the wedge 6 exists to avoid.
+
+**Fail-closed on the entry, never on the loop.** A pool entry that is not `<provider>/<model>` (both
+halves non-empty) is named in one line and **skipped**; the rest of the pool still routes. A typo in
+one line must not stop a service that has four other perfectly good models to build on. A pool on a
+roster with no agent named `builder` is named once and ignored entirely. If the derived copy cannot
+be written at all, that card is **not dispatched this cycle** and says so - the engine dispatches on
+the roster it meant to or not at all, because silently falling back to the roster's own builder model
+would run the card on a lane the router had just decided was full.
+
+**No pool, no router.** An absent or empty `router.builder_pool` - which is every roster in the
+factory today - means the card is dispatched with the operator's own roster path, occupying the
+roster's own lanes, with no derived file and no extra log line: byte-for-byte the behaviour the
+engine had before the router existed.
+
+Both blocks are read **directly** from the yaml, like the lanes above and for the same reason. They
+are also optional and unknown to `agents.load_config`, which ignores unknown top-level keys - verified
+before this landed - so the same file is a valid roster for dispatch, the ADWs and the roster UI.
+
 ## 6. The status / commit protocol
 
 The engine never invents a status. dispatch writes the card (`ready-for-agent -> running ->
@@ -392,7 +491,7 @@ definition, and a single non-ASCII glyph reaching a cp1252 stdout takes the whol
 | `--cap` | `2` | how many ADWs may run at once. Must be >= 1. |
 | `--lanes` | `$SSSF_LANES`, else 2 slots per roster lane | per-lane slot overrides, `"xai=2,opencode-go=1"` (5.3) |
 | `--once` | off | run exactly one cycle, then exit - for tests, and for looking before leaving it running. Does **not** wait for the runs it starts; they integrate on the next invocation, off the queue on disk (1). |
-| `--config` | `$SSSF_CONFIG`, else `adws/adw_sssf_config/sssf.config.yaml` | passed straight through to every dispatch, the roster whose lanes are enforced, and the roster whose `worktrees.enabled` must be true (1). The fallback is the **test lane** - the `up:` line logs whichever one is in force. |
+| `--config` | `$SSSF_CONFIG`, else `adws/adw_sssf_config/sssf.config.yaml` | passed through to every dispatch (or, with a builder pool, that run's derived copy of it - 5.4), the roster whose lanes and slots are enforced, and the roster whose `worktrees.enabled` must be true (1). The fallback is the **test lane** - the `up:` line logs whichever one is in force. |
 | `--queue-dir` | `<repo root>/queue` | test override, mirroring `dispatch.py`. `Needs:` resolution always uses `<repo root>/queue` (dispatch's own contract). |
 
 `$SSSF_INTEGRATION_BRANCH` (2) is read from the environment only - there is no flag, because it is a
@@ -412,7 +511,9 @@ property of the factory, not of one invocation. `main` is refused outright.
   model call, exactly as they do under `just work`.
 - **Never validates `sssf.config.yaml`.** dispatch does, per card, and its refusal is visible in the
   journal and stops that card from being retried (7). A config typo must not turn the service into a
-  systemd restart loop. The engine reads the same file for one thing only: which lanes it names.
+  systemd restart loop. The engine reads the same file for scheduling only - which lanes it names,
+  how many slots each gets, and which models its builder pool offers (5.3, 5.4) - and every one of
+  those readers skips what it cannot understand rather than refusing to run.
 
 ## 10. The systemd contract (for the installer to implement)
 
@@ -534,7 +635,17 @@ failed forever before), an integrated branch still reading as **merged** to
 `worktrees.is_merged_into_trunk` while deliberately *not* being an ancestor, the worktree ending
 every gate pass **on its own branch**, a checkout with a **scrubbed identity** doing nothing and
 naming both `git config` commands (said once), the installer writing exactly those two values, and
-`worktrees.enabled: false` **refused at startup**. On the installer side (`installer/tests/test_steps.py`):
+`worktrees.enabled: false` **refused at startup**.
+
+Added with the router (5.4): a wave of five cards proving the pool **picks by free slots**, breaks
+ties in the operator's own pool order, **skips a full lane**, and holds the last card with the counts
+on it when every pool lane is full; each child occupying the lanes its *own* derived roster draws on;
+the derived copy being **written, passed as `--config`, and deleted on reap** while the operator's
+roster is left byte-for-byte unchanged; a **malformed pool entry** named and skipped with the rest
+still routing; a pool on a roster with no `builder` agent ignored; the roster's `lanes:` block
+**replacing** the default slot count while `--lanes` still overrides it, with unusable entries named
+and skipped; and a roster with **no `router:` block** dispatching on the operator's own path with no
+derived file at all. On the installer side (`installer/tests/test_steps.py`):
 a host with no identity getting a repo-local one, an existing identity never being overwritten, a
 failed write being named rather than swallowed, and the dry run probing read-only and writing
 nothing.

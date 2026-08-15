@@ -44,4 +44,13 @@
    fed - the groups it did not reach simply do not render (empty is honest). */
 .home-content > .read-failure{padding:0 0 16px;}
 
+/* A project with nothing to show. The shared .empty-state centres itself in a
+   flex column; here it sits inside a scrolling article, so it gets its own
+   breathing room and a hairline that separates it from the report card above.
+   The action inside it is a <Link>, which needs the button's own metrics. */
+.home-empty{margin-top:8px;padding-top:32px;border-top:1px solid var(--hairline);}
+.home-empty .empty-state{padding:8px 0 0;gap:10px;}
+.home-empty .empty-state h1{font-size:var(--text-hero);}
+.home-empty a.es-action{display:inline-flex;align-items:center;justify-content:center;}
+
 @media(max-width:920px){.home-content{padding:24px 16px 60px;}}

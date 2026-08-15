@@ -97,6 +97,34 @@ export interface FactoryQueueCounts {
   [state: string]: number;
 }
 
+/** `POST /api/app/p/:id/sync` — the topbar Sync button's one write (a `git
+ * fetch` + `merge --ff-only` in the project's own checkout; see
+ * `server/app/sync.ts`'s header for the full policy). Every status is a named,
+ * honest outcome — never pushes, never forces, and a dirty or diverged
+ * checkout is reported rather than skipped in silence. */
+export type RepoSyncStatus =
+  | "pulled"
+  | "up-to-date"
+  | "dirty"
+  | "diverged"
+  | "detached"
+  | "no-remote"
+  | "not-a-repo"
+  | "failed";
+
+export interface RepoSyncResult {
+  status: RepoSyncStatus;
+  detail: string;
+  branch: string | null;
+  before_sha: string | null;
+  after_sha: string | null;
+}
+
+export interface SyncResponse {
+  repo: RepoSyncResult;
+  checked_at: string;
+}
+
 export interface FactoryHealth {
   engine: "running" | "stopped" | "unknown";
   source: "server" | "local-derived";
