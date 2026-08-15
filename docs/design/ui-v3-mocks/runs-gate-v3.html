@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDL Factory — Runs</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   RUNS — AUTONOMOUS OBSERVATION + MERGE QUEUE (v3)
+   The factory runs autonomously end-to-end: plan → build → test → review →
+   document. No human-in-loop before code. The only human touchpoint is
+   Merge queue: bulk-merge finished runs to main. This is a bulk operation — select
+   all ready runs and merge in one action, not one-by-one.
+   Detail pane view states:
+     • running  → work log (phases, tool calls, live log)
+     • cooldown → lane rate-limited, wait or change model
+      • gate2    → acceptance walk + diff (merge queue view, merge happens via queue)
+     • merged   → completed view
+     • failed   → failure log
+   Editorial Instrument skin throughout. Nav: Home/Board/Runs/Docs/Settings.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --canvas:#141311; --chrome:#1a1816; --raised:#201e1b; --overlay:#26231f;
+  --hairline:#2a2724; --hairline-2:#36322e;
+  --t1:#ede9e2; --t2:#9e968a; --t3:#645c52; --t4:#3a352f;
+  --accent:#e0a64a; --accent-dim:#4a3820; --accent-surface:rgba(224,166,74,0.08); --on-accent:#1a1408;
+  --run:#6ba4e8; --ok:#6dbb6e; --fail:#e06464; --warn:#d9a441; --neutral:#7d7568;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,166,74,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.5);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --text-meta:12px; --text-mono:13px; --text-body:14px; --text-head:16px; --text-hero:22px;
+  --r-chip:5px; --r-control:7px;
+  --sidebar-w:240px; --column-w:300px; --inspector-w:400px; --mq-rail-w:320px;
+  --row-h:32px; --logrow-h:30px; --topbar-h:48px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+*{border-color:var(--hairline);}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--canvas);color:var(--t1);font-family:var(--font-sans);font-size:var(--text-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+::selection{background:var(--accent-surface);color:var(--t1);}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+a{color:inherit;text-decoration:none;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--hairline-2);border-radius:4px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.pulse{animation:pulse 1.8s ease-in-out infinite;}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none;}}
+
+/* page transition */
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.fade-in{animation:fadeIn .2s ease;}
+
+/* ═══ SHELL ═══ */
+.app{display:flex;height:100vh;width:100vw;overflow:hidden;background:var(--canvas);}
+
+/* ── sidebar ── */
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.project-switcher{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .15s;position:relative;}
+.project-switcher:hover{background:var(--row-hover);}
+.project-switcher .proj-dot{width:10px;height:10px;border-radius:2px;background:var(--accent);flex-shrink:0;opacity:0.8;}
+.project-switcher .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);letter-spacing:-0.2px;}
+.project-switcher .proj-chev{width:14px;height:14px;color:var(--t3);flex-shrink:0;transition:transform .2s;}
+.project-switcher.open .proj-chev{transform:rotate(180deg);}
+.project-menu{position:absolute;top:100%;left:0;right:0;background:var(--overlay);border:1px solid var(--hairline-2);border-top:none;border-radius:0 0 var(--r-control) var(--r-control);box-shadow:var(--shadow);z-index:100;display:none;max-height:320px;overflow-y:auto;}
+.project-switcher.open .project-menu{display:block;}
+.project-menu-item{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;font-size:var(--text-body);color:var(--t2);transition:background .12s,color .12s;}
+.project-menu-item:hover{background:var(--row-hover);color:var(--t1);}
+.project-menu-item.active{color:var(--t1);}
+.project-menu-item .pm-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.project-menu-sep{height:1px;background:var(--hairline);margin:4px 0;}
+.project-menu-item.add{color:var(--accent);}
+
+.sidebar-search{margin:12px 12px 8px;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:border-color .15s,color .15s;}
+.sidebar-search:hover{border-color:var(--t3);color:var(--t2);}
+.sidebar-search svg{width:13px;height:13px;flex-shrink:0;}
+.sidebar-nav{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .15s,color .15s;position:relative;cursor:pointer;}
+.nav-item:hover{background:var(--row-hover);color:var(--t1);}
+.nav-item.active{background:var(--row-active);color:var(--t1);}
+.nav-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.nav-icon{width:14px;height:14px;flex-shrink:0;color:var(--t3);}
+.nav-item.active .nav-icon{color:var(--accent);}
+.nav-item .nav-count{margin-left:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;}
+.nav-item.active .nav-count{color:var(--accent);}
+
+/* ── factory status footer ── */
+.factory-status{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 14px;display:flex;flex-direction:column;gap:6px;}
+.fs-line{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);}
+.fs-line .fs-label{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--t4);}
+.fs-line .fs-val{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+.fs-pulse{display:flex;align-items:center;gap:6px;}
+.fs-pulse .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.fs-pulse .fs-text{font-size:var(--text-meta);color:var(--t2);}
+.fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
+.fs-help:hover{color:var(--t2);}
+.fs-help svg{width:13px;height:13px;flex-shrink:0;}
+
+/* ── main column ── */
+.main-col{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:var(--text-body);}
+.breadcrumb .crumb-dim{color:var(--t2);font-family:var(--font-serif);font-style:italic;}
+.breadcrumb .crumb-sep{color:var(--t4);}
+.breadcrumb .crumb-here{color:var(--t1);font-weight:600;}
+.breadcrumb .crumb-project{cursor:pointer;position:relative;display:flex;align-items:center;gap:6px;padding:2px 8px;margin:-2px -8px;border-radius:var(--r-chip);transition:background .12s;}
+.breadcrumb .crumb-project:hover{background:var(--row-hover);}
+.breadcrumb .crumb-project .cp-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+.breadcrumb .crumb-project .cp-chev{width:11px;height:11px;color:var(--t3);transition:transform .2s;}
+.breadcrumb .crumb-project.open .cp-chev{transform:rotate(180deg);}
+.breadcrumb .crumb-dropdown{position:absolute;top:calc(100% + 4px);left:0;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);z-index:200;min-width:180px;display:none;}
+.breadcrumb .crumb-project.open .crumb-dropdown{display:block;}
+.breadcrumb .crumb-dropdown-item{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);transition:background .12s,color .12s;cursor:pointer;}
+.breadcrumb .crumb-dropdown-item:hover{background:var(--row-hover);color:var(--t1);}
+.breadcrumb .crumb-dropdown-item.active{color:var(--t1);}
+.breadcrumb .crumb-dropdown-item .cpd-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.topbar-btn{height:28px;padding:0 14px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.topbar-btn:hover{border-color:var(--accent);color:var(--accent);}
+.topbar-btn svg{width:13px;height:13px;}
+
+.surface{flex:1;min-height:0;display:flex;overflow:hidden;position:relative;}
+
+/* ═══ RUN LIST COLUMN ═══ */
+.run-list-col{width:var(--column-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);}
+.run-list-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.run-list-header h2{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.run-list-header .filter-pill{margin-left:auto;height:22px;padding:0 10px;display:flex;align-items:center;gap:6px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);cursor:pointer;transition:border-color .15s,color .15s;}
+.run-list-header .filter-pill:hover{border-color:var(--t3);color:var(--t2);}
+.run-list{flex:1;overflow-y:auto;}
+.run-row{display:flex;flex-direction:column;justify-content:center;gap:3px;height:72px;padding:0 16px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .12s;position:relative;}
+.run-row:hover{background:var(--row-hover);}
+.run-row.selected{background:var(--row-active);}
+.run-row.selected::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:2px;background:var(--accent);border-radius:1px;}
+.run-row-line1{display:flex;align-items:center;gap:8px;}
+.run-row-line1 .dot{flex-shrink:0;}
+.run-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-body);color:var(--t1);}
+.run-row-status{flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+.run-row-elapsed{flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);font-variant-numeric:tabular-nums;}
+.run-row-line2{display:flex;align-items:center;gap:8px;padding-left:14px;font-size:var(--text-meta);color:var(--t3);}
+.run-row-line2 .step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+.run-row-line2 .gate-badge{flex-shrink:0;font-family:var(--font-mono);font-size:10px;padding:1px 6px;border-radius:3px;background:var(--accent-dim);color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;}
+.run-row-line3{padding-left:14px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* ── machine chip ── */
+.machine-chip{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;font-family:var(--font-mono);font-size:10px;color:var(--t3);white-space:nowrap;}
+.machine-chip::before{content:'⊞';font-size:11px;color:var(--t4);}
+
+/* ── copy prompt tooltip ── */
+.copy-tooltip{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-chip);padding:8px 10px;max-width:280px;width:max-content;font-family:var(--font-mono);font-size:11px;color:var(--t2);line-height:1.5;box-shadow:var(--shadow);z-index:100;opacity:0;pointer-events:none;transition:opacity .15s;white-space:pre-wrap;word-break:break-word;}
+.copy-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--hairline-2);}
+.export-btn{position:relative;}
+
+/* ── dot ── */
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.dot.run{background:var(--run);}
+.dot.ok{background:var(--ok);}
+.dot.fail{background:var(--fail);}
+.dot.warn{background:var(--warn);}
+.dot.neutral{background:var(--neutral);}
+.dot.idle{border:1px solid var(--t3);background:transparent;}
+
+/* ═══ DETAIL PANE ═══ */
+.detail-pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+.detail-scroll{flex:1;overflow-y:auto;}
+
+/* ── run header ── */
+.run-header{padding:16px 20px 14px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.run-header-line1{display:flex;align-items:baseline;gap:16px;}
+.run-header h1{font-family:var(--font-serif);font-size:20px;font-weight:600;color:var(--t1);letter-spacing:-0.3px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.run-header-id{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--accent);}
+.run-header-line2{display:flex;align-items:center;gap:14px;margin-top:8px;font-size:var(--text-meta);color:var(--t3);}
+.run-header-line2 .rh-meta{display:flex;align-items:center;gap:5px;}
+.run-header-line2 .rh-meta svg{width:11px;height:11px;}
+.run-header-line2 .rh-phase{font-family:var(--font-mono);color:var(--t2);}
+.run-header-line2 .rh-elapsed{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+
+/* ── beat rail ── */
+.beat-rail{display:flex;gap:0;padding:10px 20px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.beat-step{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;position:relative;}
+.beat-step::after{content:"";position:absolute;top:5px;right:-50%;width:100%;height:1px;background:var(--hairline);z-index:0;}
+.beat-step:last-child::after{display:none;}
+.beat-step .beat-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--hairline-2);background:var(--chrome);z-index:1;position:relative;}
+.beat-step.done .beat-dot{background:var(--ok);border-color:var(--ok);}
+.beat-step.active .beat-dot{background:var(--run);border-color:var(--run);}
+.beat-step.active .beat-dot::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--run);opacity:0.3;animation:pulse 1.8s ease-in-out infinite;}
+.beat-step .beat-label{font-family:var(--font-mono);font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:0.5px;}
+.beat-step.done .beat-label{color:var(--t2);}
+.beat-step.active .beat-label{color:var(--run);}
+
+/* ── work log ── */
+.log-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.log-section-title{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;}
+.work-log{display:flex;flex-direction:column;gap:0;}
+.log-row{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--hairline);align-items:flex-start;}
+.log-row:last-child{border-bottom:none;}
+.log-time{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);flex-shrink:0;width:60px;font-variant-numeric:tabular-nums;padding-top:1px;}
+.log-body{flex:1;min-width:0;}
+.log-text{font-size:var(--text-body);color:var(--t2);line-height:1.5;}
+.log-text strong{color:var(--t1);font-weight:500;}
+.log-text code{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--accent);}
+.log-text .log-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);background:var(--raised);padding:1px 6px;border-radius:3px;margin-right:6px;}
+
+/* ── diff rail ── */
+.diff-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.diff-summary{display:flex;gap:16px;margin-bottom:12px;font-family:var(--font-mono);font-size:var(--text-meta);}
+.diff-stat{display:flex;align-items:center;gap:5px;}
+.diff-stat .ds-add{color:var(--ok);}
+.diff-stat .ds-del{color:var(--fail);}
+.diff-stat .ds-label{color:var(--t3);}
+.diff-files{display:flex;flex-direction:column;gap:0;}
+.diff-file{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--text-meta);}
+.diff-file:last-child{border-bottom:none;}
+.diff-file .df-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);}
+.diff-file .df-add{color:var(--ok);font-size:11px;}
+.diff-file .df-del{color:var(--fail);font-size:11px;}
+
+/* ── quality checks ── */
+.quality-section{padding:16px 20px;}
+.qc-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--hairline);}
+.qc-row:last-child{border-bottom:none;}
+.qc-row .dot{flex-shrink:0;}
+.qc-name{flex:1;font-size:var(--text-body);color:var(--t2);}
+.qc-detail{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+
+/* ── worktree strip ── */
+.worktree-strip{flex-shrink:0;border-top:1px solid var(--hairline);}
+.worktree-toggle{width:100%;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 16px;font-size:var(--text-meta);color:var(--t3);transition:color .12s;}
+.worktree-toggle:hover{color:var(--t2);}
+.worktree-toggle .chev{width:12px;height:12px;transition:transform .2s;}
+.worktree-toggle.open .chev{transform:rotate(90deg);}
+
+/* ═══ GATE 2 VIEWS (inline in detail pane) ═══ */
+.gate-banner{padding:12px 20px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:12px;}
+.gate-banner .gate-type-badge{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;}
+.gate-banner .gate-type-badge.g2{background:rgba(109,187,110,0.12);color:var(--ok);}
+.gate-banner .gate-type-badge svg{width:10px;height:10px;}
+.gate-banner .gate-banner-text{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);}
+.gate-banner .gate-banner-text strong{color:var(--t1);font-style:normal;}
+
+/* ── acceptance walk (merge queue) ── */
+.acceptance-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.acceptance-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);}
+.acceptance-row:last-child{border-bottom:none;}
+.acceptance-row .dot{margin-top:5px;flex-shrink:0;}
+.acc-body{flex:1;min-width:0;}
+.acc-title{font-size:var(--text-body);color:var(--t1);font-weight:500;margin-bottom:2px;}
+.acc-detail{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+.acc-evidence{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);margin-top:6px;padding:8px 12px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);}
+
+/* ── merge action (observation only, merge happens in queue) ── */
+.merge-action{padding:20px;border-bottom:1px solid var(--hairline);}
+.merge-action .merge-hint{font-size:var(--text-meta);color:var(--t3);margin-bottom:10px;}
+.merge-action .merge-hint strong{color:var(--t2);}
+.merge-action .merge-queue-note{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);padding:10px 14px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);line-height:1.5;}
+.merge-action .merge-queue-note strong{color:var(--accent);}
+.park-btn{width:100%;height:36px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-control);margin-top:10px;transition:border-color .15s,color .15s;}
+.park-btn:hover{border-color:var(--t2);color:var(--t1);}
+
+/* ── merge queue (right rail) ── */
+.merge-queue-rail{width:var(--mq-rail-w);flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--hairline);background:var(--chrome);}
+.merge-queue-rail-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.merge-queue-rail-header .mq-title{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.merge-queue-rail-header .mq-count{font-family:var(--font-mono);font-size:10px;color:var(--accent);background:var(--accent-surface);padding:1px 7px;border-radius:var(--r-chip);flex-shrink:0;}
+.merge-queue-rail-header .mq-select-all{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--t3);cursor:pointer;transition:color .12s;display:flex;align-items:center;gap:5px;flex-shrink:0;}
+.merge-queue-rail-header .mq-select-all:hover{color:var(--t2);}
+.merge-queue-rail-header .mq-checkbox{width:13px;height:13px;border:1px solid var(--hairline-2);border-radius:3px;background:var(--canvas);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s;}
+.merge-queue-rail-header .mq-checkbox.checked{background:var(--accent);border-color:var(--accent);}
+.merge-queue-rail-header .mq-checkbox.checked::after{content:"✓";font-size:9px;color:var(--on-accent);font-weight:700;}
+.mq-subheader{padding:10px 16px 6px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--hairline);}
+.merge-queue-list{flex:1;overflow-y:auto;}
+.merge-queue-row{display:flex;flex-direction:column;gap:3px;padding:10px 16px;border-bottom:1px solid var(--hairline);transition:background .12s;cursor:pointer;position:relative;}
+.merge-queue-row:hover{background:var(--row-hover);}
+.merge-queue-row.selected{background:var(--row-active);}
+.merge-queue-row.highlighted{background:var(--accent-surface);box-shadow:inset 3px 0 0 var(--accent);}
+.merge-queue-row.highlighted.selected{background:var(--accent-surface);}
+.merge-queue-row.selected::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.merge-queue-row .mq-row-line1{display:flex;align-items:center;gap:8px;}
+.merge-queue-row .mq-row-checkbox{width:13px;height:13px;border:1px solid var(--hairline-2);border-radius:3px;background:var(--canvas);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s;}
+.merge-queue-row.selected .mq-row-checkbox{background:var(--accent);border-color:var(--accent);}
+.merge-queue-row.selected .mq-row-checkbox::after{content:"✓";font-size:9px;color:var(--on-accent);font-weight:700;}
+.merge-queue-row .mq-row-id{font-family:var(--font-mono);font-size:10px;color:var(--accent);flex-shrink:0;}
+.merge-queue-row .mq-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-body);color:var(--t1);}
+.merge-queue-row .mq-row-line2{display:flex;align-items:center;gap:8px;padding-left:21px;font-family:var(--font-mono);font-size:10px;color:var(--t3);}
+.merge-queue-row .mq-row-lane{color:var(--t3);flex-shrink:0;}
+.merge-queue-row .mq-row-files{color:var(--t4);flex-shrink:0;}
+.merge-queue-action{padding:12px 16px;flex-shrink:0;border-top:1px solid var(--hairline-2);display:flex;flex-direction:column;gap:8px;}
+.merge-queue-action .mq-bulk-btn{width:100%;height:38px;font-size:var(--text-body);color:var(--on-accent);background:var(--accent);border-radius:var(--r-control);font-weight:600;transition:opacity .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.merge-queue-action .mq-bulk-btn:hover{opacity:0.88;}
+.merge-queue-action .mq-bulk-btn:disabled{background:var(--hairline-2);color:var(--t3);cursor:not-allowed;opacity:1;}
+.merge-queue-action .mq-bulk-btn .mq-btn-count{background:rgba(0,0,0,0.2);padding:1px 7px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:10px;}
+.merge-queue-action .mq-hint{font-family:var(--font-mono);font-size:10px;color:var(--t4);text-align:center;line-height:1.4;}
+.merge-queue-empty{padding:40px 24px;text-align:center;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);line-height:1.6;}
+.merge-queue-empty .mq-empty-icon{width:32px;height:32px;border-radius:50%;border:1px dashed var(--hairline-2);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:var(--t4);font-size:16px;}
+
+/* ── lane cooldown ── */
+.cooldown-banner{padding:12px 20px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:12px;background:var(--accent-surface);}
+.cooldown-banner .cd-badge{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;background:var(--accent-dim);color:var(--accent);}
+.cooldown-banner .cd-banner-text{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);}
+.cooldown-banner .cd-banner-text strong{color:var(--t1);font-style:normal;}
+.cooldown-actions{padding:20px;border-bottom:1px solid var(--hairline);display:flex;flex-direction:column;gap:10px;}
+.cooldown-actions .cd-hint{font-size:var(--text-meta);color:var(--t3);margin-bottom:4px;}
+.cooldown-actions .cd-hint strong{color:var(--t2);}
+.cd-option-btn{width:100%;height:40px;font-size:var(--text-body);border-radius:var(--r-control);display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .15s,border-color .15s;}
+.cd-option-btn.wait{background:var(--raised);color:var(--t1);border:1px solid var(--hairline-2);}
+.cd-option-btn.wait:hover{border-color:var(--t2);}
+.cd-option-btn.change{background:var(--accent);color:var(--on-accent);border:1px solid var(--accent);font-weight:600;}
+.cd-option-btn.change:hover{opacity:0.88;}
+.cd-model-select{width:100%;height:36px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;}
+.cd-model-select:focus{outline:none;border-color:var(--accent);}
+.cd-model-select-wrap{display:none;flex-direction:column;gap:6px;}
+.cd-model-select-wrap.visible{display:flex;}
+.cd-model-select-wrap label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+
+/* ── commit row ── */
+.commit-row{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--text-meta);}
+.commit-row .commit-sha{color:var(--accent);}
+.commit-row .commit-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);}
+.commit-row .commit-author{color:var(--t3);flex-shrink:0;}
+
+/* ── completed view ── */
+.completed-view{padding:24px 20px;text-align:center;}
+.completed-view .cv-icon{width:32px;height:32px;border-radius:50%;background:var(--ok);opacity:0.15;margin:0 auto 16px;}
+.completed-view h2{font-family:var(--font-serif);font-size:var(--text-hero);color:var(--t1);margin-bottom:8px;}
+.completed-view p{font-size:var(--text-body);color:var(--t2);max-width:420px;margin:0 auto 20px;}
+.completed-view .cv-meta{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+
+/* ── export bar (copy prompt / export to Claude Code) ── */
+.export-bar{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 20px;display:flex;align-items:center;gap:8px;background:var(--chrome);}
+.export-bar .eb-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);text-transform:uppercase;letter-spacing:0.5px;margin-right:auto;}
+.export-btn{height:28px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.export-btn:hover{border-color:var(--accent);color:var(--accent);}
+.export-btn svg{width:13px;height:13px;}
+
+@media(max-width:1200px){.merge-queue-rail{width:260px;}}
+@media(max-width:1000px){.merge-queue-rail{width:220px;}}
+@media(max-width:920px){.sidebar{display:none;}.merge-queue-rail{display:none;}}
+@media(max-width:700px){.run-list-col{width:220px;}.beat-rail .beat-label{display:none;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar" data-od-id="sidebar">
+    <div class="project-switcher" data-od-id="project-switcher" onclick="this.classList.toggle('open')">
+      <div class="proj-dot"></div>
+      <span class="proj-name">Project 1</span>
+      <svg class="proj-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+      <div class="project-menu">
+        <div class="project-menu-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="pm-dot" style="background:var(--accent)"></span>Project 1</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="pm-dot" style="background:var(--run)"></span>Project 2</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="pm-dot" style="background:var(--ok)"></span>Project 3</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="pm-dot" style="background:var(--neutral)"></span>Project 4</div>
+        <div class="project-menu-sep"></div>
+        <div class="project-menu-item add" onclick="event.stopPropagation();window.location.href='settings-v3.html'"><span class="pm-dot" style="background:transparent;border:1px dashed var(--accent)"></span>Add project…</div>
+      </div>
+    </div>
+    <div class="sidebar-search" data-od-id="sidebar-search">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"/><path d="M9.5 9.5L12 12" stroke-linecap="round"/></svg>
+      <span>Search…</span>
+    </div>
+    <nav class="sidebar-nav" data-od-id="sidebar-nav">
+      <a class="nav-item" data-od-id="nav-home" href="home-v2.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6l5-4 5 4v6H2z" stroke-linejoin="round"/><path d="M5 12V8h4v4"/></svg><span>Home</span></a>
+      <a class="nav-item" data-od-id="nav-board" href="board-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="3" height="10" rx="1"/><rect x="6" y="2" width="3" height="7" rx="1"/><rect x="10" y="2" width="2" height="5" rx="1"/></svg><span>Board</span><span class="nav-count">12</span></a>
+      <a class="nav-item active" data-od-id="nav-runs" href="runs-gate-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7h3l2-4 3 8 2-4h2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Runs</span><span class="nav-count">9</span></a>
+      <a class="nav-item" data-od-id="nav-docs" href="docs-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h6l2 2v8H3z" stroke-linejoin="round"/><path d="M5 6h4M5 9h4"/></svg><span>Docs</span></a>
+      <a class="nav-item" data-od-id="nav-settings" href="settings-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.4 1.4M10.1 10.1l1.4 1.4M2.5 11.5l1.4-1.4M10.1 3.9l1.4-1.4" stroke-linecap="round"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="factory-status" data-od-id="factory-status">
+      <div class="fs-pulse">
+        <span class="dot"></span>
+        <span class="fs-text">Factory running · 3 active lanes</span>
+      </div>
+      <div class="fs-line"><span class="fs-label">Queue</span><span class="fs-val">2 ready · 3 running</span></div>
+      <div class="fs-line"><span class="fs-label">Uptime</span><span class="fs-val">14h 22m</span></div>
+      <div class="fs-help" data-od-id="nav-help"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5"/><path d="M5.5 5.5a1.5 1.5 0 0 1 3 0c0 1-.5 1.5-1 2v1" stroke-linecap="round"/><circle cx="7" cy="10" r="0.5" fill="currentColor"/></svg><span>Help & shortcuts</span></div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN COLUMN ═══ -->
+  <div class="main-col">
+    <div class="topbar" data-od-id="topbar">
+      <div class="breadcrumb" data-od-id="breadcrumb">
+        <span class="crumb-dim crumb-project" data-od-id="crumb-project" onclick="this.classList.toggle('open')">
+          <span class="cp-dot" style="background:var(--accent)"></span>
+          Project 1
+          <svg class="cp-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+          <div class="crumb-dropdown" data-od-id="crumb-dropdown">
+            <div class="crumb-dropdown-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="cpd-dot" style="background:var(--accent)"></span>Project 1</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="cpd-dot" style="background:var(--run)"></span>Project 2</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="cpd-dot" style="background:var(--ok)"></span>Project 3</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="cpd-dot" style="background:var(--neutral)"></span>Project 4</div>
+          </div>
+        </span>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-here">Runs</span>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-btn" data-od-id="topbar-sync">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 3a5 5 0 1 0 1.5 4" stroke-linecap="round"/><path d="M11 1v3h-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync
+        </button>
+      </div>
+    </div>
+
+    <div class="surface" data-od-id="surface">
+
+      <!-- ═══ RUN LIST COLUMN ═══ -->
+      <div class="run-list-col" data-od-id="run-list-col">
+
+        <div class="run-list-header">
+          <h2>All runs</h2>
+          <div class="filter-pill" data-od-id="filter-pill">8 active</div>
+        </div>
+        <div class="run-list" data-od-id="run-list">
+
+          <div class="run-row selected" data-od-id="run-0473" onclick="selectRun(this,'running')">
+            <div class="run-row-line1">
+              <span class="dot run pulse"></span>
+              <span class="run-row-title">Add retry budget to lane balancer</span>
+              <span class="run-row-elapsed">4m 12s</span>
+            </div>
+            <div class="run-row-line2"><span class="step">phase 3/5 · review</span><span>Grok 4.5</span><span class="machine-chip">hetzner-cax31</span></div>
+            <div class="run-row-line3">adw-0473</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0474" onclick="selectRun(this,'running')">
+            <div class="run-row-line1">
+              <span class="dot run pulse"></span>
+              <span class="run-row-title">Document the queue schema in OKF</span>
+              <span class="run-row-elapsed">1m 48s</span>
+            </div>
+            <div class="run-row-line2"><span class="step">phase 2/5 · build</span><span>GLM 5.2</span><span class="machine-chip">hetzner-cax31</span></div>
+            <div class="run-row-line3">adw-0474</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0475" onclick="selectRun(this,'cooldown')">
+            <div class="run-row-line1">
+              <span class="dot warn pulse"></span>
+              <span class="run-row-title">Skylos: add --range flag to verify</span>
+              <span class="run-row-elapsed">paused</span>
+            </div>
+            <div class="run-row-line2"><span class="step">lane rate-limited · cooldown 2m 15s</span><span>Kimi K2.7</span><span class="machine-chip">do-fra1-s-2vcpu</span></div>
+            <div class="run-row-line3">adw-0475</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0471" onclick="selectRun(this,'gate2')">
+            <div class="run-row-line1">
+              <span class="dot ok"></span>
+              <span class="run-row-title">Refactor intake validation</span>
+              <span class="run-row-elapsed">2h ago</span>
+            </div>
+            <div class="run-row-line2"><span class="step">completed — in merge queue</span><span class="gate-badge">Merge</span></div>
+            <div class="run-row-line3">adw-0471</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0472" onclick="selectRun(this,'gate2')">
+            <div class="run-row-line1">
+              <span class="dot ok"></span>
+              <span class="run-row-title">Cache compiled ADW manifests</span>
+              <span class="run-row-elapsed">3h ago</span>
+            </div>
+            <div class="run-row-line2"><span class="step">completed — in merge queue</span><span class="gate-badge">Merge</span></div>
+            <div class="run-row-line3">adw-0472</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0470" onclick="selectRun(this,'merged')">
+            <div class="run-row-line1">
+              <span class="dot ok"></span>
+              <span class="run-row-title">Add provider auth to settings panel</span>
+              <span class="run-row-elapsed">6h ago</span>
+            </div>
+            <div class="run-row-line2"><span class="step">merged · main</span><span>GLM 5.2</span><span class="machine-chip">hetzner-cax31</span></div>
+            <div class="run-row-line3">adw-0470</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0469" onclick="selectRun(this,'merged')">
+            <div class="run-row-line1">
+              <span class="dot ok"></span>
+              <span class="run-row-title">Fix off-by-one in lane retry count</span>
+              <span class="run-row-elapsed">8h ago</span>
+            </div>
+            <div class="run-row-line2"><span class="step">merged · main</span><span>Qwen 3.8</span><span class="machine-chip">do-fra1-s-2vcpu</span></div>
+            <div class="run-row-line3">adw-0469</div>
+          </div>
+
+          <div class="run-row" data-od-id="run-0468" onclick="selectRun(this,'failed')">
+            <div class="run-row-line1">
+              <span class="dot fail"></span>
+              <span class="run-row-title">Migrate config loader to TOML</span>
+              <span class="run-row-elapsed">12h ago</span>
+            </div>
+            <div class="run-row-line2"><span class="step">failed · test phase</span><span>Grok 4.5</span><span class="machine-chip">hetzner-cax31</span></div>
+            <div class="run-row-line3">adw-0468</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ═══ DETAIL PANE ═══ -->
+      <div class="detail-pane" data-od-id="detail-pane">
+
+        <!-- RUNNING VIEW (default selected: adw-0473) -->
+        <div id="view-running" class="detail-view fade-in" data-od-id="view-running">
+          <div class="run-header" data-od-id="run-header-0473">
+            <div class="run-header-line1">
+              <h1>Add retry budget to lane balancer</h1>
+              <span class="run-header-id">adw-0473</span>
+            </div>
+            <div class="run-header-line2">
+              <span class="rh-meta"><span class="dot run pulse" style="width:6px;height:6px"></span> running</span>
+              <span class="rh-meta rh-phase">phase 3/5 · review</span>
+              <span class="rh-meta rh-elapsed">4m 12s elapsed</span>
+              <span class="rh-meta">lane: Grok 4.5</span>
+              <span class="rh-meta">machine: hetzner-cax31</span>
+            </div>
+          </div>
+
+          <div class="beat-rail" data-od-id="beat-rail-0473">
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">scout</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">plan</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">build</span></div>
+            <div class="beat-step active"><div class="beat-dot"></div><span class="beat-label">review</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">document</span></div>
+          </div>
+
+          <div class="detail-scroll" data-od-id="detail-scroll-0473">
+            <div class="log-section">
+              <div class="log-section-title">Work log</div>
+              <div class="work-log" data-od-id="work-log-0473">
+                <div class="log-row"><span class="log-time">04:12</span><div class="log-body"><div class="log-text"><span class="log-tag">review</span>Claude Opus 5 reviewing diff against acceptance criteria — 8 of 9 passed so far</div></div></div>
+                <div class="log-row"><span class="log-time">03:45</span><div class="log-body"><div class="log-text"><span class="log-tag">build</span>Build complete: <strong>12 files changed</strong>, +340 −28. Commit <code>a3f8b2c</code></div></div></div>
+                <div class="log-row"><span class="log-time">02:30</span><div class="log-body"><div class="log-text"><span class="log-tag">build</span>Editing <code>adws/lane_balancer.py</code> — added retry budget field, per-lane counter, exponential backoff</div></div></div>
+                <div class="log-row"><span class="log-time">01:50</span><div class="log-body"><div class="log-text"><span class="log-tag">plan</span>Plan complete — 3 decisions locked. Factory proceeding to build phase autonomously.</div></div></div>
+                <div class="log-row"><span class="log-time">01:20</span><div class="log-body"><div class="log-text"><span class="log-tag">plan</span>Planner produced decision ledger: retry budget per-lane, exponential backoff with jitter, circuit breaker on 3 consecutive failures</div></div></div>
+                <div class="log-row"><span class="log-time">00:30</span><div class="log-body"><div class="log-text"><span class="log-tag">scout</span>Scout complete. Repo mapped: 47 Python files, 3 entry points, 2 test suites. Found <code>lane_balancer.py</code> at <code>adws/</code>.</div></div></div>
+                <div class="log-row"><span class="log-time">00:05</span><div class="log-body"><div class="log-text"><span class="log-tag">scout</span>Scouting repository structure — reading pyproject.toml, identifying entry points and test layout</div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="export-bar" data-od-id="export-bar-0473">
+            <span class="eb-label">Export</span>
+            <button class="export-btn" data-od-id="export-prompt" onclick="copyPrompt(this)" onmouseenter="showCopyTip(this)" onmouseleave="hideCopyTip(this)">
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="8" height="8" rx="1"/><path d="M5 1h6a1 1 0 0 1 1 1v6" stroke-linecap="round"/></svg>
+              Copy prompt
+              <div class="copy-tooltip" data-od-id="copy-tip-0473">Copies the full ADW prompt — run ID, plan decisions, acceptance criteria, and the git diff summary — as plain text for pasting into Claude Code.</div>
+            </button>
+            <button class="export-btn" data-od-id="export-claude">
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 1l1.5 4L12 5l-3 2.5L10 12l-3-2L4 12l1-4.5L2 5l3.5 0z" stroke-linejoin="round"/></svg>
+              Open in Claude Code
+            </button>
+          </div>
+        </div>
+
+        <!-- COOLDOWN VIEW (adw-0475) -->
+        <div id="view-cooldown" class="detail-view fade-in" data-od-id="view-cooldown" style="display:none;">
+          <div class="cooldown-banner" data-od-id="cooldown-banner">
+            <div class="cd-badge">
+              <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="3.5"/><path d="M5 3v2.5l2 1" stroke-linecap="round"/></svg>
+              Lane cooldown
+            </div>
+            <span class="cd-banner-text">Lane <strong>Kimi K2.7</strong> hit its rate limit. <strong>2m 15s</strong> until reset.</span>
+          </div>
+
+          <div class="run-header" data-od-id="run-header-0475">
+            <div class="run-header-line1">
+              <h1>Skylos: add --range flag to verify</h1>
+              <span class="run-header-id">adw-0475</span>
+            </div>
+            <div class="run-header-line2">
+              <span class="rh-meta"><span class="dot warn pulse" style="width:6px;height:6px"></span> paused — cooldown</span>
+              <span class="rh-meta">phase 1/5 · scout (87% done)</span>
+              <span class="rh-meta">lane: Kimi K2.7</span>
+              <span class="rh-meta">machine: do-fra1-s-2vcpu</span>
+            </div>
+          </div>
+
+          <div class="beat-rail" data-od-id="beat-rail-0475">
+            <div class="beat-step active"><div class="beat-dot"></div><span class="beat-label">scout</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">plan</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">build</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">review</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">document</span></div>
+          </div>
+
+          <div class="detail-scroll" data-od-id="detail-scroll-cooldown">
+            <div class="log-section">
+              <div class="log-section-title">Last activity</div>
+              <div class="work-log">
+                <div class="log-row"><span class="log-time">02:15</span><div class="log-body"><div class="log-text"><span class="log-tag" style="color:var(--warn)">rate</span>Lane hit rate limit — API returned 429. Factory paused this run. Cooldown resets in <strong>2m 15s</strong>.</div></div></div>
+                <div class="log-row"><span class="log-time">00:22</span><div class="log-body"><div class="log-text"><span class="log-tag">scout</span>Scouting repository — reading <code>skylos/verify.py</code>, mapping argument parser and test fixtures</div></div></div>
+                <div class="log-row"><span class="log-time">00:05</span><div class="log-body"><div class="log-text"><span class="log-tag">scout</span>Scouting repository structure — reading pyproject.toml, entry points, test layout</div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="cooldown-actions" data-od-id="cooldown-actions">
+            <div class="cd-hint">The factory is autonomous — it will auto-resume when cooldown expires, or automatically switch to an available lane if one exists. No action required.</div>
+          </div>
+        </div>
+
+        <!-- MERGE QUEUE VIEW (adw-0471) -->
+        <div id="view-gate2" class="detail-view fade-in" data-od-id="view-gate2" style="display:none;">
+          <div class="gate-banner" data-od-id="gate2-banner">
+            <div class="gate-type-badge g2">
+              <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5l2.5 2.5L8 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Merge queue
+            </div>
+            <span class="gate-banner-text">All acceptance criteria met. <strong>In the merge queue — review and merge in bulk.</strong></span>
+          </div>
+
+          <div class="run-header" data-od-id="run-header-0471">
+            <div class="run-header-line1">
+              <h1>Refactor intake validation</h1>
+              <span class="run-header-id">adw-0471</span>
+            </div>
+            <div class="run-header-line2">
+              <span class="rh-meta"><span class="dot ok" style="width:6px;height:6px"></span> ready to merge</span>
+              <span class="rh-meta">completed 2h ago</span>
+              <span class="rh-meta">lane: Grok 4.5</span>
+              <span class="rh-meta">review: Claude Opus 5</span>
+              <span class="rh-meta">machine: hetzner-cax31</span>
+            </div>
+          </div>
+
+          <div class="beat-rail" data-od-id="beat-rail-0471">
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">scout</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">plan</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">build</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">review</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">document</span></div>
+          </div>
+
+          <div class="detail-scroll" data-od-id="detail-scroll-gate2">
+            <div class="diff-section">
+              <div class="log-section-title">Diff summary</div>
+              <div class="diff-summary" data-od-id="diff-stats-0471">
+                <div class="diff-stat"><span class="ds-label">files</span><span>12</span></div>
+                <div class="diff-stat"><span class="ds-add">+340</span></div>
+                <div class="diff-stat"><span class="ds-del">−28</span></div>
+                <div class="diff-stat"><span class="ds-label">commit</span><span style="color:var(--accent)">a3f8b2c</span></div>
+              </div>
+              <div class="diff-files" data-od-id="diff-files-0471">
+                <div class="diff-file"><span class="df-path">adws/intake_validator.py</span><span class="df-add">+180</span><span class="df-del">−12</span></div>
+                <div class="diff-file"><span class="df-path">adws/lane_balancer.py</span><span class="df-add">+45</span><span class="df-del">−8</span></div>
+                <div class="diff-file"><span class="df-path">tests/test_intake.py</span><span class="df-add">+62</span><span class="df-del">−4</span></div>
+                <div class="diff-file"><span class="df-path">docs/intake-validation.md</span><span class="df-add">+28</span><span class="df-del">−2</span></div>
+                <div class="diff-file"><span class="df-path">adws/config.py</span><span class="df-add">+15</span><span class="df-del">−2</span></div>
+                <div class="diff-file"><span class="df-path">tests/test_lane_balancer.py</span><span class="df-add">+10</span><span class="df-del">−0</span></div>
+              </div>
+            </div>
+
+            <div class="acceptance-section">
+              <div class="log-section-title">Acceptance criteria</div>
+              <div class="qc-row" data-od-id="acc-1">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Intake validates empty manifests</div><div class="acc-detail">test_intake.py::test_empty_manifest</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-2">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Intake rejects duplicate ticket IDs</div><div class="acc-detail">test_intake.py::test_duplicate_rejection</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-3">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Lane balancer respects retry budget</div><div class="acc-detail">test_lane_balancer.py::test_retry_budget</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-4">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">All existing tests pass</div><div class="acc-detail">47 tests · 0 failures</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-5">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Skylos static analysis clear</div><div class="acc-detail">0 errors · 2 warnings (acceptable)</div><div class="acc-evidence">Manual evidence: reviewed warnings — both are intentional type ignores in test fixtures.</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-6">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Cross-family review approved</div><div class="acc-detail">Reviewer: Claude Opus 5 · Build lane: Grok 4.5</div></div>
+              </div>
+              <div class="qc-row" data-od-id="acc-7">
+                <span class="dot ok"></span>
+                <div class="acc-body"><div class="acc-title">Documentation updated</div><div class="acc-detail">docs/intake-validation.md · +28 lines</div></div>
+              </div>
+            </div>
+
+            <div class="commit-row" data-od-id="commit-0471">
+              <span class="commit-sha">a3f8b2c</span>
+              <span class="commit-msg">Refactor intake validation — per-lane retry budget, exponential backoff, circuit breaker</span>
+              <span class="commit-author">Grok 4.5</span>
+            </div>
+          </div>
+
+          <div class="merge-action" data-od-id="gate2-action">
+            <div class="merge-hint"><strong>All 7 criteria met.</strong> This run is in the merge queue — select it above and merge in bulk.</div>
+            <div class="merge-queue-note">Merge happens from the <strong>merge queue</strong> on the right. Select multiple runs and merge them all to main in one action — no need to click merge for each run individually.</div>
+            <button class="park-btn" data-od-id="park-btn-0471">Park for later</button>
+          </div>
+
+          <div class="export-bar" data-od-id="export-bar-0471">
+            <span class="eb-label">Export</span>
+            <button class="export-btn" data-od-id="export-prompt-g2" onclick="copyPrompt(this)" onmouseenter="showCopyTip(this)" onmouseleave="hideCopyTip(this)">
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="8" height="8" rx="1"/><path d="M5 1h6a1 1 0 0 1 1 1v6" stroke-linecap="round"/></svg>
+              Copy prompt
+              <div class="copy-tooltip" data-od-id="copy-tip-0471">Copies the merge-queue brief — run ID, diff stats, acceptance criteria results, and reviewer notes — as plain text for the morning brief or Claude Code.</div>
+            </button>
+            <button class="export-btn" data-od-id="export-claude-g2">
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 1l1.5 4L12 5l-3 2.5L10 12l-3-2L4 12l1-4.5L2 5l3.5 0z" stroke-linejoin="round"/></svg>
+              Open in Claude Code
+            </button>
+          </div>
+        </div>
+
+        <!-- MERGED VIEW (adw-0470) -->
+        <div id="view-merged" class="detail-view fade-in" data-od-id="view-merged" style="display:none;">
+          <div class="run-header" data-od-id="run-header-0470">
+            <div class="run-header-line1">
+              <h1>Add provider auth to settings panel</h1>
+              <span class="run-header-id">adw-0470</span>
+            </div>
+            <div class="run-header-line2">
+              <span class="rh-meta"><span class="dot ok" style="width:6px;height:6px"></span> merged</span>
+              <span class="rh-meta">6h ago</span>
+              <span class="rh-meta">lane: GLM 5.2</span>
+              <span class="rh-meta">review: Grok 4.5</span>
+              <span class="rh-meta">machine: hetzner-cax31</span>
+            </div>
+          </div>
+
+          <div class="beat-rail" data-od-id="beat-rail-0470">
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">scout</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">plan</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">build</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">review</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">document</span></div>
+          </div>
+
+          <div class="detail-scroll" data-od-id="detail-scroll-0470">
+            <div class="completed-view" data-od-id="completed-0470">
+              <div class="cv-icon"></div>
+              <h2>Merged to main</h2>
+              <p>This run passed all gates and was merged 6 hours ago. The factory has moved on to the next unit.</p>
+              <div class="cv-meta">commit f2a1e8d · merged by operator · main branch</div>
+            </div>
+
+            <div class="diff-section">
+              <div class="log-section-title">Diff summary</div>
+              <div class="diff-summary">
+                <div class="diff-stat"><span class="ds-label">files</span><span>8</span></div>
+                <div class="diff-stat"><span class="ds-add">+220</span></div>
+                <div class="diff-stat"><span class="ds-del">−14</span></div>
+                <div class="diff-stat"><span class="ds-label">commit</span><span style="color:var(--accent)">f2a1e8d</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FAILED VIEW (adw-0468) -->
+        <div id="view-failed" class="detail-view fade-in" data-od-id="view-failed" style="display:none;">
+          <div class="run-header" data-od-id="run-header-0468">
+            <div class="run-header-line1">
+              <h1>Migrate config loader to TOML</h1>
+              <span class="run-header-id">adw-0468</span>
+            </div>
+            <div class="run-header-line2">
+              <span class="rh-meta"><span class="dot fail" style="width:6px;height:6px"></span> failed</span>
+              <span class="rh-meta">12h ago</span>
+              <span class="rh-meta">lane: Grok 4.5</span>
+              <span class="rh-meta">failed at: test phase</span>
+              <span class="rh-meta">machine: hetzner-cax31</span>
+            </div>
+          </div>
+
+          <div class="beat-rail" data-od-id="beat-rail-0468">
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">scout</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">plan</span></div>
+            <div class="beat-step done"><div class="beat-dot"></div><span class="beat-label">build</span></div>
+            <div class="beat-step"><div class="beat-dot" style="background:var(--fail);border-color:var(--fail)"></div><span class="beat-label" style="color:var(--fail)">test</span></div>
+            <div class="beat-step"><div class="beat-dot"></div><span class="beat-label">document</span></div>
+          </div>
+
+          <div class="detail-scroll" data-od-id="detail-scroll-0468">
+            <div class="log-section">
+              <div class="log-section-title">Failure log</div>
+              <div class="work-log">
+                <div class="log-row"><span class="log-time">--:--</span><div class="log-body"><div class="log-text"><span class="log-tag" style="color:var(--fail)">fail</span>Test suite failed: <strong>3 of 47 tests</strong> broke after migration. The TOML loader doesn't handle inline comments the way the old YAML loader did.</div></div></div>
+                <div class="log-row"><span class="log-time">--:--</span><div class="log-body"><div class="log-text"><span class="log-tag">build</span>Build complete: 14 files changed, +310 −45. Commit <code>b7c2e9f</code></div></div></div>
+                <div class="log-row"><span class="log-time">--:--</span><div class="log-body"><div class="log-text"><span class="log-tag">plan</span>Plan complete — 4 decisions locked.</div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ═══ MERGE QUEUE RIGHT RAIL ═══ -->
+      <div class="merge-queue-rail" data-od-id="merge-queue-rail">
+        <div class="merge-queue-rail-header" data-od-id="mq-header">
+          <span class="mq-title">Merge queue</span>
+          <span class="mq-count" id="mq-count">2 ready</span>
+          <div class="mq-select-all" onclick="toggleSelectAll(this)">
+            <div class="mq-checkbox" id="mq-checkbox-all"></div>
+            <span>Select all</span>
+          </div>
+        </div>
+        <div class="mq-subheader">Ready to merge</div>
+        <div class="merge-queue-list" id="merge-queue-list" data-od-id="merge-queue-list">
+          <div class="merge-queue-row selected" data-od-id="mq-row-0471" onclick="toggleQueueRow(this)">
+            <div class="mq-row-line1">
+              <div class="mq-row-checkbox"></div>
+              <span class="mq-row-id">adw-0471</span>
+              <span class="mq-row-title">Refactor intake validation</span>
+            </div>
+            <div class="mq-row-line2">
+              <span class="mq-row-lane">Grok 4.5</span>
+              <span class="mq-row-files">12 files · +340 −28</span>
+            </div>
+          </div>
+          <div class="merge-queue-row" data-od-id="mq-row-0472" onclick="toggleQueueRow(this)">
+            <div class="mq-row-line1">
+              <div class="mq-row-checkbox"></div>
+              <span class="mq-row-id">adw-0472</span>
+              <span class="mq-row-title">Cache compiled ADW manifests</span>
+            </div>
+            <div class="mq-row-line2">
+              <span class="mq-row-lane">Qwen 3.8</span>
+              <span class="mq-row-files">7 files · +180 −12</span>
+            </div>
+          </div>
+          <div class="merge-queue-row" data-od-id="mq-row-0469" onclick="toggleQueueRow(this)">
+            <div class="mq-row-line1">
+              <div class="mq-row-checkbox"></div>
+              <span class="mq-row-id">adw-0469</span>
+              <span class="mq-row-title">Fix off-by-one in lane retry</span>
+            </div>
+            <div class="mq-row-line2">
+              <span class="mq-row-lane">Qwen 3.8</span>
+              <span class="mq-row-files">3 files · +24 −2</span>
+            </div>
+          </div>
+          <div class="merge-queue-row" data-od-id="mq-row-0467" onclick="toggleQueueRow(this)">
+            <div class="mq-row-line1">
+              <div class="mq-row-checkbox"></div>
+              <span class="mq-row-id">adw-0467</span>
+              <span class="mq-row-title">Add retry budget field to config</span>
+            </div>
+            <div class="mq-row-line2">
+              <span class="mq-row-lane">GLM 5.2</span>
+              <span class="mq-row-files">5 files · +88 −4</span>
+            </div>
+          </div>
+        </div>
+        <div class="merge-queue-action" data-od-id="mq-action">
+          <button class="mq-bulk-btn" id="mq-bulk-btn" onclick="bulkMerge(this)">
+            <span>Merge to main</span>
+            <span class="mq-btn-count" id="mq-btn-count">1 selected</span>
+          </button>
+          <div class="mq-hint">Select runs and merge in bulk. Each merge creates one commit on main.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function selectRun(el, mode) {
+  document.querySelectorAll('.run-row').forEach(r => r.classList.remove('selected'));
+  el.classList.add('selected');
+
+  var views = ['running','cooldown','gate2','merged','failed'];
+  views.forEach(v => {
+    var el2 = document.getElementById('view-' + v);
+    if (el2) el2.style.display = 'none';
+  });
+  var target = document.getElementById('view-' + mode);
+  if (target) {
+    target.style.display = 'flex';
+    target.style.flexDirection = 'column';
+    target.style.flex = '1';
+    target.style.minHeight = '0';
+    target.style.overflow = 'hidden';
+    target.classList.remove('fade-in');
+    void target.offsetWidth;
+    target.classList.add('fade-in');
+  }
+
+  /* connect to merge-queue rail: highlight matching row when a gate2 run is selected */
+  var runId = el.getAttribute('data-od-id');
+  document.querySelectorAll('.merge-queue-row').forEach(function(r){
+    r.classList.remove('highlighted');
+    if (runId && r.getAttribute('data-od-id') === 'mq-row-' + runId) {
+      r.classList.add('highlighted');
+    }
+  });
+}
+
+/* ── merge queue ── */
+function toggleQueueRow(el) {
+  el.classList.toggle('selected');
+  updateMergeCount();
+}
+
+function toggleSelectAll(el) {
+  var checkbox = document.getElementById('mq-checkbox-all');
+  var rows = document.querySelectorAll('.merge-queue-row');
+  var allSelected = checkbox.classList.contains('checked');
+  rows.forEach(function(r) {
+    if (allSelected) r.classList.remove('selected');
+    else r.classList.add('selected');
+  });
+  if (allSelected) checkbox.classList.remove('checked');
+  else checkbox.classList.add('checked');
+  updateMergeCount();
+}
+
+function updateMergeCount() {
+  var selected = document.querySelectorAll('.merge-queue-row.selected').length;
+  var btnCount = document.getElementById('mq-btn-count');
+  var btn = document.getElementById('mq-bulk-btn');
+  if (btnCount) btnCount.textContent = selected + ' selected';
+  if (btn) btn.disabled = selected === 0;
+  var countEl = document.getElementById('mq-count');
+  var total = document.querySelectorAll('.merge-queue-row').length;
+  if (countEl) countEl.textContent = total + ' ready';
+}
+
+function bulkMerge(btn) {
+  if (btn.disabled) return;
+  var selected = document.querySelectorAll('.merge-queue-row.selected').length;
+  var btnCount = document.getElementById('mq-btn-count');
+  btn.textContent = 'Merging…';
+  if (btnCount) btnCount.textContent = selected + ' runs';
+  setTimeout(function() {
+    btn.textContent = 'Merged ✓';
+    if (btnCount) btnCount.textContent = selected + ' merged';
+    btn.style.background = 'var(--ok)';
+    btn.style.color = '#fff';
+    btn.disabled = true;
+  }, 1200);
+}
+
+/* ── lane cooldown (autonomous — factory handles it) ── */
+
+function copyPrompt(btn) {
+  var original = btn.innerHTML;
+  var tip = btn.querySelector('.copy-tooltip');
+  if (tip) tip.style.display = 'none';
+  btn.innerHTML = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="8" height="8" rx="1"/><path d="M5 1h6a1 1 0 0 1 1 1v6" stroke-linecap="round"/></svg> Copied ✓';
+  setTimeout(function() { btn.innerHTML = original; if (tip) tip.style.display = ''; }, 1500);
+}
+
+function showCopyTip(btn) {
+  var tip = btn.querySelector('.copy-tooltip');
+  if (tip) tip.style.opacity = '1';
+}
+
+function hideCopyTip(btn) {
+  var tip = btn.querySelector('.copy-tooltip');
+  if (tip) tip.style.opacity = '0';
+}
+
+document.addEventListener('DOMContentLoaded', updateMergeCount);
+
+function switchProject(el, name, color) {
+  event.stopPropagation();
+  var colorMap = {
+    'var(--accent)':'#e0a64a',
+    'var(--run)':'#6ba4e8',
+    'var(--ok)':'#6dbb6e',
+    'var(--neutral)':'#7d7568'
+  };
+  var hexColor = colorMap[color] || color;
+  document.documentElement.style.setProperty('--accent', hexColor);
+  var crumb = document.querySelector('.crumb-project');
+  if (crumb) {
+    crumb.classList.remove('open');
+    var text = crumb.childNodes[2];
+    if (text) text.textContent = ' ' + name + ' ';
+    var dot = crumb.querySelector('.cp-dot');
+    if (dot) dot.style.background = color;
+  }
+  document.querySelectorAll('.crumb-dropdown-item').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  var projName = document.querySelector('.project-switcher .proj-name');
+  if (projName) projName.textContent = name;
+  var projDot = document.querySelector('.project-switcher .proj-dot');
+  if (projDot) projDot.style.background = color;
+  document.querySelectorAll('.project-menu-item').forEach(function(m){ m.classList.remove('active'); });
+  document.querySelectorAll('.project-menu-item').forEach(function(m){
+    if (m.textContent.trim() === name) m.classList.add('active');
+  });
+}
+</script>
+</body>
+</html>

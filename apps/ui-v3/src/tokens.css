@@ -1,0 +1,65 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   EDITORIAL INSTRUMENT — the design system, ported verbatim from the mocks.
+
+   Source of truth: docs/design/ui-v3-mocks/*.html. Every mock declares the
+   same :root; the only difference between them is the surface-specific width
+   variable each one adds (--inspector-w in Board, --column-w/--mq-rail-w in
+   Runs, --tree-w in Docs, --scope-w in Settings). Those are unioned here so a
+   Phase 2 surface never has to redeclare a token - and so the shell and the
+   surfaces cannot drift into two palettes.
+
+   Values are copied, not re-derived. If a colour here disagrees with a mock,
+   the mock wins and this file is wrong.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --canvas:#141311; --chrome:#1a1816; --raised:#201e1b; --overlay:#26231f;
+  --hairline:#2a2724; --hairline-2:#36322e;
+  --t1:#ede9e2; --t2:#9e968a; --t3:#645c52; --t4:#3a352f;
+  --accent:#e0a64a; --accent-dim:#4a3820; --accent-surface:rgba(224,166,74,0.08); --on-accent:#1a1408;
+  --run:#6ba4e8; --ok:#6dbb6e; --fail:#e06464; --warn:#d9a441; --neutral:#7d7568;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,166,74,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.5);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --text-meta:12px; --text-mono:13px; --text-body:14px; --text-head:16px; --text-hero:22px;
+  --r-chip:5px; --r-control:7px;
+  --sidebar-w:240px; --row-h:32px; --topbar-h:48px;
+  /* surface-scoped widths, each from the mock that introduces it */
+  --inspector-w:340px;              /* board-v3 */
+  --column-w:300px; --mq-rail-w:320px; --logrow-h:30px;  /* runs-gate-v3 (its --inspector-w is 400px) */
+  --tree-w:260px;                   /* docs-v3 */
+  --scope-w:220px;                  /* settings-v3 */
+}
+
+/* ── the mocks' own reset ───────────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box;}
+*{border-color:var(--hairline);}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--canvas);color:var(--t1);font-family:var(--font-sans);font-size:var(--text-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+#root{height:100%;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+::selection{background:var(--accent-surface);color:var(--t1);}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+input,select,textarea{font:inherit;color:inherit;}
+a{color:inherit;text-decoration:none;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--hairline-2);border-radius:4px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ── motion utilities ───────────────────────────────────────────────────── */
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.pulse{animation:pulse 1.8s ease-in-out infinite;}
+
+/* page transition */
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.fade-in{animation:fadeIn .2s ease;}
+
+/* The mocks silence .pulse under prefers-reduced-motion; the same promise has
+   to cover the entrance animation, so .fade-in is silenced with it. Nothing in
+   this app may move for a reader who asked for stillness. */
+@media(prefers-reduced-motion:reduce){
+  .pulse{animation:none;}
+  .fade-in{animation:none;}
+  *{transition-duration:0.01ms !important;}
+}

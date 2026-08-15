@@ -220,6 +220,22 @@ ui2:
 ui2-dev:
     cd apps/ui-v2 && bun install && bunx vite
 
+# --- factory app v3 (the operator's screen designs) --------------------------
+# Same one Bun process on 127.0.0.1:4700, same read-only /api/*, same app plane
+# at /api/app/*. The ONLY difference from `just ui` is the trailing --ui-v3
+# flag, which is the only thing that switches which dist/ is served. Without it
+# - `just ui`, `just ui2`, `just app`, the packaged .exe - the UI those recipes
+# have always served is served byte-for-byte as before, even after
+# apps/ui-v3/dist exists. Directory presence must never re-route the UI.
+
+# boot app v3, http://127.0.0.1:4700  (Home / Board / Runs / Docs / Settings)
+ui3:
+    cd apps/ui-v3 && bun install && bunx vite build && cd ../ui && bun run server/index.ts --db {{justfile_directory()}}/{{db}} --ui-v3
+
+# app v3 with hot reload, http://127.0.0.1:4730 (api still on 4700, run `just ui3` too)
+ui3-dev:
+    cd apps/ui-v3 && bun install && bunx vite
+
 # --- factory app (desktop shell) ---------------------------------------------
 # The control surface / dashboard as a desktop window (operator ruling: it is
 # NOT an "ADE" - the coding happens in the factory, never locally here). Same

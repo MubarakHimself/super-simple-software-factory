@@ -36,7 +36,19 @@ const HOSTNAME = "127.0.0.1";
 // Only the explicit --ui-v2 flag (which only the new `ui2` recipe passes)
 // switches which dist is served; `just ui` / `just app` never pass it.
 const UI_V2 = Bun.argv.includes("--ui-v2");
-const DIST_DIR = UI_V2 ? resolve(import.meta.dir, "..", "..", "ui-v2", "dist") : resolve(import.meta.dir, "..", "dist");
+// v3 (the desktop UI built from the operator's screen designs) rides the exact
+// same rule: only the explicit --ui-v3 flag, which only the new `ui3` recipe
+// passes, serves apps/ui-v3/dist. Presence of that directory must never
+// re-route the served UI either.
+const UI_V3 = Bun.argv.includes("--ui-v3");
+const DIST_DIR = UI_V3
+  ? resolve(import.meta.dir, "..", "..", "ui-v3", "dist")
+  : UI_V2
+    ? resolve(import.meta.dir, "..", "..", "ui-v2", "dist")
+    : resolve(import.meta.dir, "..", "dist");
+// Both app-plane SPAs (v2, v3) present X-App-Token on their writes, so both
+// get the injected index.html; the v1 SPA is still served byte-for-byte.
+const INJECT_TOKEN = UI_V2 || UI_V3;
 const BUILD_TIME = existsSync(DIST_DIR) ? statSync(DIST_DIR).mtime.toISOString() : null;
 
 let dbPath: string;
@@ -104,9 +116,10 @@ function strQuery(req: Request, key: string, fallback: string): string {
   return raw === null || raw.trim() === "" ? fallback : raw;
 }
 
-/** Reads `apps/ui-v2/dist/index.html` and injects the per-process CSRF token
- * (spec 1.1 edit 3) before `</head>` - the only way the v2 SPA can present
- * `X-App-Token` on its own writes. Only ever called when UI_V2 is true. */
+/** Reads the app-plane SPA's `dist/index.html` (v2's or v3's) and injects the
+ * per-process CSRF token (spec 1.1 edit 3) before `</head>` - the only way
+ * those SPAs can present `X-App-Token` on their own writes. Only ever called
+ * when INJECT_TOKEN is true; the v1 SPA is never rewritten. */
 async function serveIndexWithToken(path: string): Promise<Response> {
   const html = await Bun.file(path).text();
   const tag = `<script>window.__APP_TOKEN__=${JSON.stringify(APP_TOKEN)}</script>`;
@@ -118,24 +131,27 @@ async function serveStatic(req: Request): Promise<Response> {
   const { pathname } = new URL(req.url);
   if (!existsSync(DIST_DIR)) {
     return new Response(
-      UI_V2
-        ? `SDL Factory UI API is running on :${PORT}, but ./ui-v2/dist has not been built.\n` +
-          `Run "just ui2" (builds then serves with --ui-v2), or "just ui2-dev" for the Vite dev server on :4720.\n`
-        : `SDL Factory UI API is running on :${PORT}, but ./dist has not been built.\n` +
-          `Run "just ui" (builds then serves), or "just ui-dev" for the Vite dev server on :4710.\n`,
+      UI_V3
+        ? `SDL Factory UI API is running on :${PORT}, but ./ui-v3/dist has not been built.\n` +
+          `Run "just ui3" (builds then serves with --ui-v3), or "just ui3-dev" for the Vite dev server on :4730.\n`
+        : UI_V2
+          ? `SDL Factory UI API is running on :${PORT}, but ./ui-v2/dist has not been built.\n` +
+            `Run "just ui2" (builds then serves with --ui-v2), or "just ui2-dev" for the Vite dev server on :4720.\n`
+          : `SDL Factory UI API is running on :${PORT}, but ./dist has not been built.\n` +
+            `Run "just ui" (builds then serves), or "just ui-dev" for the Vite dev server on :4710.\n`,
       { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
     );
   }
   const candidate = resolve(join(DIST_DIR, pathname));
   if (candidate === DIST_DIR || candidate.startsWith(DIST_DIR + sep)) {
     if (existsSync(candidate) && statSync(candidate).isFile()) {
-      if (UI_V2 && candidate === join(DIST_DIR, "index.html")) return serveIndexWithToken(candidate);
+      if (INJECT_TOKEN && candidate === join(DIST_DIR, "index.html")) return serveIndexWithToken(candidate);
       return new Response(Bun.file(candidate));
     }
   }
   const indexHtml = join(DIST_DIR, "index.html");
   if (existsSync(indexHtml)) {
-    if (UI_V2) return serveIndexWithToken(indexHtml);
+    if (INJECT_TOKEN) return serveIndexWithToken(indexHtml);
     return new Response(Bun.file(indexHtml), { headers: { "content-type": "text/html; charset=utf-8" } });
   }
   return notFound("not found");

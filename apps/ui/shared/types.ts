@@ -414,3 +414,268 @@ export interface HealthResponse {
 export interface ApiError {
   error: string;
 }
+
+// -- v3 app plane: ship / cards / factory -------------------------------------
+//
+// Additive only. Everything below is served under `/api/app/*` by
+// `server/app/ship.ts`, `server/app/cards.ts` and `server/app/factory.ts`, and
+// is what the v3 surfaces read. Nothing here is stored: every field is derived
+// per request from git, `queue/`, the roster yaml, or `adws/ship_report.py`'s
+// own output - and anything that cannot be derived is `null`/`"unknown"` with
+// a sentence saying why, never a guess (docs/user-journeys.md J7).
+
+/** One acceptance box as `adws/ship_report.py` walked it. The verdict
+ * vocabulary is the script's own and is never widened here. */
+export interface ShipCriterion {
+  text: string;
+  /** the card's own checkbox, as the script reported it */
+  checked: boolean;
+  verdict: "confirmed-by-record" | "cannot-confirm-from-record";
+  /** the script's `record:` line, verbatim */
+  evidence: string;
+}
+
+/** One card in the chunk sitting on `integration` that `main` does not have. */
+export interface ShipCard {
+  /** `003-slug.md` - the basename `Needs:` and `POST /ship`'s `cut` both use */
+  name: string;
+  title: string;
+  /** the park ("integration") commit, abbreviated exactly as the script prints
+   * it. This is the CUT POINT: shipping "up to" this card advances `main` to
+   * this commit. Null when the script could not name one. */
+  sha: string | null;
+  /** ISO 8601 commit date of the park event */
+  date: string | null;
+  detected_by: "commit-message" | "diff" | null;
+  branch: string | null;
+  files_changed: number | null;
+  insertions: number | null;
+  deletions: number | null;
+  /** the script's `- Diff: none recorded (<note>)` reason, when it printed one */
+  diff_note: string | null;
+  criteria: ShipCriterion[];
+  /** the script's own `- Gap:` line for this card, when it printed one */
+  gap: string | null;
+}
+
+export interface ShipReportResponse {
+  /** the report exactly as `uv run adws/ship_report.py --pr` printed it - this
+   * is what becomes the squash commit's body, so it is served unedited */
+  markdown: string;
+  cards: ShipCard[];
+  /** commits on `integration` that `main` does not have, per the report */
+  commit_count: number;
+  /** nothing to ship: no commits, or no card parked inside them */
+  empty: boolean;
+  /** `BASE..TIP` as the script resolved it (its own range expression) */
+  range: string | null;
+  base: string | null;
+  tip: string | null;
+  /** the report's own Gaps section, one entry per line */
+  gaps: string[];
+  /** false when the script could not run or refused - then `reason` says why
+   * in the script's own words and every field above is empty */
+  available: boolean;
+  reason: string | null;
+  generated_at: string;
+}
+
+/** What `POST /api/app/p/:id/ship` did. A refusal is never this shape - it is
+ * `{error}` with the reason as a sentence (409). */
+export interface ShipResult {
+  shipped: true;
+  /** what the operator asked to ship: `"all"` or a card basename */
+  cut: string;
+  /** the integration commit `main` advanced to (full sha) */
+  cut_sha: string;
+  /** the range the squash body covers, `BASE..CUT` */
+  range: string;
+  /** basenames of the cards inside that range, in integration order */
+  cards: string[];
+  /** `main`'s new short sha - the one squash commit */
+  commit: string;
+  /** where the body was written (inside the git dir, never the work tree) */
+  message_file: string;
+  /** `integration` or `origin/integration` - whichever this checkout has */
+  integration_ref: string;
+  fetched: boolean;
+  fetch_note: string | null;
+  pushed: boolean;
+  /** git's own words when the push was refused - the squash still landed
+   * locally, which is why this is a 200 and not an error */
+  push_error: string | null;
+  remote: string | null;
+  previous_branch: string;
+  restored_branch: boolean;
+  restore_error: string | null;
+}
+
+/** The card lifecycle of docs/user-journeys.md's "Card lifecycle" row.
+ * `unknown` is a real answer: a state this server cannot derive is never
+ * guessed at, it is `unknown` with a reason. */
+export type CardState = "ready" | "running" | "blocked" | "done" | "integrated" | "shipped" | "unknown";
+
+export interface CardItem {
+  /** `queue/003-slug.md`, or `queue/done/003-slug.md` once parked */
+  path: string;
+  /** `003-slug.md` - the basename `Needs:` names and `cut` takes */
+  name: string;
+  slug: string;
+  title: string;
+  /** the card's own `Status:` line; null when it carries none (parked cards
+   * are sometimes left at their last status) */
+  status: QueueStatus | null;
+  state: CardState;
+  /** always set - the plain sentence behind `state` (status triple rule) */
+  state_reason: string;
+  /** the card file lives in `queue/done/` (the engine parked it) */
+  parked: boolean;
+  adw: string | null;
+  adw_id: string | null;
+  created: string | null;
+  context: string | null;
+  category: string | null;
+  /** `Feature:` header - the feature id `/to-kanban` stamps; null when absent */
+  feature: string | null;
+  /** `Priority:` header, passed through verbatim when a card carries one
+   * (docs/user-journeys.md change #7 leaves it optional) */
+  priority: string | null;
+  /** `Needs:` basenames, comma-split exactly as dispatch.py splits them */
+  needs: string[];
+  /** the needs that are NOT yet parked in `queue/done/` - the holding hint
+   * "waiting on <cards>" the Board face shows (change #6). Empty otherwise. */
+  waiting_on: string[];
+  /** `Blocked-reason:` header, verbatim; null when the card carries none */
+  blocked_reason: string | null;
+  /** other cards whose `Needs:` name this one (reverse edges) */
+  blocks: string[];
+  criteria_done: number;
+  criteria_total: number;
+  criteria: { text: string; done: boolean }[];
+  body: string;
+}
+
+export interface CardsResponse {
+  dir: string;
+  done_dir: string;
+  items: CardItem[];
+  unparsed: UnparsedQueueItem[];
+  /** how integrated/shipped was decided, and why it may be `unknown`:
+   * `git ls-tree <main> -- queue/done` - a parked card whose file `main`'s
+   * tree already holds shipped with that chunk's squash. */
+  shipped_source: "git-tree" | "unavailable";
+  shipped_reason: string | null;
+  main_ref: string;
+}
+
+export interface LaneRow {
+  /** the provider prefix of a roster `provider/model` string, e.g.
+   * "ollama-cloud" - one provider account = one lane = one quota pool */
+  name: string;
+  /** concurrent runs this lane carries (engine.py's DEFAULT_LANE_SLOTS, or an
+   * `SSSF_LANES` override read from this process's environment) */
+  slots: number;
+  slots_source: "default" | "SSSF_LANES";
+  /** the roster model strings drawing on this lane */
+  models: string[];
+  /** the roster agents drawing on this lane ("defaults" when inherited) */
+  agents: string[];
+  /** null locally: free slots are the running engine's own count, and this
+   * machine has no engine to ask */
+  free: number | null;
+}
+
+export interface LanesResponse {
+  lanes: LaneRow[];
+  /** the roster the lanes were derived from */
+  config_path: string;
+  slots_default: number;
+  /** `SSSF_LANES` as this process sees it, or null */
+  env: string | null;
+  /** the Lanes tab's toggles/retry budget have no field in any config file
+   * today - false keeps the UI from pretending a switch is wired */
+  writes_supported: false;
+  reason: string | null;
+}
+
+/** A provider definition as it is git-tracked in the repo
+ * (`installer/assets/pi/<id>.provider.json`). Credentials are never here:
+ * they live in `~/.pi/agent/auth.json` on the machine that runs the factory. */
+export interface ProviderDefinition {
+  id: string;
+  /** repo-relative path of the definition, or null for a lane with none */
+  source: string | null;
+  /** true when a git-tracked definition file exists for this id */
+  defined: boolean;
+  api: string | null;
+  base_url: string | null;
+  auth_mechanism: "api-key-command" | "api-key" | "none" | "unknown";
+  /** always "unknown" from here: this server never reads a credential file */
+  auth_status: "unknown";
+  auth_reason: string;
+  models: { id: string; name: string | null; context: number | null; max_tokens: number | null }[];
+  /** true when this provider is a lane of the project's roster */
+  in_roster: boolean;
+}
+
+export interface ProviderDefinitionsResponse {
+  providers: ProviderDefinition[];
+  dir: string;
+  reason: string | null;
+}
+
+export interface MachineRow {
+  id: string;
+  name: string;
+  kind: "local" | "server";
+  /** the drawn caption: "planning only - no factory" / "factory execution" */
+  role: string;
+  host: string | null;
+  status: "this machine" | "configured" | "unknown";
+  status_reason: string;
+  factory_version: string | null;
+  runs: number | null;
+}
+
+export interface MachinesResponse {
+  machines: MachineRow[];
+  server_configured: boolean;
+  /** v1 is one server + localhost (change #11) - the default-machine and
+   * failover selects stay drawn and disabled */
+  multi_machine_supported: false;
+  reason: string;
+}
+
+export interface FactoryQueueCounts {
+  ready: number;
+  running: number;
+  blocked: number;
+  done: number;
+  integrated: number;
+  shipped: number;
+  unknown: number;
+  unparsed: number;
+  total: number;
+}
+
+/** The footer strip's source of truth, derived on THIS machine. */
+export interface FactoryHealth {
+  /** everything below was derived from files and git in this checkout - no
+   * engine was asked, because asking one needs the server connection */
+  source: "local-derived";
+  checked_at: string;
+  /** "unknown" whenever no engine runs here - never "stopped" by guesswork */
+  engine: "running" | "stopped" | "unknown";
+  engine_reason: string;
+  uptime_seconds: number | null;
+  uptime_reason: string | null;
+  lanes: LaneRow[];
+  lanes_active: number | null;
+  lanes_reason: string;
+  queue: FactoryQueueCounts;
+  /** runs still marked running in this project's sssf.db, or null when there
+   * is no db here */
+  runs_running: number | null;
+  factory: "present" | "absent";
+  factory_reason: string;
+}

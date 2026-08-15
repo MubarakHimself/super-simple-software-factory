@@ -1,0 +1,269 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   RUNS — run list · detail pane · merge-queue rail
+
+   Ported rule-for-rule from docs/design/ui-v3-mocks/runs-gate-v3.html, class
+   names kept so a rule here can be diffed against the mock line by line. The
+   mock's `:root`, reset, `.dot`, `.pulse`/`.fade-in` and shell rules are NOT
+   repeated - they live in src/tokens.css and src/shell.css already.
+
+   Everything marked `v3 runs addition` has no counterpart in the mock: it is
+   either a state the mock never drew (blocked, the ship confirm/result) or a
+   sentence the ratified model requires (the cut-point hint).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The runs mock draws its status dots one pixel larger than the shell's.
+   Scoped to this surface's three columns rather than redeclared globally. */
+.run-list-col .dot,
+.detail-pane .dot,
+.merge-queue-rail .dot { width: 7px; height: 7px; }
+
+/* ═══ RUN LIST COLUMN ═══ */
+.run-list-col{width:var(--column-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);min-width:0;}
+.run-list-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.run-list-header h2{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.run-list-header .filter-pill{margin-left:auto;height:22px;padding:0 10px;display:flex;align-items:center;gap:6px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);}
+.run-list{flex:1;overflow-y:auto;}
+.run-row{display:flex;flex-direction:column;justify-content:center;gap:3px;width:100%;text-align:left;height:72px;padding:0 16px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .12s;position:relative;}
+.run-row:hover{background:var(--row-hover);}
+.run-row.selected{background:var(--row-active);}
+.run-row.selected::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:2px;background:var(--accent);border-radius:1px;}
+.run-row-line1{display:flex;align-items:center;gap:8px;}
+.run-row-line1 .dot{flex-shrink:0;}
+.run-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-body);color:var(--t1);}
+.run-row-elapsed{flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);font-variant-numeric:tabular-nums;}
+.run-row-line2{display:flex;align-items:center;gap:8px;padding-left:15px;font-size:var(--text-meta);color:var(--t3);}
+.run-row-line2 .step{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;}
+.run-row-line2 .lane{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--t3);}
+.run-row-line2 .gate-badge{flex-shrink:0;font-family:var(--font-mono);font-size:10px;padding:1px 6px;border-radius:3px;background:var(--accent-dim);color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;}
+.run-row-line3{padding-left:15px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* the hidden-self-checks line: v3 runs addition (the server reports the count,
+   so an empty list is never a mystery) */
+.run-list-note{padding:10px 16px;font-family:var(--font-mono);font-size:11px;color:var(--t4);line-height:1.5;border-bottom:1px solid var(--hairline);}
+
+/* ── machine chip ── */
+.machine-chip{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;font-family:var(--font-mono);font-size:10px;color:var(--t3);white-space:nowrap;}
+.machine-chip::before{content:'⊞';font-size:11px;color:var(--t4);}
+
+/* ── copy prompt tooltip ── */
+.copy-tooltip{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-chip);padding:8px 10px;max-width:280px;width:max-content;font-family:var(--font-mono);font-size:11px;color:var(--t2);line-height:1.5;box-shadow:var(--shadow);z-index:100;opacity:0;pointer-events:none;transition:opacity .15s;white-space:pre-wrap;word-break:break-word;}
+.copy-tooltip.visible{opacity:1;}
+.copy-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--hairline-2);}
+.export-btn{position:relative;}
+
+/* ═══ DETAIL PANE ═══ */
+.detail-pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+.detail-view{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
+.detail-scroll{flex:1;overflow-y:auto;}
+
+/* ── run header ── */
+.run-header{padding:16px 20px 14px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.run-header-line1{display:flex;align-items:baseline;gap:16px;}
+.run-header h1{font-family:var(--font-serif);font-size:20px;font-weight:600;color:var(--t1);letter-spacing:-0.3px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.run-header-id{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--accent);flex-shrink:0;}
+.run-header-line2{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:var(--text-meta);color:var(--t3);}
+.run-header-line2 .rh-meta{display:flex;align-items:center;gap:5px;}
+.run-header-line2 .rh-phase{font-family:var(--font-mono);color:var(--t2);}
+.run-header-line2 .rh-elapsed{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+/* the header's status sentence: v3 runs addition (the status triple's third
+   part - the mock's header carried a bare word) */
+.run-header-sentence{margin-top:8px;font-size:var(--text-meta);color:var(--t2);line-height:1.5;}
+/* the mock sets the header dot to 6px inline; done here instead */
+.run-header-line2 .dot{width:6px;height:6px;}
+
+/* ── beat rail ── */
+.beat-rail{display:flex;gap:0;padding:10px 20px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.beat-step{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;position:relative;min-width:0;}
+.beat-step::after{content:"";position:absolute;top:5px;right:-50%;width:100%;height:1px;background:var(--hairline);z-index:0;}
+.beat-step:last-child::after{display:none;}
+.beat-step .beat-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid var(--hairline-2);background:var(--chrome);z-index:1;position:relative;}
+.beat-step.done .beat-dot{background:var(--ok);border-color:var(--ok);}
+.beat-step.active .beat-dot{background:var(--run);border-color:var(--run);}
+.beat-step.active .beat-dot::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--run);opacity:0.3;animation:pulse 1.8s ease-in-out infinite;}
+.beat-step.failed .beat-dot{background:var(--fail);border-color:var(--fail);}
+.beat-step .beat-label{font-family:var(--font-mono);font-size:10px;color:var(--t4);text-transform:uppercase;letter-spacing:0.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.beat-step.done .beat-label{color:var(--t2);}
+.beat-step.active .beat-label{color:var(--run);}
+.beat-step.failed .beat-label{color:var(--fail);}
+@media(prefers-reduced-motion:reduce){.beat-step.active .beat-dot::after{animation:none;}}
+
+/* ── work log ── */
+.log-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.log-section-title{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;}
+.work-log{display:flex;flex-direction:column;gap:0;}
+.log-row{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--hairline);align-items:flex-start;}
+.log-row:last-child{border-bottom:none;}
+.log-row.indent{padding-left:20px;}
+.log-time{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);flex-shrink:0;width:60px;font-variant-numeric:tabular-nums;padding-top:1px;}
+.log-body{flex:1;min-width:0;}
+.log-text{font-size:var(--text-body);color:var(--t2);line-height:1.5;overflow-wrap:anywhere;}
+.log-text strong{color:var(--t1);font-weight:500;}
+.log-text code{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--accent);}
+.log-text .log-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);background:var(--raised);padding:1px 6px;border-radius:3px;margin-right:6px;}
+.log-text .log-tag.fail{color:var(--fail);}
+.log-text .log-tag.warn{color:var(--warn);}
+.log-text .log-tag.ok{color:var(--ok);}
+
+/* ── diff rail ── */
+.diff-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.diff-summary{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;font-family:var(--font-mono);font-size:var(--text-meta);}
+.diff-stat{display:flex;align-items:center;gap:5px;}
+.diff-stat .ds-add{color:var(--ok);}
+.diff-stat .ds-del{color:var(--fail);}
+.diff-stat .ds-label{color:var(--t3);}
+.diff-stat .ds-sha{color:var(--accent);}
+.diff-files{display:flex;flex-direction:column;gap:0;}
+.diff-file{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--text-meta);}
+.diff-file:last-child{border-bottom:none;}
+.diff-file .df-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);direction:rtl;text-align:left;}
+.diff-file .df-add{color:var(--ok);font-size:11px;}
+.diff-file .df-del{color:var(--fail);font-size:11px;}
+/* what the record could not supply, said in place: v3 runs addition */
+.record-note{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);line-height:1.5;padding:8px 12px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);}
+
+/* ── quality / acceptance rows ── */
+.qc-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--hairline);}
+.qc-row:last-child{border-bottom:none;}
+.qc-row .dot{flex-shrink:0;}
+.acceptance-section{padding:16px 20px;border-bottom:1px solid var(--hairline);}
+.acceptance-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);}
+.acceptance-row:last-child{border-bottom:none;}
+.acceptance-row .dot{margin-top:6px;flex-shrink:0;}
+.acc-body{flex:1;min-width:0;}
+.acc-title{font-size:var(--text-body);color:var(--t1);font-weight:500;margin-bottom:2px;overflow-wrap:anywhere;}
+.acc-detail{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+.acc-evidence{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);margin-top:6px;padding:8px 12px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);overflow-wrap:anywhere;}
+/* the walk's one-line verdict summary, and the warn colour for a criterion the
+   record could not confirm: v3 runs additions (the mock drew only green rows) */
+.acc-summary{font-size:var(--text-meta);color:var(--t2);margin:-4px 0 8px;line-height:1.5;}
+.acc-detail.warn{color:var(--warn);}
+.record-note.gap{color:var(--warn);margin-top:12px;}
+
+/* ── blocked: the reason, first and largest (J7) — v3 runs addition ── */
+.blocked-reason{font-size:var(--text-body);color:var(--t1);line-height:1.6;padding:14px 16px;border:1px solid var(--hairline-2);border-left:2px solid var(--fail);border-radius:var(--r-chip);background:var(--raised);overflow-wrap:anywhere;}
+
+/* ── merge action ── */
+.merge-action{padding:20px;border-bottom:1px solid var(--hairline);}
+.merge-action .merge-hint{font-size:var(--text-meta);color:var(--t3);margin-bottom:10px;}
+.merge-action .merge-hint strong{color:var(--t2);}
+.merge-action .merge-queue-note{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);padding:10px 14px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);line-height:1.5;}
+.merge-action .merge-queue-note strong{color:var(--accent);}
+.park-btn{width:100%;height:36px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-control);margin-top:10px;transition:border-color .15s,color .15s;}
+.park-btn:hover{border-color:var(--t2);color:var(--t1);}
+.park-btn:disabled{color:var(--t4);cursor:default;}
+.park-btn:disabled:hover{border-color:var(--hairline);color:var(--t4);}
+
+/* ── banners (gate / cooldown / blocked) ── */
+.gate-banner{padding:12px 20px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:12px;flex-shrink:0;}
+.gate-banner .gate-type-badge{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;}
+.gate-banner .gate-type-badge.g2{background:rgba(109,187,110,0.12);color:var(--ok);}
+/* blocked and shipped badges: v3 runs addition (states the mock never drew) */
+.gate-banner .gate-type-badge.blocked{background:rgba(224,100,100,0.12);color:var(--fail);}
+.gate-banner .gate-type-badge.shipped{background:var(--accent-surface);color:var(--accent);}
+.gate-banner .gate-type-badge.failed{background:rgba(224,100,100,0.12);color:var(--fail);}
+.gate-banner .gate-banner-text{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);min-width:0;}
+.gate-banner .gate-banner-text strong{color:var(--t1);font-style:normal;}
+.gate-banner.blocked{background:rgba(224,100,100,0.06);}
+
+.cooldown-banner{padding:12px 20px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:12px;background:var(--accent-surface);flex-shrink:0;}
+.cooldown-banner .cd-badge{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;background:var(--accent-dim);color:var(--accent);}
+.cooldown-banner .cd-badge svg{width:10px;height:10px;}
+.cooldown-banner .cd-banner-text{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);min-width:0;}
+.cooldown-banner .cd-banner-text strong{color:var(--t1);font-style:normal;}
+.cooldown-actions{padding:20px;border-bottom:1px solid var(--hairline);display:flex;flex-direction:column;gap:10px;}
+.cooldown-actions .cd-hint{font-size:var(--text-meta);color:var(--t3);line-height:1.6;}
+.cooldown-actions .cd-hint strong{color:var(--t2);}
+
+/* ── commit row ── */
+.commit-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 20px;border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:var(--text-meta);}
+.commit-row .commit-sha{color:var(--accent);flex-shrink:0;}
+.commit-row .commit-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);}
+.commit-row .commit-author{color:var(--t3);flex-shrink:0;}
+
+/* ── completed view ── */
+.completed-view{padding:24px 20px;text-align:center;}
+.completed-view .cv-icon{width:32px;height:32px;border-radius:50%;background:var(--ok);opacity:0.15;margin:0 auto 16px;}
+.completed-view h2{font-family:var(--font-serif);font-size:var(--text-hero);color:var(--t1);margin-bottom:8px;}
+.completed-view p{font-size:var(--text-body);color:var(--t2);max-width:420px;margin:0 auto 20px;}
+.completed-view .cv-meta{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+
+/* ── export bar ── */
+.export-bar{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 20px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;background:var(--chrome);}
+.export-bar .eb-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);text-transform:uppercase;letter-spacing:0.5px;margin-right:auto;}
+.export-btn{height:28px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.export-btn:hover{border-color:var(--accent);color:var(--accent);}
+.export-btn svg{width:13px;height:13px;}
+/* what the buttons just did, said in place rather than in a toast: v3 addition */
+.export-note{width:100%;font-family:var(--font-mono);font-size:11px;color:var(--t3);line-height:1.5;}
+.export-note.failed{color:var(--fail);}
+
+/* ═══ MERGE QUEUE RAIL ═══ */
+.merge-queue-rail{width:var(--mq-rail-w);flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--hairline);background:var(--chrome);}
+.merge-queue-rail-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.merge-queue-rail-header .mq-title{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.merge-queue-rail-header .mq-count{font-family:var(--font-mono);font-size:10px;color:var(--accent);background:var(--accent-surface);padding:1px 7px;border-radius:var(--r-chip);flex-shrink:0;}
+.merge-queue-rail-header .mq-select-all{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--t3);cursor:pointer;transition:color .12s;display:flex;align-items:center;gap:5px;flex-shrink:0;}
+.merge-queue-rail-header .mq-select-all:hover{color:var(--t2);}
+.mq-checkbox{width:13px;height:13px;border:1px solid var(--hairline-2);border-radius:3px;background:var(--canvas);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:border-color .15s,background .15s;}
+.mq-checkbox.checked{background:var(--accent);border-color:var(--accent);}
+.mq-checkbox.checked::after{content:"✓";font-size:9px;color:var(--on-accent);font-weight:700;}
+.mq-subheader{padding:10px 16px 6px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--hairline);}
+.merge-queue-list{flex:1;overflow-y:auto;}
+.merge-queue-row{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;padding:10px 16px;border-bottom:1px solid var(--hairline);transition:background .12s;cursor:pointer;position:relative;}
+.merge-queue-row:hover{background:var(--row-hover);}
+.merge-queue-row.selected{background:var(--row-active);}
+.merge-queue-row.highlighted{background:var(--accent-surface);box-shadow:inset 3px 0 0 var(--accent);}
+.merge-queue-row.highlighted.selected{background:var(--accent-surface);}
+.merge-queue-row.selected::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.merge-queue-row .mq-row-line1{display:flex;align-items:center;gap:8px;}
+.merge-queue-row.selected .mq-checkbox{background:var(--accent);border-color:var(--accent);}
+.merge-queue-row.selected .mq-checkbox::after{content:"✓";font-size:9px;color:var(--on-accent);font-weight:700;}
+.merge-queue-row .mq-row-id{font-family:var(--font-mono);font-size:10px;color:var(--accent);flex-shrink:0;}
+.merge-queue-row .mq-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-body);color:var(--t1);}
+.merge-queue-row .mq-row-line2{display:flex;align-items:center;gap:8px;padding-left:21px;font-family:var(--font-mono);font-size:10px;color:var(--t3);}
+.merge-queue-row .mq-row-lane{color:var(--t3);flex-shrink:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.merge-queue-row .mq-row-files{color:var(--t4);flex-shrink:0;}
+/* the cut, named on the row that holds it: v3 runs addition (the mock's
+   checkboxes were an any-subset basket; this line is what makes the prefix
+   readable as a cut point) */
+.merge-queue-row .mq-row-cutmark{padding-left:21px;font-family:var(--font-mono);font-size:10px;color:var(--accent);line-height:1.5;white-space:normal;}
+/* the report's own ## Gaps - what the record could not confirm, said out loud
+   in the rail rather than summarised away */
+.mq-gaps{padding:10px 16px;font-family:var(--font-mono);font-size:10px;color:var(--warn);line-height:1.5;border-bottom:1px solid var(--hairline);}
+.mq-gaps .mq-gap-list{margin-top:6px;display:flex;flex-direction:column;gap:4px;color:var(--t3);list-style:none;padding-left:0;}
+.mq-gaps .mq-gap-list li{padding-left:10px;position:relative;overflow-wrap:anywhere;}
+.mq-gaps .mq-gap-list li::before{content:"·";position:absolute;left:0;color:var(--warn);}
+.merge-queue-action{padding:12px 16px;flex-shrink:0;border-top:1px solid var(--hairline-2);display:flex;flex-direction:column;gap:8px;}
+.merge-queue-action .mq-bulk-btn{width:100%;height:38px;font-size:var(--text-body);color:var(--on-accent);background:var(--accent);border-radius:var(--r-control);font-weight:600;transition:opacity .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.merge-queue-action .mq-bulk-btn:hover{opacity:0.88;}
+.merge-queue-action .mq-bulk-btn:disabled{background:var(--hairline-2);color:var(--t3);cursor:not-allowed;opacity:1;}
+.merge-queue-action .mq-bulk-btn .mq-btn-count{background:rgba(0,0,0,0.2);padding:1px 7px;border-radius:var(--r-chip);font-family:var(--font-mono);font-size:10px;}
+.merge-queue-action .mq-hint{font-family:var(--font-mono);font-size:10px;color:var(--t4);text-align:center;line-height:1.4;}
+.merge-queue-empty{padding:40px 24px;text-align:center;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);line-height:1.6;}
+.merge-queue-empty .mq-empty-icon{width:32px;height:32px;border-radius:50%;border:1px dashed var(--hairline-2);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:var(--t4);font-size:16px;}
+/* the report's own refusal, in the rail where the cards would have been:
+   v3 runs addition */
+.merge-queue-empty .mq-empty-reason{margin-top:10px;color:var(--fail);text-align:left;overflow-wrap:anywhere;}
+
+/* ── the ship confirm modal (v3 runs addition: the mock merged on one click) ── */
+.ship-modal{width:720px;max-width:92vw;max-height:86vh;overflow:hidden;}
+.ship-modal .modal-body{overflow-y:auto;min-height:0;}
+.ship-what{display:flex;flex-direction:column;gap:6px;font-size:var(--text-body);color:var(--t2);line-height:1.6;}
+.ship-what .ship-range{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);overflow-wrap:anywhere;}
+.ship-card-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);}
+.ship-card-list .ship-card-row{display:flex;align-items:baseline;gap:10px;padding:7px 12px;border-bottom:1px solid var(--hairline);font-size:var(--text-meta);color:var(--t2);}
+.ship-card-list .ship-card-row:last-child{border-bottom:none;}
+.ship-card-list .ship-card-row .scr-name{font-family:var(--font-mono);font-size:11px;color:var(--accent);flex-shrink:0;}
+.ship-card-list .ship-card-row .scr-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ship-message{font-family:var(--font-mono);font-size:11px;line-height:1.6;color:var(--t2);background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-chip);padding:12px 14px;max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;}
+.ship-result{display:flex;flex-direction:column;gap:10px;}
+.ship-result-line{font-size:var(--text-body);color:var(--t2);line-height:1.6;overflow-wrap:anywhere;}
+/* not scoped to .ship-result on purpose: a REFUSED ship prints this same line
+   in the confirm body, where there is no result to be inside of */
+.ship-result-detail{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);line-height:1.6;overflow-wrap:anywhere;}
+.ship-result-detail.failed{color:var(--fail);}
+
+@media(max-width:1200px){.merge-queue-rail{width:260px;}}
+@media(max-width:1000px){.merge-queue-rail{width:220px;}}
+@media(max-width:920px){.merge-queue-rail{display:none;}}
+@media(max-width:700px){.run-list-col{width:220px;}.beat-rail .beat-label{display:none;}}

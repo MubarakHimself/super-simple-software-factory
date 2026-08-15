@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDL Factory — UI Export Packet</title>
+<style>
+:root {
+  --canvas:#141311;--chrome:#1a1816;--raised:#201e1b;--overlay:#26231f;
+  --hairline:#2a2724;--hairline-2:#36322e;
+  --t1:#ede9e2;--t2:#9e968a;--t3:#645c52;--t4:#3a352f;
+  --accent:#e0a64a;--accent-dim:#4a3820;--accent-surface:rgba(224,166,74,.08);
+  --ok:#6dbb6e;--run:#6ba4e8;
+  --font-serif:"Iowan Old Style","Charter","Georgia",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{min-height:100%;background:var(--canvas);color:var(--t1);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.wrap{max-width:920px;margin:0 auto;padding:64px 32px 96px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:48px}
+.brand .logo{width:20px;height:20px;border:1.5px solid var(--accent);border-radius:4px;position:relative}
+.brand .logo::after{content:"";position:absolute;inset:4px;background:var(--accent);border-radius:1px;opacity:.6}
+.brand h1{font-family:var(--font-serif);font-size:28px;font-weight:600;letter-spacing:-.3px}
+.brand .tag{font-size:13px;color:var(--t3);font-family:var(--font-mono);margin-left:8px}
+
+.intro{font-size:16px;color:var(--t2);line-height:1.7;margin-bottom:48px;max-width:640px}
+.intro strong{color:var(--t1);font-weight:600}
+.intro em{font-family:var(--font-serif);font-style:italic;color:var(--t1)}
+
+.section-label{font-family:var(--font-mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t3);margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--hairline)}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:48px}
+@media(max-width:680px){.grid{grid-template-columns:1fr}}
+
+.card{display:block;padding:24px;border:1px solid var(--hairline);border-radius:10px;background:var(--chrome);transition:border-color .15s,background .15s,transform .15s}
+.card:hover{border-color:var(--accent);background:var(--raised);transform:translateY(-2px)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.card-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--accent)}
+.card-dot.run{background:var(--run)}
+.card-dot.ok{background:var(--ok)}
+.card-title{font-family:var(--font-serif);font-size:19px;font-weight:600;letter-spacing:-.2px}
+.card-meta{font-family:var(--font-mono);font-size:12px;color:var(--t3);margin-bottom:10px}
+.card-desc{font-size:14px;color:var(--t2);line-height:1.6}
+.card-file{font-family:var(--font-mono);font-size:11px;color:var(--t4);margin-top:14px;padding-top:12px;border-top:1px solid var(--hairline)}
+
+.tokens{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px}
+@media(max-width:680px){.tokens{grid-template-columns:repeat(3,1fr)}}
+.swatch{height:48px;border-radius:6px;border:1px solid var(--hairline);position:relative;overflow:hidden}
+.swatch::after{content:attr(data-label);position:absolute;bottom:4px;left:6px;font-family:var(--font-mono);font-size:9px;color:var(--t2);background:rgba(0,0,0,.5);padding:1px 4px;border-radius:2px}
+
+.notes{font-size:13px;color:var(--t3);line-height:1.7;font-family:var(--font-mono)}
+.notes li{margin-bottom:6px;list-style:none;padding-left:16px;position:relative}
+.notes li::before{content:"—";position:absolute;left:0;color:var(--t4)}
+
+.footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--hairline);font-family:var(--font-mono);font-size:11px;color:var(--t4);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo"></div>
+    <h1>SDL Factory</h1>
+    <span class="tag">ui export packet · v3</span>
+  </div>
+
+  <p class="intro">
+    <strong>Five surfaces</strong>, one design system — <em>Editorial Instrument</em>.
+    Warm dark canvas, amber accent, serif display + sans body + mono data.
+    All pages share a multi-project shell with project switcher, factory status footer,
+    and cross-navigation. Open any card below to view the live prototype.
+  </p>
+
+  <div class="section-label">Surfaces</div>
+  <div class="grid">
+    <a class="card" href="home-v2.html" data-od-id="export-home">
+      <div class="card-head"><span class="card-dot ok"></span><span class="card-title">Home</span></div>
+      <div class="card-meta">home-v2.html · 24 KB</div>
+      <p class="card-desc">Morning brief — dynamic greeting, run summaries grouped by status, one primary CTA (Review gate → Runs). The "is this what we agreed?" entry point.</p>
+      <div class="card-file">→ home-v2.html</div>
+    </a>
+
+    <a class="card" href="board-v3.html" data-od-id="export-board">
+      <div class="card-head"><span class="card-dot run"></span><span class="card-title">Board</span></div>
+      <div class="card-meta">board-v3.html · 32 KB</div>
+      <p class="card-desc">Kanban — 3 columns (Ready / Running / Done). Auto-pick indicator, lane assignment, machine chips on running cards, card inspector rail.</p>
+      <div class="card-file">→ board-v3.html</div>
+    </a>
+
+    <a class="card" href="runs-gate-v3.html" data-od-id="export-runs">
+      <div class="card-head"><span class="card-dot run"></span><span class="card-title">Runs</span></div>
+      <div class="card-meta">runs-gate-v3.html · 68 KB</div>
+      <p class="card-desc">Three connected columns — run list (left), live detail pane (center), merge queue rail (right). Autonomous factory: cooldown auto-handled, Gate 1 removed, Gate 2 = bulk merge to main.</p>
+      <div class="card-file">→ runs-gate-v3.html</div>
+    </a>
+
+    <a class="card" href="docs-v3.html" data-od-id="export-docs">
+      <div class="card-head"><span class="card-dot"></span><span class="card-title">Docs</span></div>
+      <div class="card-meta">docs-v3.html · 32 KB</div>
+      <p class="card-desc">Per-project file tree sidebar + serif reader pane. Markdown rendered with code blocks, blockquotes, inline code in accent. No dead space — tree fills sidebar height.</p>
+      <div class="card-file">→ docs-v3.html</div>
+    </a>
+
+    <a class="card" href="settings-v3.html" data-od-id="export-settings">
+      <div class="card-head"><span class="card-dot"></span><span class="card-title">Settings</span></div>
+      <div class="card-meta">settings-v3.html · 82 KB</div>
+      <p class="card-desc">Split + search hybrid. Per-project: Roster + Lanes (fill width). Factory defaults: Providers + Machines + Appearance. Cross-family review auto-detection, add-project modal, auto-save.</p>
+      <div class="card-file">→ settings-v3.html</div>
+    </a>
+  </div>
+
+  <div class="section-label">Design System — Editorial Instrument</div>
+  <div class="tokens">
+    <div class="swatch" data-label="canvas" style="background:#141311"></div>
+    <div class="swatch" data-label="chrome" style="background:#1a1816"></div>
+    <div class="swatch" data-label="raised" style="background:#201e1b"></div>
+    <div class="swatch" data-label="accent" style="background:#e0a64a"></div>
+    <div class="swatch" data-label="ok" style="background:#6dbb6e"></div>
+    <div class="swatch" data-label="run" style="background:#6ba4e8"></div>
+  </div>
+  <ul class="notes">
+    <li>Display: Iowan Old Style / Charter / Georgia (serif)</li>
+    <li>Body: system-ui / -apple-system / Segoe UI (sans)</li>
+    <li>Data: Cascadia Mono / SF Mono / Consolas (mono)</li>
+    <li>One accent (#e0a64a amber), used for active state, focus ring, inline code</li>
+    <li>Status triple: dot + bold id + plain sentence (never bare enums)</li>
+    <li>Factory is autonomous end-to-end — only human touchpoint is merge to main</li>
+  </ul>
+
+  <div class="footer">
+    <span>SDL Factory · UI v3 · Editorial Instrument direction</span>
+    <span>5 files · 239 KB total · self-contained HTML</span>
+  </div>
+</div>
+</body>
+</html>

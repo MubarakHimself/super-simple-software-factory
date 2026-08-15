@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDL Factory — Docs</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   DOCS v3 — PER-PROJECT READER
+   File tree on the left fills the sidebar height (no dead space). Reader
+   pane on the right with serif headings, code blocks, blockquotes.
+   New shell: project switcher, linked nav, no Terminal, factory status footer.
+   Editorial Instrument skin. Nav: Home/Board/Runs/Docs/Settings.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --canvas:#141311; --chrome:#1a1816; --raised:#201e1b; --overlay:#26231f;
+  --hairline:#2a2724; --hairline-2:#36322e;
+  --t1:#ede9e2; --t2:#9e968a; --t3:#645c52; --t4:#3a352f;
+  --accent:#e0a64a; --accent-dim:#4a3820; --accent-surface:rgba(224,166,74,0.08); --on-accent:#1a1408;
+  --run:#6ba4e8; --ok:#6dbb6e; --fail:#e06464; --warn:#d9a441; --neutral:#7d7568;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,166,74,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.5);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --text-meta:12px; --text-mono:13px; --text-body:14px; --text-head:16px; --text-hero:22px;
+  --r-chip:5px; --r-control:7px;
+  --sidebar-w:240px; --tree-w:260px;
+  --row-h:32px; --topbar-h:48px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+*{border-color:var(--hairline);}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--canvas);color:var(--t1);font-family:var(--font-sans);font-size:var(--text-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+::selection{background:var(--accent-surface);color:var(--t1);}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+a{color:inherit;text-decoration:none;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--hairline-2);border-radius:4px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.fade-in{animation:fadeIn .2s ease;}
+
+.app{display:flex;height:100vh;width:100vw;overflow:hidden;background:var(--canvas);}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.project-switcher{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .15s;position:relative;}
+.project-switcher:hover{background:var(--row-hover);}
+.project-switcher .proj-dot{width:10px;height:10px;border-radius:2px;background:var(--accent);flex-shrink:0;opacity:0.8;}
+.project-switcher .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);letter-spacing:-0.2px;}
+.project-switcher .proj-chev{width:14px;height:14px;color:var(--t3);flex-shrink:0;transition:transform .2s;}
+.project-switcher.open .proj-chev{transform:rotate(180deg);}
+.project-menu{position:absolute;top:100%;left:0;right:0;background:var(--overlay);border:1px solid var(--hairline-2);border-top:none;border-radius:0 0 var(--r-control) var(--r-control);box-shadow:var(--shadow);z-index:100;display:none;max-height:320px;overflow-y:auto;}
+.project-switcher.open .project-menu{display:block;}
+.project-menu-item{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;font-size:var(--text-body);color:var(--t2);transition:background .12s,color .12s;}
+.project-menu-item:hover{background:var(--row-hover);color:var(--t1);}
+.project-menu-item.active{color:var(--t1);}
+.project-menu-item .pm-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.project-menu-sep{height:1px;background:var(--hairline);margin:4px 0;}
+.project-menu-item.add{color:var(--accent);}
+.sidebar-search{margin:12px 12px 8px;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:border-color .15s,color .15s;}
+.sidebar-search:hover{border-color:var(--t3);color:var(--t2);}
+.sidebar-search svg{width:13px;height:13px;flex-shrink:0;}
+.sidebar-nav{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .15s,color .15s;position:relative;cursor:pointer;}
+.nav-item:hover{background:var(--row-hover);color:var(--t1);}
+.nav-item.active{background:var(--row-active);color:var(--t1);}
+.nav-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.nav-icon{width:14px;height:14px;flex-shrink:0;color:var(--t3);}
+.nav-item.active .nav-icon{color:var(--accent);}
+.nav-item .nav-count{margin-left:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;}
+.nav-item.active .nav-count{color:var(--accent);}
+.factory-status{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 14px;display:flex;flex-direction:column;gap:6px;}
+.fs-line{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);}
+.fs-line .fs-label{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--t4);}
+.fs-line .fs-val{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+.fs-pulse{display:flex;align-items:center;gap:6px;}
+.fs-pulse .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.fs-pulse .fs-text{font-size:var(--text-meta);color:var(--t2);}
+.fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
+.fs-help:hover{color:var(--t2);}
+.fs-help svg{width:13px;height:13px;flex-shrink:0;}
+.main-col{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:var(--text-body);}
+.breadcrumb .crumb-dim{color:var(--t2);font-family:var(--font-serif);font-style:italic;}
+.breadcrumb .crumb-sep{color:var(--t4);}
+.breadcrumb .crumb-here{color:var(--t1);font-weight:600;}
+.breadcrumb .crumb-project{cursor:pointer;position:relative;display:flex;align-items:center;gap:6px;padding:2px 8px;margin:-2px -8px;border-radius:var(--r-chip);transition:background .12s;}
+.breadcrumb .crumb-project:hover{background:var(--row-hover);}
+.breadcrumb .crumb-project .cp-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+.breadcrumb .crumb-project .cp-chev{width:11px;height:11px;color:var(--t3);transition:transform .2s;}
+.breadcrumb .crumb-project.open .cp-chev{transform:rotate(180deg);}
+.breadcrumb .crumb-dropdown{position:absolute;top:calc(100% + 4px);left:0;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);z-index:200;min-width:180px;display:none;}
+.breadcrumb .crumb-project.open .crumb-dropdown{display:block;}
+.breadcrumb .crumb-dropdown-item{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);transition:background .12s,color .12s;cursor:pointer;}
+.breadcrumb .crumb-dropdown-item:hover{background:var(--row-hover);color:var(--t1);}
+.breadcrumb .crumb-dropdown-item.active{color:var(--t1);}
+.breadcrumb .crumb-dropdown-item .cpd-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.topbar-btn{height:28px;padding:0 14px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.topbar-btn:hover{border-color:var(--accent);color:var(--accent);}
+.topbar-btn svg{width:13px;height:13px;}
+.surface{flex:1;min-height:0;display:flex;overflow:hidden;position:relative;}
+
+/* ═══ FILE TREE ═══ */
+.tree-col{width:var(--tree-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.tree-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.tree-header h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.tree-header .tree-scope{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);margin-left:auto;}
+.tree-search{padding:8px 12px;flex-shrink:0;}
+.tree-search-input{width:100%;height:28px;padding:0 10px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t1);font-size:var(--text-meta);font-family:inherit;transition:border-color .15s;}
+.tree-search-input:focus{outline:none;border-color:var(--accent);}
+.tree-search-input::placeholder{color:var(--t3);}
+.tree-body{flex:1;overflow-y:auto;padding:8px 8px 20px;}
+.tree-folder{margin-bottom:2px;}
+.tree-folder-header{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-meta);cursor:pointer;transition:background .12s,color .12s;}
+.tree-folder-header:hover{background:var(--row-hover);color:var(--t1);}
+.tree-folder-header .chev{width:10px;height:10px;transition:transform .2s;flex-shrink:0;color:var(--t3);}
+.tree-folder-header.open .chev{transform:rotate(90deg);}
+.tree-folder-header .folder-icon{width:13px;height:13px;color:var(--t3);flex-shrink:0;}
+.tree-folder-header .folder-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tree-files{padding-left:18px;display:flex;flex-direction:column;gap:1px;}
+.tree-file{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-meta);cursor:pointer;transition:background .12s,color .12s;position:relative;}
+.tree-file:hover{background:var(--row-hover);color:var(--t1);}
+.tree-file.active{background:var(--row-active);color:var(--t1);}
+.tree-file.active::before{content:"";position:absolute;left:-10px;top:6px;bottom:6px;width:2px;background:var(--accent);border-radius:1px;}
+.tree-file .file-icon{width:12px;height:12px;color:var(--t4);flex-shrink:0;}
+.tree-file .file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tree-file .file-tag{font-family:var(--font-mono);font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;}
+
+/* ═══ READER PANE ═══ */
+.reader-pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+.reader-scroll{flex:1;overflow-y:auto;}
+.reader-content{max-width:720px;margin:0 auto;padding:40px 40px 80px;}
+.reader-content h1{font-family:var(--font-serif);font-size:28px;font-weight:600;color:var(--t1);letter-spacing:-0.4px;line-height:1.3;margin-bottom:8px;}
+.reader-content .doc-meta{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-bottom:32px;padding-bottom:16px;border-bottom:1px solid var(--hairline);}
+.reader-content h2{font-family:var(--font-serif);font-size:var(--text-hero);font-weight:600;color:var(--t1);margin-top:36px;margin-bottom:12px;letter-spacing:-0.2px;}
+.reader-content h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);margin-top:24px;margin-bottom:10px;}
+.reader-content p{font-size:var(--text-body);color:var(--t2);line-height:1.7;margin-bottom:16px;}
+.reader-content p strong{color:var(--t1);font-weight:500;}
+.reader-content p em{font-family:var(--font-serif);font-style:italic;color:var(--t1);}
+.reader-content code{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--accent);background:var(--raised);padding:1px 6px;border-radius:3px;}
+.reader-content pre{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);background:var(--raised);padding:16px 20px;border-radius:var(--r-control);border:1px solid var(--hairline);overflow-x:auto;line-height:1.6;margin-bottom:16px;}
+.reader-content pre code{background:none;color:var(--t2);padding:0;font-size:inherit;}
+.reader-content blockquote{border-left:2px solid var(--accent);padding-left:16px;margin:0 0 16px 0;font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);}
+.reader-content ul{margin-bottom:16px;padding-left:20px;}
+.reader-content li{font-size:var(--text-body);color:var(--t2);line-height:1.7;margin-bottom:4px;}
+
+@media(max-width:920px){.sidebar{display:none;}}
+@media(max-width:768px){.tree-col{width:200px;}.reader-content{padding:24px 20px 60px;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar" data-od-id="sidebar">
+    <div class="project-switcher" data-od-id="project-switcher" onclick="this.classList.toggle('open')">
+      <div class="proj-dot"></div>
+      <span class="proj-name">Project 1</span>
+      <svg class="proj-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+      <div class="project-menu">
+        <div class="project-menu-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="pm-dot" style="background:var(--accent)"></span>Project 1</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="pm-dot" style="background:var(--run)"></span>Project 2</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="pm-dot" style="background:var(--ok)"></span>Project 3</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="pm-dot" style="background:var(--neutral)"></span>Project 4</div>
+        <div class="project-menu-sep"></div>
+        <div class="project-menu-item add" onclick="event.stopPropagation();window.location.href='settings-v3.html'"><span class="pm-dot" style="background:transparent;border:1px dashed var(--accent)"></span>Add project…</div>
+      </div>
+    </div>
+    <div class="sidebar-search" data-od-id="sidebar-search">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"/><path d="M9.5 9.5L12 12" stroke-linecap="round"/></svg>
+      <span>Search…</span>
+    </div>
+    <nav class="sidebar-nav" data-od-id="sidebar-nav">
+      <a class="nav-item" data-od-id="nav-home" href="home-v2.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6l5-4 5 4v6H2z" stroke-linejoin="round"/><path d="M5 12V8h4v4"/></svg><span>Home</span></a>
+      <a class="nav-item" data-od-id="nav-board" href="board-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="3" height="10" rx="1"/><rect x="6" y="2" width="3" height="7" rx="1"/><rect x="10" y="2" width="2" height="5" rx="1"/></svg><span>Board</span><span class="nav-count">12</span></a>
+      <a class="nav-item" data-od-id="nav-runs" href="runs-gate-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7h3l2-4 3 8 2-4h2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Runs</span><span class="nav-count">9</span></a>
+      <a class="nav-item active" data-od-id="nav-docs" href="docs-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h6l2 2v8H3z" stroke-linejoin="round"/><path d="M5 6h4M5 9h4"/></svg><span>Docs</span></a>
+      <a class="nav-item" data-od-id="nav-settings" href="settings-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.4 1.4M10.1 10.1l1.4 1.4M2.5 11.5l1.4-1.4M10.1 3.9l1.4-1.4" stroke-linecap="round"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="factory-status" data-od-id="factory-status">
+      <div class="fs-pulse">
+        <span class="dot"></span>
+        <span class="fs-text">Factory running · 3 active lanes</span>
+      </div>
+      <div class="fs-line"><span class="fs-label">Queue</span><span class="fs-val">2 ready · 3 running</span></div>
+      <div class="fs-line"><span class="fs-label">Uptime</span><span class="fs-val">14h 22m</span></div>
+      <div class="fs-help" data-od-id="nav-help"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5"/><path d="M5.5 5.5a1.5 1.5 0 0 1 3 0c0 1-.5 1.5-1 2v1" stroke-linecap="round"/><circle cx="7" cy="10" r="0.5" fill="currentColor"/></svg><span>Help & shortcuts</span></div>
+    </div>
+  </aside>
+
+  <div class="main-col">
+    <div class="topbar" data-od-id="topbar">
+      <div class="breadcrumb" data-od-id="breadcrumb">
+        <span class="crumb-dim crumb-project" data-od-id="crumb-project" onclick="this.classList.toggle('open')">
+          <span class="cp-dot" style="background:var(--accent)"></span>
+          Project 1
+          <svg class="cp-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+          <div class="crumb-dropdown" data-od-id="crumb-dropdown">
+            <div class="crumb-dropdown-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="cpd-dot" style="background:var(--accent)"></span>Project 1</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="cpd-dot" style="background:var(--run)"></span>Project 2</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="cpd-dot" style="background:var(--ok)"></span>Project 3</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="cpd-dot" style="background:var(--neutral)"></span>Project 4</div>
+          </div>
+        </span>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-here">Docs</span>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-btn" data-od-id="topbar-sync">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 3a5 5 0 1 0 1.5 4" stroke-linecap="round"/><path d="M11 1v3h-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync
+        </button>
+      </div>
+    </div>
+
+    <div class="surface" data-od-id="surface">
+
+      <!-- ═══ FILE TREE ═══ -->
+      <div class="tree-col" data-od-id="tree-col">
+        <div class="tree-header" data-od-id="tree-header">
+          <h3>Files</h3>
+          <span class="tree-scope">Project 1</span>
+        </div>
+        <div class="tree-search" data-od-id="tree-search">
+          <input class="tree-search-input" type="text" placeholder="Filter files…" data-od-id="tree-search-input">
+        </div>
+        <div class="tree-body" data-od-id="tree-body">
+          <div class="tree-folder" data-od-id="folder-adws">
+            <div class="tree-folder-header open" data-od-id="folder-adws-header" onclick="this.classList.toggle('open');this.nextElementSibling.style.display=this.classList.contains('open')?'flex':'none'">
+              <svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4l3 3 3-3" stroke-linecap="round"/></svg>
+              <svg class="folder-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4l1 1h5v6H2z" stroke-linejoin="round"/></svg>
+              <span class="folder-name">adws/</span>
+            </div>
+            <div class="tree-files" style="display:flex">
+              <div class="tree-file active" data-od-id="file-lane-balancer"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">lane_balancer.py</span><span class="file-tag">md</span></div>
+              <div class="tree-file" data-od-id="file-intake-validator"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">intake_validator.py</span></div>
+              <div class="tree-file" data-od-id="file-config"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">config.py</span></div>
+              <div class="tree-file" data-od-id="file-runner"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">runner.py</span></div>
+              <div class="tree-file" data-od-id="file-scout"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">scout.py</span></div>
+            </div>
+          </div>
+          <div class="tree-folder" data-od-id="folder-tests">
+            <div class="tree-folder-header" data-od-id="folder-tests-header" onclick="this.classList.toggle('open');this.nextElementSibling.style.display=this.classList.contains('open')?'flex':'none'">
+              <svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4l3 3 3-3" stroke-linecap="round"/></svg>
+              <svg class="folder-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4l1 1h5v6H2z" stroke-linejoin="round"/></svg>
+              <span class="folder-name">tests/</span>
+            </div>
+            <div class="tree-files" style="display:none">
+              <div class="tree-file" data-od-id="file-test-intake"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">test_intake.py</span></div>
+              <div class="tree-file" data-od-id="file-test-lane"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">test_lane_balancer.py</span></div>
+              <div class="tree-file" data-od-id="file-test-config"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">test_config.py</span></div>
+            </div>
+          </div>
+          <div class="tree-folder" data-od-id="folder-docs">
+            <div class="tree-folder-header open" data-od-id="folder-docs-header" onclick="this.classList.toggle('open');this.nextElementSibling.style.display=this.classList.contains('open')?'flex':'none'">
+              <svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4l3 3 3-3" stroke-linecap="round"/></svg>
+              <svg class="folder-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4l1 1h5v6H2z" stroke-linejoin="round"/></svg>
+              <span class="folder-name">docs/</span>
+            </div>
+            <div class="tree-files" style="display:flex">
+              <div class="tree-file" data-od-id="file-intake-doc"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">intake-validation.md</span></div>
+              <div class="tree-file" data-od-id="file-architecture"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">architecture.md</span></div>
+              <div class="tree-file" data-od-id="file-gates"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">gates.md</span></div>
+            </div>
+          </div>
+          <div class="tree-folder" data-od-id="folder-queue">
+            <div class="tree-folder-header" data-od-id="folder-queue-header" onclick="this.classList.toggle('open');this.nextElementSibling.style.display=this.classList.contains('open')?'flex':'none'">
+              <svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4l3 3 3-3" stroke-linecap="round"/></svg>
+              <svg class="folder-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4l1 1h5v6H2z" stroke-linejoin="round"/></svg>
+              <span class="folder-name">queue/</span>
+            </div>
+            <div class="tree-files" style="display:none">
+              <div class="tree-file" data-od-id="file-queue-048"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">048-retry-budget.md</span></div>
+              <div class="tree-file" data-od-id="file-queue-049"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">049-queue-schema.md</span></div>
+              <div class="tree-file" data-od-id="file-queue-050"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">050-skylos-range.md</span></div>
+            </div>
+          </div>
+          <div class="tree-file" data-od-id="file-readme" style="margin-top:4px"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">README.md</span></div>
+          <div class="tree-file" data-od-id="file-pyproject"><svg class="file-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2h6l2 2v6H3z" stroke-linejoin="round"/></svg><span class="file-name">pyproject.toml</span></div>
+        </div>
+      </div>
+
+      <!-- ═══ READER PANE ═══ -->
+      <div class="reader-pane" data-od-id="reader-pane">
+        <div class="reader-scroll" data-od-id="reader-scroll">
+          <div class="reader-content fade-in" data-od-id="reader-content">
+            <h1>Lane Balancer</h1>
+            <div class="doc-meta">adws/lane_balancer.py · 247 lines · last modified 2h ago by Grok 4.5</div>
+
+            <p>The lane balancer manages concurrent work lanes, each backed by a different model provider. It picks work from the <code>Ready</code> queue, assigns it to an available lane, and handles retry budgets with exponential backoff.</p>
+
+            <h2>Architecture</h2>
+            <p>The balancer runs as a single async loop. Each lane is a <strong>state machine</strong> with four states: <em>idle</em>, <em>scouting</em>, <em>building</em>, and <em>reviewing</em>. The balancer never dispatches work to a lane that's already active — it waits for a lane to return to <em>idle</em> before assigning the next unit.</p>
+
+            <blockquote>The factory auto-picks from Ready. There is no dispatch button — the balancer is always watching.</blockquote>
+
+            <h2>Retry budget</h2>
+            <p>Each lane has its own retry budget. When a unit fails, the balancer waits with exponential backoff (base 2s, factor 2, jitter ±20%) before retrying. After 3 consecutive failures, the lane <strong>parks</strong> for 5 minutes and the operator is notified in the morning brief.</p>
+
+            <pre><code>class RetryBudget:
+    max_retries: int = 3
+    base_delay: float = 2.0
+    factor: float = 2.0
+    jitter: float = 0.20
+    park_duration: float = 300  # 5 minutes</code></pre>
+
+            <h2>Cross-family review</h2>
+            <p>When a unit reaches the review phase, the balancer assigns it to a reviewer from a <strong>different model family</strong> than the builder. This is enforced in <code>select_reviewer()</code>:</p>
+
+            <pre><code>def select_reviewer(builder_lane: Lane) -> Lane:
+    candidates = [l for l in lanes
+                  if l.role == "reviewer"
+                  and l.family != builder_lane.family]
+    return min(candidates, key=lambda l: l.queue_depth)</code></pre>
+
+            <h3>Merge queue</h3>
+            <p>After review passes, the unit moves to the <strong>merge queue</strong>. The factory runs autonomously — no human ratification before code exists. The balancer does not merge automatically. It parks passed units in the queue and waits for the operator to bulk-merge in the Runs surface.</p>
+
+            <ul>
+              <li><strong>Autonomous planning</strong> — the planner locks its decision ledger and proceeds to code without human ratification. Cross-family review is enforced before merge.</li>
+              <li><strong>Merge queue</strong> — the only human touchpoint. Passed runs queue up; the operator selects and bulk-merges to main, or parks any that don't match expectations.</li>
+            </ul>
+
+            <h2>Configuration</h2>
+            <p>Lane configuration lives in <code>config.py</code> and can be edited per-project in <strong>Settings → Lanes</strong>. Each lane binds to a model and a role (workhorse or reviewer). The retry budget and max concurrent lanes are also configurable per project.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.tree-file').forEach(function(f) {
+  f.addEventListener('click', function() {
+    document.querySelectorAll('.tree-file').forEach(function(x) { x.classList.remove('active'); });
+    f.classList.add('active');
+    var content = document.querySelector('.reader-content');
+    content.classList.remove('fade-in');
+    void content.offsetWidth;
+    content.classList.add('fade-in');
+  });
+});
+
+function switchProject(el, name, color) {
+  event.stopPropagation();
+  var colorMap = {
+    'var(--accent)':'#e0a64a',
+    'var(--run)':'#6ba4e8',
+    'var(--ok)':'#6dbb6e',
+    'var(--neutral)':'#7d7568'
+  };
+  var hexColor = colorMap[color] || color;
+  document.documentElement.style.setProperty('--accent', hexColor);
+  var crumb = document.querySelector('.crumb-project');
+  if (crumb) {
+    crumb.classList.remove('open');
+    var text = crumb.childNodes[2];
+    if (text) text.textContent = ' ' + name + ' ';
+    var dot = crumb.querySelector('.cp-dot');
+    if (dot) dot.style.background = color;
+  }
+  document.querySelectorAll('.crumb-dropdown-item').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  var projName = document.querySelector('.project-switcher .proj-name');
+  if (projName) projName.textContent = name;
+  var projDot = document.querySelector('.project-switcher .proj-dot');
+  if (projDot) projDot.style.background = color;
+  document.querySelectorAll('.project-menu-item').forEach(function(m){ m.classList.remove('active'); });
+  document.querySelectorAll('.project-menu-item').forEach(function(m){
+    if (m.textContent.trim() === name) m.classList.add('active');
+  });
+  var treeScope = document.querySelector('.tree-scope');
+  if (treeScope) treeScope.textContent = name;
+}
+</script>
+</body>
+</html>

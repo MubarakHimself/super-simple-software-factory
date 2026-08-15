@@ -15,8 +15,10 @@
  */
 import { hostname } from "node:os";
 import { acceptanceRoutes } from "./acceptance.ts";
+import { cardsRoutes } from "./cards.ts";
 import { criteriaRoutes } from "./criteria.ts";
 import { getDocsFile, getDocsSearch, getDocsTree } from "./docs.ts";
+import { factoryRoutes } from "./factory.ts";
 import { getFiles } from "./files.ts";
 import { APP_TOKEN, SELF_ORIGINS, appJson, appSafely, csrfGuard } from "./guard.ts";
 import { initFactory, initGit } from "./init.ts";
@@ -31,6 +33,7 @@ import { getReadiness } from "./readiness.ts";
 import { rosterRoutes } from "./roster.ts";
 import { seenRoutes } from "./seen.ts";
 import { sessionRoutes } from "./sessions/bridge.ts";
+import { shipRoutes } from "./ship.ts";
 import { getSkills } from "./skills.ts";
 import { terminalRoutes } from "./terminals.ts";
 import { worklogRoutes } from "./worklog.ts";
@@ -113,6 +116,21 @@ export const appRoutes = {
   // is operator data; `adws/*.py` is code and no route touches it.
   ...rosterRoutes(APP_TOKEN, SELF_ORIGINS),
   ...seenRoutes(APP_TOKEN, SELF_ORIGINS), // GET previous / POST new snapshot
+
+  // ── the v3 app plane ──────────────────────────────────────────────────
+  // The Board's whole card truth (needs / waiting_on / blocked_reason /
+  // feature / priority + the ready|running|blocked|done|integrated|shipped
+  // lifecycle), beside the v1 `/queue` read rather than replacing it - the
+  // parked v1/v2 SPAs still read that one.
+  ...cardsRoutes,
+  // Health + lanes + provider definitions + machines: everything Settings and
+  // the footer strip read, all derived locally and all honest about what only
+  // a running engine can answer.
+  ...factoryRoutes,
+  // SHIP (J5): the assembled report, and the one guarded squash that moves
+  // `main`. The only write in this app that touches `main`, and the only
+  // place `adws/ship_report.py` is shelled.
+  ...shipRoutes(APP_TOKEN, SELF_ORIGINS),
 
   "/api/app/p/:id/docs/tree": appSafely(getDocsTree),
   "/api/app/p/:id/docs/file": appSafely(getDocsFile),

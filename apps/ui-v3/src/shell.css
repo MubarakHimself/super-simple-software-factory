@@ -1,0 +1,163 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE SHELL — sidebar, topbar, surface frame.
+
+   Ported from docs/design/ui-v3-mocks/home-v2.html, which carries the
+   canonical shell (all five mocks ship the same block byte-for-byte). Rules
+   are copied in the mock's own order and spelling so a diff against the mock
+   stays readable; the only additions are marked "v3 shell addition" and exist
+   because a live app needs a state a static mock never had (a failed read, a
+   sync in flight, an empty surface).
+
+   Class names are the mocks' class names. A Phase 2 builder porting the rest
+   of a surface should keep doing exactly this: copy the mock's rules, keep the
+   mock's names.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── app frame ──────────────────────────────────────────────────────────── */
+.app{display:flex;height:100vh;width:100vw;overflow:hidden;background:var(--canvas);}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+
+/* ── project switcher ───────────────────────────────────────────────────── */
+.project-switcher{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .15s;position:relative;}
+.project-switcher:hover{background:var(--row-hover);}
+.project-switcher .proj-dot{width:10px;height:10px;border-radius:2px;background:var(--accent);flex-shrink:0;opacity:0.8;}
+.project-switcher .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);letter-spacing:-0.2px;text-align:left;}
+.project-switcher .proj-chev{width:14px;height:14px;color:var(--t3);flex-shrink:0;transition:transform .2s;}
+.project-switcher.open .proj-chev{transform:rotate(180deg);}
+.project-menu{position:absolute;top:100%;left:0;right:0;background:var(--overlay);border:1px solid var(--hairline-2);border-top:none;border-radius:0 0 var(--r-control) var(--r-control);box-shadow:var(--shadow);z-index:100;display:none;max-height:320px;overflow-y:auto;}
+.project-switcher.open .project-menu{display:block;}
+.project-menu-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 14px;font-size:var(--text-body);color:var(--t2);transition:background .12s,color .12s;text-align:left;}
+.project-menu-item:hover{background:var(--row-hover);color:var(--t1);}
+.project-menu-item.active{color:var(--t1);}
+.project-menu-item .pm-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.project-menu-sep{height:1px;background:var(--hairline);margin:4px 0;}
+.project-menu-item.add{color:var(--accent);}
+
+/* ── sidebar search (visual only until the search chunk lands) ──────────── */
+.sidebar-search{margin:12px 12px 8px;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:border-color .15s,color .15s;width:calc(100% - 24px);text-align:left;}
+.sidebar-search:hover{border-color:var(--t3);color:var(--t2);}
+.sidebar-search svg{width:13px;height:13px;flex-shrink:0;}
+/* v3 shell addition: the field is drawn but not wired yet, so it is a disabled
+   control rather than a live-looking one that swallows the click. */
+.sidebar-search:disabled{cursor:default;}
+.sidebar-search:disabled:hover{border-color:var(--hairline);color:var(--t3);}
+
+/* ── nav ────────────────────────────────────────────────────────────────── */
+.sidebar-nav{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .15s,color .15s;position:relative;cursor:pointer;}
+.nav-item:hover{background:var(--row-hover);color:var(--t1);}
+.nav-item.active{background:var(--row-active);color:var(--t1);}
+.nav-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.nav-icon{width:14px;height:14px;flex-shrink:0;color:var(--t3);}
+.nav-item.active .nav-icon{color:var(--accent);}
+.nav-item .nav-count{margin-left:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;}
+.nav-item.active .nav-count{color:var(--accent);}
+
+/* ── factory status footer ──────────────────────────────────────────────── */
+.factory-status{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 14px;display:flex;flex-direction:column;gap:6px;}
+.fs-line{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);}
+.fs-line .fs-label{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--t4);}
+.fs-line .fs-val{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* align-items:flex-start rather than the mock's center: a long honest sentence
+   can wrap to two lines here, and the dot belongs beside the first one. */
+.fs-pulse{display:flex;align-items:flex-start;gap:6px;}
+.fs-pulse .dot{margin-top:6px;}
+/* The mock hard-codes this dot to --ok because its factory is always running.
+   Here the tone is the truth of the moment, so the colour comes from <Dot>'s
+   own class and only the geometry stays. */
+.fs-pulse .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.fs-pulse .fs-text{font-size:var(--text-meta);color:var(--t2);}
+.fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
+.fs-help:hover{color:var(--t2);}
+.fs-help svg{width:13px;height:13px;flex-shrink:0;}
+/* v3 shell addition: the line under the pulse. Red when a read failed; muted
+   when it is the server's own sentence about something it cannot know. Both
+   truncate to one line and carry the full text as the row's title. */
+.fs-reason{font-family:var(--font-mono);font-size:11px;color:var(--fail);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fs-reason.muted{color:var(--t4);}
+
+/* ── main column + topbar ───────────────────────────────────────────────── */
+.main-col{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:var(--text-body);}
+.breadcrumb .crumb-dim{color:var(--t2);font-family:var(--font-serif);font-style:italic;}
+.breadcrumb .crumb-sep{color:var(--t4);}
+.breadcrumb .crumb-here{color:var(--t1);font-weight:600;}
+.breadcrumb .crumb-project{cursor:pointer;position:relative;display:flex;align-items:center;gap:6px;padding:2px 8px;margin:-2px -8px;border-radius:var(--r-chip);transition:background .12s;}
+.breadcrumb .crumb-project:hover{background:var(--row-hover);}
+.breadcrumb .crumb-project .cp-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+.breadcrumb .crumb-project .cp-chev{width:11px;height:11px;color:var(--t3);transition:transform .2s;}
+.breadcrumb .crumb-project.open .cp-chev{transform:rotate(180deg);}
+.breadcrumb .crumb-dropdown{position:absolute;top:calc(100% + 4px);left:0;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);z-index:200;min-width:180px;display:none;}
+.breadcrumb .crumb-project.open .crumb-dropdown{display:block;}
+.breadcrumb .crumb-dropdown-item{display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);transition:background .12s,color .12s;cursor:pointer;text-align:left;}
+.breadcrumb .crumb-dropdown-item:hover{background:var(--row-hover);color:var(--t1);}
+.breadcrumb .crumb-dropdown-item.active{color:var(--t1);}
+.breadcrumb .crumb-dropdown-item .cpd-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.topbar-btn{height:28px;padding:0 14px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.topbar-btn:hover{border-color:var(--accent);color:var(--accent);}
+.topbar-btn svg{width:13px;height:13px;}
+.topbar-btn:disabled{cursor:default;color:var(--t3);border-color:var(--hairline);}
+/* v3 shell addition: the Sync button's honest state, in the same mono/t3
+   grammar the Board mock uses for its "Auto-pick from Ready" indicator. */
+.topbar-slot{display:flex;align-items:center;gap:8px;}
+.topbar-note{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);font-family:var(--font-mono);}
+.topbar-note .dot{width:6px;height:6px;border-radius:50%;background:var(--t3);flex-shrink:0;}
+.topbar-note.failed{color:var(--fail);}
+.topbar-note.failed .dot{background:var(--fail);}
+.surface{flex:1;min-height:0;display:flex;overflow:hidden;position:relative;}
+
+/* ── status dot (the design system's status triple) ─────────────────────── */
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block;background:var(--neutral);}
+.dot.run{background:var(--run);}
+.dot.ok{background:var(--ok);}
+.dot.fail{background:var(--fail);}
+.dot.warn{background:var(--warn);}
+.dot.accent{background:var(--accent);}
+.dot.neutral{background:var(--neutral);}
+.dot.idle{background:transparent;border:1px solid var(--t3);}
+.status-triple{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:var(--text-body);}
+.status-triple .st-dot{position:relative;top:-1px;}
+.status-triple .st-id{font-weight:600;color:var(--t1);flex-shrink:0;}
+.status-triple .st-id.mono{font-family:var(--font-mono);font-size:var(--text-mono);}
+.status-triple .st-sentence{color:var(--t2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* ── empty state (v3 shell addition) ────────────────────────────────────── */
+/* Text density is a requirement, not a preference: heading, one sentence, at
+   most one action. Anything longer starts to read like mock copy. */
+.empty-state{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:40px 32px;text-align:center;}
+.empty-state h1{font-family:var(--font-serif);font-size:var(--text-hero);font-weight:600;color:var(--t1);letter-spacing:-0.3px;}
+.empty-state p{max-width:56ch;font-size:var(--text-body);color:var(--t2);line-height:1.6;}
+.empty-state .es-note{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);}
+.empty-state .es-action{margin-top:4px;height:32px;padding:0 16px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;}
+.empty-state .es-action:hover{border-color:var(--accent);color:var(--accent);}
+.read-failure{display:flex;align-items:baseline;gap:8px;padding:4px 12px;font-size:var(--text-meta);color:var(--t3);}
+.read-failure .rf-error{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--fail);min-width:0;overflow:hidden;text-overflow:ellipsis;}
+
+/* ── modal (ported from settings-v3.html's add-project modal) ───────────── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(2px);}
+.modal{width:440px;max-width:90vw;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);display:flex;flex-direction:column;}
+.modal-header{padding:18px 20px 14px;border-bottom:1px solid var(--hairline);}
+.modal-header h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);}
+.modal-header .modal-sub{font-size:var(--text-meta);color:var(--t3);margin-top:4px;}
+.modal-body{padding:20px;display:flex;flex-direction:column;gap:16px;}
+.modal-field{display:flex;flex-direction:column;gap:6px;}
+.modal-field label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.modal-field input,.modal-field select{height:36px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);transition:border-color .15s;}
+.modal-field input:focus,.modal-field select:focus{outline:none;border-color:var(--accent);}
+.modal-field .field-hint{font-size:var(--text-meta);color:var(--t3);}
+.modal-footer{padding:14px 20px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:10px;justify-content:flex-end;}
+.modal-btn{height:32px;padding:0 16px;font-size:var(--text-meta);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);color:var(--t2);transition:border-color .15s,color .15s;cursor:pointer;}
+.modal-btn:hover{border-color:var(--t3);color:var(--t1);}
+.modal-btn.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600;}
+.modal-btn.primary:hover{opacity:0.9;}
+.modal-btn:disabled{opacity:0.5;cursor:default;}
+/* v3 shell addition: the modal's own error line, same grammar as .read-failure. */
+.modal-error{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--fail);}
+.modal-help{display:flex;flex-direction:column;gap:10px;font-size:var(--text-body);color:var(--t2);line-height:1.6;}
+.modal-help strong{color:var(--t1);font-weight:600;}
+.modal-help .mh-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+
+/* ── responsive (the mocks' one breakpoint) ─────────────────────────────── */
+@media(max-width:920px){.sidebar{display:none;}}

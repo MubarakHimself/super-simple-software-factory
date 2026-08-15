@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDL Factory — Board</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   BOARD v3 — LIVE STATUS
+   No Backlog (factory has no backlog). 3 columns: Ready / Running / Done.
+   The factory auto-picks from Ready — no dispatch button. Cards show lane
+   assignment and current phase. Inspector rail on the right shows card
+   details without overlapping the columns.
+   Editorial Instrument skin. Nav: Home/Board/Runs/Docs/Settings.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --canvas:#141311; --chrome:#1a1816; --raised:#201e1b; --overlay:#26231f;
+  --hairline:#2a2724; --hairline-2:#36322e;
+  --t1:#ede9e2; --t2:#9e968a; --t3:#645c52; --t4:#3a352f;
+  --accent:#e0a64a; --accent-dim:#4a3820; --accent-surface:rgba(224,166,74,0.08); --on-accent:#1a1408;
+  --run:#6ba4e8; --ok:#6dbb6e; --fail:#e06464; --warn:#d9a441; --neutral:#7d7568;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,166,74,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.5);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --text-meta:12px; --text-mono:13px; --text-body:14px; --text-head:16px; --text-hero:22px;
+  --r-chip:5px; --r-control:7px;
+  --sidebar-w:240px; --inspector-w:340px;
+  --row-h:32px; --topbar-h:48px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+*{border-color:var(--hairline);}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--canvas);color:var(--t1);font-family:var(--font-sans);font-size:var(--text-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+::selection{background:var(--accent-surface);color:var(--t1);}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+a{color:inherit;text-decoration:none;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--hairline-2);border-radius:4px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.pulse{animation:pulse 1.8s ease-in-out infinite;}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none;}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.fade-in{animation:fadeIn .2s ease;}
+
+/* ═══ SHELL ═══ */
+.app{display:flex;height:100vh;width:100vw;overflow:hidden;background:var(--canvas);}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.project-switcher{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .15s;position:relative;}
+.project-switcher:hover{background:var(--row-hover);}
+.project-switcher .proj-dot{width:10px;height:10px;border-radius:2px;background:var(--accent);flex-shrink:0;opacity:0.8;}
+.project-switcher .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);letter-spacing:-0.2px;}
+.project-switcher .proj-chev{width:14px;height:14px;color:var(--t3);flex-shrink:0;transition:transform .2s;}
+.project-switcher.open .proj-chev{transform:rotate(180deg);}
+.project-menu{position:absolute;top:100%;left:0;right:0;background:var(--overlay);border:1px solid var(--hairline-2);border-top:none;border-radius:0 0 var(--r-control) var(--r-control);box-shadow:var(--shadow);z-index:100;display:none;max-height:320px;overflow-y:auto;}
+.project-switcher.open .project-menu{display:block;}
+.project-menu-item{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;font-size:var(--text-body);color:var(--t2);transition:background .12s,color .12s;}
+.project-menu-item:hover{background:var(--row-hover);color:var(--t1);}
+.project-menu-item.active{color:var(--t1);}
+.project-menu-item .pm-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.project-menu-sep{height:1px;background:var(--hairline);margin:4px 0;}
+.project-menu-item.add{color:var(--accent);}
+
+.sidebar-search{margin:12px 12px 8px;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:border-color .15s,color .15s;}
+.sidebar-search:hover{border-color:var(--t3);color:var(--t2);}
+.sidebar-search svg{width:13px;height:13px;flex-shrink:0;}
+.sidebar-nav{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .15s,color .15s;position:relative;cursor:pointer;}
+.nav-item:hover{background:var(--row-hover);color:var(--t1);}
+.nav-item.active{background:var(--row-active);color:var(--t1);}
+.nav-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.nav-icon{width:14px;height:14px;flex-shrink:0;color:var(--t3);}
+.nav-item.active .nav-icon{color:var(--accent);}
+.nav-item .nav-count{margin-left:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;}
+.nav-item.active .nav-count{color:var(--accent);}
+
+.factory-status{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 14px;display:flex;flex-direction:column;gap:6px;}
+.fs-line{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);}
+.fs-line .fs-label{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--t4);}
+.fs-line .fs-val{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+.fs-pulse{display:flex;align-items:center;gap:6px;}
+.fs-pulse .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.fs-pulse .fs-text{font-size:var(--text-meta);color:var(--t2);}
+.fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
+.fs-help:hover{color:var(--t2);}
+.fs-help svg{width:13px;height:13px;flex-shrink:0;}
+
+.main-col{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:var(--text-body);}
+.breadcrumb .crumb-dim{color:var(--t2);font-family:var(--font-serif);font-style:italic;}
+.breadcrumb .crumb-sep{color:var(--t4);}
+.breadcrumb .crumb-here{color:var(--t1);font-weight:600;}
+.breadcrumb .crumb-project{cursor:pointer;position:relative;display:flex;align-items:center;gap:6px;padding:2px 8px;margin:-2px -8px;border-radius:var(--r-chip);transition:background .12s;}
+.breadcrumb .crumb-project:hover{background:var(--row-hover);}
+.breadcrumb .crumb-project .cp-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+.breadcrumb .crumb-project .cp-chev{width:11px;height:11px;color:var(--t3);transition:transform .2s;}
+.breadcrumb .crumb-project.open .cp-chev{transform:rotate(180deg);}
+.breadcrumb .crumb-dropdown{position:absolute;top:calc(100% + 4px);left:0;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);z-index:200;min-width:180px;display:none;}
+.breadcrumb .crumb-project.open .crumb-dropdown{display:block;}
+.breadcrumb .crumb-dropdown-item{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);transition:background .12s,color .12s;cursor:pointer;}
+.breadcrumb .crumb-dropdown-item:hover{background:var(--row-hover);color:var(--t1);}
+.breadcrumb .crumb-dropdown-item.active{color:var(--t1);}
+.breadcrumb .crumb-dropdown-item .cpd-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.topbar-btn{height:28px;padding:0 14px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.topbar-btn:hover{border-color:var(--accent);color:var(--accent);}
+.topbar-btn svg{width:13px;height:13px;}
+.auto-pick-indicator{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);font-family:var(--font-mono);}
+.auto-pick-indicator .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);}
+.auto-pick-indicator .api-text{color:var(--t2);}
+
+.surface{flex:1;min-height:0;display:flex;overflow:hidden;position:relative;}
+
+/* ═══ BOARD COLUMNS ═══ */
+.board{flex:1;min-width:0;display:flex;overflow:hidden;}
+.board-col{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);overflow:hidden;}
+.board-col:last-child{border-right:none;}
+.board-col-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.board-col-header .col-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.board-col-header .col-dot.ready{border:1px solid var(--t3);background:transparent;}
+.board-col-header .col-dot.running{background:var(--run);}
+.board-col-header .col-dot.done{background:var(--ok);}
+.board-col-header h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.board-col-header .col-count{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;margin-left:auto;}
+.board-col-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
+
+/* ── card ── */
+.ticket-card{padding:12px 14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);cursor:pointer;transition:border-color .15s,background .15s;position:relative;}
+.ticket-card:hover{border-color:var(--hairline-2);background:var(--overlay);}
+.ticket-card.selected{border-color:var(--accent);background:var(--row-active);}
+.ticket-card .tc-id{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);margin-bottom:4px;}
+.ticket-card .tc-title{font-size:var(--text-body);color:var(--t1);line-height:1.4;margin-bottom:8px;}
+.ticket-card .tc-meta{display:flex;align-items:center;gap:10px;font-size:var(--text-meta);color:var(--t3);}
+.ticket-card .tc-lane{display:flex;align-items:center;gap:5px;}
+.ticket-card .tc-lane .lane-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.ticket-card .tc-lane .lane-dot.grok{background:#e06464;}
+.ticket-card .tc-lane .lane-dot.glm{background:var(--run);}
+.ticket-card .tc-lane .lane-dot.kimi{background:var(--warn);}
+.ticket-card .tc-lane .lane-dot.qwen{background:var(--ok);}
+.ticket-card .tc-lane .lane-dot.idle{border:1px solid var(--t3);background:transparent;}
+.ticket-card .tc-phase{font-family:var(--font-mono);font-size:11px;color:var(--t3);}
+.ticket-card .tc-priority{margin-left:auto;font-family:var(--font-mono);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;}
+.ticket-card .tc-priority.high{background:rgba(224,100,100,0.12);color:var(--fail);}
+.ticket-card .tc-priority.med{background:rgba(217,164,65,0.12);color:var(--warn);}
+.ticket-card .tc-priority.low{background:var(--hairline-2);color:var(--t3);}
+.ticket-card .tc-elapsed{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);font-variant-numeric:tabular-nums;}
+.ticket-card .tc-machine{font-family:var(--font-mono);font-size:10px;color:var(--t4);display:flex;align-items:center;gap:4px;margin-left:auto;}
+.ticket-card .tc-machine::before{content:'⊞';font-size:11px;}
+
+/* ═══ INSPECTOR RAIL ═══ */
+.inspector-rail{width:var(--inspector-w);flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--hairline);background:var(--chrome);overflow:hidden;}
+.inspector-header{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--hairline);}
+.inspector-header h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t2);font-style:italic;}
+.inspector-close{margin-left:auto;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:var(--r-chip);color:var(--t3);transition:background .12s,color .12s;cursor:pointer;}
+.inspector-close:hover{background:var(--row-hover);color:var(--t1);}
+.inspector-close svg{width:13px;height:13px;}
+.inspector-body{flex:1;overflow-y:auto;}
+.inspector-section{padding:16px;border-bottom:1px solid var(--hairline);}
+.inspector-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;}
+.inspector-title{font-family:var(--font-serif);font-size:18px;font-weight:600;color:var(--t1);line-height:1.3;margin-bottom:6px;}
+.inspector-id{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);margin-bottom:12px;}
+.inspector-desc{font-size:var(--text-body);color:var(--t2);line-height:1.6;}
+.inspector-meta-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:var(--text-meta);}
+.inspector-meta-row:last-child{border-bottom:none;}
+.inspector-meta-row .imr-label{font-family:var(--font-mono);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;}
+.inspector-meta-row .imr-val{color:var(--t1);font-family:var(--font-mono);}
+.inspector-meta-row .imr-val .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;}
+.inspector-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;text-align:center;}
+.inspector-empty .ie-icon{width:32px;height:32px;border:1px solid var(--hairline-2);border-radius:50%;margin-bottom:16px;opacity:0.4;}
+.inspector-empty p{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t3);}
+
+@media(max-width:920px){.sidebar{display:none;}}
+@media(max-width:768px){.inspector-rail{display:none;}.board-col{min-width:200px;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar" data-od-id="sidebar">
+    <div class="project-switcher" data-od-id="project-switcher" onclick="this.classList.toggle('open')">
+      <div class="proj-dot"></div>
+      <span class="proj-name">Project 1</span>
+      <svg class="proj-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+      <div class="project-menu">
+        <div class="project-menu-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="pm-dot" style="background:var(--accent)"></span>Project 1</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="pm-dot" style="background:var(--run)"></span>Project 2</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="pm-dot" style="background:var(--ok)"></span>Project 3</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="pm-dot" style="background:var(--neutral)"></span>Project 4</div>
+        <div class="project-menu-sep"></div>
+        <div class="project-menu-item add" onclick="event.stopPropagation();window.location.href='settings-v3.html'"><span class="pm-dot" style="background:transparent;border:1px dashed var(--accent)"></span>Add project…</div>
+      </div>
+    </div>
+    <div class="sidebar-search" data-od-id="sidebar-search">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"/><path d="M9.5 9.5L12 12" stroke-linecap="round"/></svg>
+      <span>Search…</span>
+    </div>
+    <nav class="sidebar-nav" data-od-id="sidebar-nav">
+      <a class="nav-item" data-od-id="nav-home" href="home-v2.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6l5-4 5 4v6H2z" stroke-linejoin="round"/><path d="M5 12V8h4v4"/></svg><span>Home</span></a>
+      <a class="nav-item active" data-od-id="nav-board" href="board-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="3" height="10" rx="1"/><rect x="6" y="2" width="3" height="7" rx="1"/><rect x="10" y="2" width="2" height="5" rx="1"/></svg><span>Board</span><span class="nav-count">12</span></a>
+      <a class="nav-item" data-od-id="nav-runs" href="runs-gate-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7h3l2-4 3 8 2-4h2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Runs</span><span class="nav-count">9</span></a>
+      <a class="nav-item" data-od-id="nav-docs" href="docs-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h6l2 2v8H3z" stroke-linejoin="round"/><path d="M5 6h4M5 9h4"/></svg><span>Docs</span></a>
+      <a class="nav-item" data-od-id="nav-settings" href="settings-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.4 1.4M10.1 10.1l1.4 1.4M2.5 11.5l1.4-1.4M10.1 3.9l1.4-1.4" stroke-linecap="round"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="factory-status" data-od-id="factory-status">
+      <div class="fs-pulse">
+        <span class="dot"></span>
+        <span class="fs-text">Factory running · 3 active lanes</span>
+      </div>
+      <div class="fs-line"><span class="fs-label">Queue</span><span class="fs-val">2 ready · 3 running</span></div>
+      <div class="fs-line"><span class="fs-label">Uptime</span><span class="fs-val">14h 22m</span></div>
+      <div class="fs-help" data-od-id="nav-help"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5"/><path d="M5.5 5.5a1.5 1.5 0 0 1 3 0c0 1-.5 1.5-1 2v1" stroke-linecap="round"/><circle cx="7" cy="10" r="0.5" fill="currentColor"/></svg><span>Help & shortcuts</span></div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN COLUMN ═══ -->
+  <div class="main-col">
+    <div class="topbar" data-od-id="topbar">
+      <div class="breadcrumb" data-od-id="breadcrumb">
+        <span class="crumb-dim crumb-project" data-od-id="crumb-project" onclick="this.classList.toggle('open')">
+          <span class="cp-dot" style="background:var(--accent)"></span>
+          Project 1
+          <svg class="cp-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+          <div class="crumb-dropdown" data-od-id="crumb-dropdown">
+            <div class="crumb-dropdown-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="cpd-dot" style="background:var(--accent)"></span>Project 1</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="cpd-dot" style="background:var(--run)"></span>Project 2</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="cpd-dot" style="background:var(--ok)"></span>Project 3</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="cpd-dot" style="background:var(--neutral)"></span>Project 4</div>
+          </div>
+        </span>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-here">Board</span>
+      </div>
+      <div class="topbar-right">
+        <div class="auto-pick-indicator" data-od-id="auto-pick">
+          <span class="dot pulse"></span>
+          <span class="api-text">Auto-pick from Ready</span>
+        </div>
+        <button class="topbar-btn" data-od-id="topbar-sync">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 3a5 5 0 1 0 1.5 4" stroke-linecap="round"/><path d="M11 1v3h-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync
+        </button>
+      </div>
+    </div>
+
+    <div class="surface" data-od-id="surface">
+
+      <!-- ═══ BOARD ═══ -->
+      <div class="board" data-od-id="board">
+
+        <!-- READY -->
+        <div class="board-col" data-od-id="col-ready">
+          <div class="board-col-header">
+            <span class="col-dot ready"></span>
+            <h3>Ready</h3>
+            <span class="col-count">4</span>
+          </div>
+          <div class="board-col-body">
+            <div class="ticket-card selected" data-od-id="ticket-048" onclick="selectCard(this)">
+              <div class="tc-id">T-048</div>
+              <div class="tc-title">Add retry budget to lane balancer</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot idle"></span>unassigned</span>
+                <span class="tc-priority high">high</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-049" onclick="selectCard(this)">
+              <div class="tc-id">T-049</div>
+              <div class="tc-title">Document the queue schema in OKF</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot idle"></span>unassigned</span>
+                <span class="tc-priority med">med</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-050" onclick="selectCard(this)">
+              <div class="tc-id">T-050</div>
+              <div class="tc-title">Skylos: add --range flag to verify</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot idle"></span>unassigned</span>
+                <span class="tc-priority med">med</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-051" onclick="selectCard(this)">
+              <div class="tc-id">T-051</div>
+              <div class="tc-title">Add provider auth flow for OAuth providers</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot idle"></span>unassigned</span>
+                <span class="tc-priority low">low</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RUNNING -->
+        <div class="board-col" data-od-id="col-running">
+          <div class="board-col-header">
+            <span class="col-dot running pulse"></span>
+            <h3>Running</h3>
+            <span class="col-count">3</span>
+          </div>
+          <div class="board-col-body">
+            <div class="ticket-card" data-od-id="ticket-run-0473" onclick="selectCard(this)">
+              <div class="tc-id">adw-0473</div>
+              <div class="tc-title">Add retry budget to lane balancer</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot grok"></span>Grok 4.5</span>
+                <span class="tc-phase">phase 3/5 · review</span>
+              </div>
+              <div class="tc-meta" style="margin-top:6px">
+                <span class="tc-elapsed">4m 12s</span>
+                <span class="tc-machine">hetzner-cax31</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-run-0474" onclick="selectCard(this)">
+              <div class="tc-id">adw-0474</div>
+              <div class="tc-title">Document the queue schema in OKF</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot glm"></span>GLM 5.2</span>
+                <span class="tc-phase">phase 2/5 · build</span>
+              </div>
+              <div class="tc-meta" style="margin-top:6px">
+                <span class="tc-elapsed">1m 48s</span>
+                <span class="tc-machine">hetzner-cax31</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-run-0475" onclick="selectCard(this)">
+              <div class="tc-id">adw-0475</div>
+              <div class="tc-title">Skylos: add --range flag to verify</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot kimi"></span>Kimi K2.7</span>
+                <span class="tc-phase">phase 1/5 · scout</span>
+              </div>
+              <div class="tc-meta" style="margin-top:6px">
+                <span class="tc-elapsed">22s</span>
+                <span class="tc-machine">do-ubuntu-s-2vcpu</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DONE -->
+        <div class="board-col" data-od-id="col-done">
+          <div class="board-col-header">
+            <span class="col-dot done"></span>
+            <h3>Done</h3>
+            <span class="col-count">5</span>
+          </div>
+          <div class="board-col-body">
+            <div class="ticket-card" data-od-id="ticket-done-0471" onclick="selectCard(this)">
+              <div class="tc-id">adw-0471</div>
+              <div class="tc-title">Refactor intake validation</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot grok"></span>Grok 4.5</span>
+                <span class="tc-phase" style="color:var(--ok)">in merge queue</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-done-0472" onclick="selectCard(this)">
+              <div class="tc-id">adw-0472</div>
+              <div class="tc-title">Cache compiled ADW manifests</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot qwen"></span>Qwen 3.8</span>
+                <span class="tc-phase" style="color:var(--ok)">in merge queue</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-done-0470" onclick="selectCard(this)">
+              <div class="tc-id">adw-0470</div>
+              <div class="tc-title">Add provider auth to settings panel</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot glm"></span>GLM 5.2</span>
+                <span class="tc-phase" style="color:var(--ok)">merged</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-done-0469" onclick="selectCard(this)">
+              <div class="tc-id">adw-0469</div>
+              <div class="tc-title">Fix off-by-one in lane retry count</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot qwen"></span>Qwen 3.8</span>
+                <span class="tc-phase" style="color:var(--ok)">merged</span>
+              </div>
+            </div>
+            <div class="ticket-card" data-od-id="ticket-done-0468" onclick="selectCard(this)">
+              <div class="tc-id">adw-0468</div>
+              <div class="tc-title">Migrate config loader to TOML</div>
+              <div class="tc-meta">
+                <span class="tc-lane"><span class="lane-dot grok"></span>Grok 4.5</span>
+                <span class="tc-phase" style="color:var(--fail)">failed</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ═══ INSPECTOR RAIL ═══ -->
+      <div class="inspector-rail" data-od-id="inspector-rail">
+        <div class="inspector-header" data-od-id="inspector-header">
+          <h3>Details</h3>
+          <div class="inspector-close" data-od-id="inspector-close"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l6 6M10 4l-6 6" stroke-linecap="round"/></svg></div>
+        </div>
+        <div class="inspector-body" data-od-id="inspector-body">
+          <div id="inspector-content" class="fade-in">
+            <div class="inspector-section">
+              <div class="inspector-label">Ticket</div>
+              <div class="inspector-id">T-048</div>
+              <div class="inspector-title">Add retry budget to lane balancer</div>
+              <div class="inspector-desc">Implement per-lane retry budget with exponential backoff and circuit breaker. Each lane gets 3 retries before parking. Matches the existing lane-check pattern.</div>
+            </div>
+            <div class="inspector-section">
+              <div class="inspector-label">Status</div>
+              <div class="inspector-meta-row"><span class="imr-label">Column</span><span class="imr-val"><span class="dot" style="background:transparent;border:1px solid var(--t3)"></span>Ready</span></div>
+              <div class="inspector-meta-row"><span class="imr-label">Lane</span><span class="imr-val"><span class="dot" style="border:1px solid var(--t3);background:transparent"></span>unassigned</span></div>
+              <div class="inspector-meta-row"><span class="imr-label">Priority</span><span class="imr-val" style="color:var(--fail)">high</span></div>
+              <div class="inspector-meta-row"><span class="imr-label">Source</span><span class="imr-val">queue/048-retry-budget.md</span></div>
+            </div>
+            <div class="inspector-section">
+              <div class="inspector-label">Linked</div>
+              <div class="inspector-meta-row"><span class="imr-label">Blocks</span><span class="imr-val">T-049, T-050</span></div>
+              <div class="inspector-meta-row"><span class="imr-label">Blocked by</span><span class="imr-val">—</span></div>
+              <div class="inspector-meta-row"><span class="imr-label">Est. runs</span><span class="imr-val">3</span></div>
+            </div>
+            <div class="inspector-section">
+              <div class="inspector-label">Notes</div>
+              <div class="inspector-desc" style="font-style:italic">The factory will auto-pick this when a lane frees up. No dispatch needed — just wait.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+function selectCard(el) {
+  document.querySelectorAll('.ticket-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  var content = document.getElementById('inspector-content');
+  content.classList.remove('fade-in');
+  void content.offsetWidth;
+  content.classList.add('fade-in');
+}
+
+function switchProject(el, name, color) {
+  event.stopPropagation();
+  var colorMap = {
+    'var(--accent)':'#e0a64a',
+    'var(--run)':'#6ba4e8',
+    'var(--ok)':'#6dbb6e',
+    'var(--neutral)':'#7d7568'
+  };
+  var hexColor = colorMap[color] || color;
+  document.documentElement.style.setProperty('--accent', hexColor);
+  var crumb = document.querySelector('.crumb-project');
+  if (crumb) {
+    crumb.classList.remove('open');
+    var text = crumb.childNodes[2];
+    if (text) text.textContent = ' ' + name + ' ';
+    var dot = crumb.querySelector('.cp-dot');
+    if (dot) dot.style.background = color;
+  }
+  document.querySelectorAll('.crumb-dropdown-item').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  var projName = document.querySelector('.project-switcher .proj-name');
+  if (projName) projName.textContent = name;
+  var projDot = document.querySelector('.project-switcher .proj-dot');
+  if (projDot) projDot.style.background = color;
+  document.querySelectorAll('.project-menu-item').forEach(function(m){ m.classList.remove('active'); });
+  var menuItems = document.querySelectorAll('.project-menu-item');
+  menuItems.forEach(function(m){
+    if (m.textContent.trim() === name) m.classList.add('active');
+  });
+}
+</script>
+</body>
+</html>

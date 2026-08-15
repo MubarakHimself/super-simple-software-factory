@@ -1,0 +1,1270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDL Factory — Settings</title>
+<style>
+:root {
+  --canvas:#141311; --chrome:#1a1816; --raised:#201e1b; --overlay:#26231f;
+  --hairline:#2a2724; --hairline-2:#36322e;
+  --t1:#ede9e2; --t2:#9e968a; --t3:#645c52; --t4:#3a352f;
+  --accent:#e0a64a; --accent-dim:#4a3820; --accent-surface:rgba(224,166,74,0.08); --on-accent:#1a1408;
+  --run:#6ba4e8; --ok:#6dbb6e; --fail:#e06464; --warn:#d9a441; --neutral:#7d7568;
+  --row-hover:rgba(255,255,255,0.025); --row-active:rgba(224,166,74,0.05);
+  --shadow:0 16px 48px rgba(0,0,0,0.5);
+  --font-serif:"Iowan Old Style","Charter","Georgia","Cambria",serif;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","SF Mono",Consolas,Menlo,monospace;
+  --text-meta:12px; --text-mono:13px; --text-body:14px; --text-head:16px; --text-hero:22px;
+  --r-chip:5px; --r-control:7px;
+  --sidebar-w:240px; --scope-w:220px; --row-h:32px; --topbar-h:48px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+*{border-color:var(--hairline);}
+html,body{height:100%;overflow:hidden;}
+body{background:var(--canvas);color:var(--t1);font-family:var(--font-sans);font-size:var(--text-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+::selection{background:var(--accent-surface);color:var(--t1);}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;}
+a{color:inherit;text-decoration:none;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--hairline-2);border-radius:4px;border:2px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-track{background:transparent;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+.fade-in{animation:fadeIn .2s ease;}
+
+/* ═══ SHELL ═══ */
+.app{display:flex;height:100vh;width:100vw;overflow:hidden;background:var(--canvas);}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.project-switcher{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--hairline);cursor:pointer;transition:background .15s;position:relative;}
+.project-switcher:hover{background:var(--row-hover);}
+.project-switcher .proj-dot{width:10px;height:10px;border-radius:2px;background:var(--accent);flex-shrink:0;opacity:0.8;}
+.project-switcher .proj-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);letter-spacing:-0.2px;}
+.project-switcher .proj-chev{width:14px;height:14px;color:var(--t3);flex-shrink:0;transition:transform .2s;}
+.project-switcher.open .proj-chev{transform:rotate(180deg);}
+.project-menu{position:absolute;top:100%;left:0;right:0;background:var(--overlay);border:1px solid var(--hairline-2);border-top:none;border-radius:0 0 var(--r-control) var(--r-control);box-shadow:var(--shadow);z-index:100;display:none;max-height:320px;overflow-y:auto;}
+.project-switcher.open .project-menu{display:block;}
+.project-menu-item{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;font-size:var(--text-body);color:var(--t2);transition:background .12s,color .12s;}
+.project-menu-item:hover{background:var(--row-hover);color:var(--t1);}
+.project-menu-item.active{color:var(--t1);}
+.project-menu-item .pm-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.project-menu-sep{height:1px;background:var(--hairline);margin:4px 0;}
+.project-menu-item.add{color:var(--accent);}
+
+.sidebar-search{margin:12px 12px 8px;height:var(--row-h);display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:border-color .15s,color .15s;}
+.sidebar-search:hover{border-color:var(--t3);color:var(--t2);}
+.sidebar-search svg{width:13px;height:13px;flex-shrink:0;}
+.sidebar-nav{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .15s,color .15s;position:relative;cursor:pointer;}
+.nav-item:hover{background:var(--row-hover);color:var(--t1);}
+.nav-item.active{background:var(--row-active);color:var(--t1);}
+.nav-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.nav-icon{width:14px;height:14px;flex-shrink:0;color:var(--t3);}
+.nav-item.active .nav-icon{color:var(--accent);}
+.nav-item .nav-count{margin-left:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);font-variant-numeric:tabular-nums;}
+.nav-item.active .nav-count{color:var(--accent);}
+
+.factory-status{flex-shrink:0;border-top:1px solid var(--hairline);padding:10px 14px;display:flex;flex-direction:column;gap:6px;}
+.fs-line{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);}
+.fs-line .fs-label{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.5px;font-size:11px;color:var(--t4);}
+.fs-line .fs-val{font-family:var(--font-mono);color:var(--t2);font-variant-numeric:tabular-nums;}
+.fs-pulse{display:flex;align-items:center;gap:6px;}
+.fs-pulse .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.fs-pulse .fs-text{font-size:var(--text-meta);color:var(--t2);}
+.fs-help{display:flex;align-items:center;gap:10px;height:var(--row-h);padding:0 0 0 2px;color:var(--t3);font-size:var(--text-meta);cursor:pointer;transition:color .12s;}
+.fs-help:hover{color:var(--t2);}
+.fs-help svg{width:13px;height:13px;flex-shrink:0;}
+
+.main-col{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:var(--text-body);}
+.breadcrumb .crumb-dim{color:var(--t2);font-family:var(--font-serif);font-style:italic;}
+.breadcrumb .crumb-sep{color:var(--t4);}
+.breadcrumb .crumb-here{color:var(--t1);font-weight:600;}
+.breadcrumb .crumb-project{cursor:pointer;position:relative;display:flex;align-items:center;gap:6px;padding:2px 8px;margin:-2px -8px;border-radius:var(--r-chip);transition:background .12s;}
+.breadcrumb .crumb-project:hover{background:var(--row-hover);}
+.breadcrumb .crumb-project .cp-dot{width:8px;height:8px;border-radius:2px;background:var(--accent);flex-shrink:0;}
+.breadcrumb .crumb-project .cp-chev{width:11px;height:11px;color:var(--t3);transition:transform .2s;}
+.breadcrumb .crumb-project.open .cp-chev{transform:rotate(180deg);}
+.breadcrumb .crumb-dropdown{position:absolute;top:calc(100% + 4px);left:0;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);z-index:200;min-width:180px;display:none;}
+.breadcrumb .crumb-project.open .crumb-dropdown{display:block;}
+.breadcrumb .crumb-dropdown-item{display:flex;align-items:center;gap:10px;height:32px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);transition:background .12s,color .12s;cursor:pointer;}
+.breadcrumb .crumb-dropdown-item:hover{background:var(--row-hover);color:var(--t1);}
+.breadcrumb .crumb-dropdown-item.active{color:var(--t1);}
+.breadcrumb .crumb-dropdown-item .cpd-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;}
+.topbar-btn{height:28px;padding:0 14px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;display:flex;align-items:center;gap:6px;}
+.topbar-btn:hover{border-color:var(--accent);color:var(--accent);}
+.topbar-btn svg{width:13px;height:13px;}
+
+.surface{flex:1;min-height:0;display:flex;overflow:hidden;}
+
+/* ═══ SCOPE SELECTOR (left) ═══ */
+.scope-pane{width:var(--scope-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.scope-header{padding:14px 16px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.scope-header .label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;}
+.scope-header h2{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);}
+.scope-list{flex:1;overflow-y:auto;padding:8px 8px;}
+.scope-section-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;padding:10px 8px 6px;}
+.scope-item{display:flex;align-items:center;gap:10px;height:38px;padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .12s,color .12s;cursor:pointer;position:relative;}
+.scope-item:hover{background:var(--row-hover);color:var(--t1);}
+.scope-item.active{background:var(--row-active);color:var(--t1);}
+.scope-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.scope-item .si-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.scope-item .si-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scope-item .si-badge{font-family:var(--font-mono);font-size:10px;color:var(--t3);padding:1px 6px;border:1px solid var(--hairline);border-radius:3px;}
+.scope-item.active .si-badge{color:var(--accent);border-color:var(--accent-dim);}
+.scope-add{display:flex;align-items:center;gap:10px;height:38px;padding:0 10px;border-radius:var(--r-chip);color:var(--accent);font-size:var(--text-body);transition:background .12s;cursor:pointer;}
+.scope-add:hover{background:var(--row-hover);}
+.scope-footer{padding:10px 12px;border-top:1px solid var(--hairline);font-size:var(--text-meta);color:var(--t3);line-height:1.5;}
+.scope-footer .global{color:var(--t2);font-weight:500;}
+
+/* ═══ FORM PANE (right) ═══ */
+.form-pane{flex:1;min-width:0;display:flex;flex-direction:column;}
+
+.form-tabs{flex-shrink:0;display:flex;align-items:center;gap:0;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);height:42px;overflow-x:auto;}
+.form-tabs .form-tab{flex:1 1 0;display:flex;align-items:center;justify-content:center;gap:6px;height:42px;padding:0 16px;font-size:var(--text-body);color:var(--t3);border-bottom:2px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap;cursor:pointer;}
+.form-tabs::-webkit-scrollbar{display:none;}
+.form-tab:hover{color:var(--t1);}
+.form-tab.active{color:var(--t1);border-bottom-color:var(--accent);}
+.form-tab .tab-count{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);}
+.form-tab.active .tab-count{color:var(--accent);}
+
+.form-body{flex:1;overflow-y:auto;padding:28px 32px 60px;}
+.form-body-content{max-width:none;}
+.form-panel-title{font-family:var(--font-serif);font-size:24px;font-weight:600;color:var(--t1);letter-spacing:-0.3px;margin-bottom:6px;}
+.form-panel-sub{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);margin-bottom:28px;}
+
+.form-section{margin-bottom:32px;}
+.form-section-title{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;justify-content:space-between;}
+.form-section-title .section-action{font-family:var(--font-sans);text-transform:none;letter-spacing:0;font-size:var(--text-meta);color:var(--accent);cursor:pointer;transition:opacity .15s;}
+.form-section-title .section-action:hover{opacity:0.8;}
+
+.form-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);}
+.form-row:last-child{border-bottom:none;}
+.form-label-group{flex:1;min-width:0;}
+.form-label{font-size:var(--text-body);color:var(--t1);}
+.form-hint{font-size:var(--text-meta);color:var(--t3);margin-top:3px;}
+.form-hint.mono{font-family:var(--font-mono);}
+.form-input{height:34px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);min-width:200px;transition:border-color .15s;}
+.form-input:focus{outline:none;border-color:var(--accent);}
+.form-input.wide{flex:1;min-width:0;}
+.form-select{height:34px;padding:0 28px 0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:inherit;appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;min-width:200px;}
+.form-select:focus{outline:none;border-color:var(--accent);}
+.form-select.compact{min-width:140px;}
+.form-toggle{width:36px;height:20px;border-radius:10px;background:var(--hairline-2);position:relative;cursor:pointer;transition:background .15s;flex-shrink:0;}
+.form-toggle.on{background:var(--accent-dim);}
+.form-toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--t2);transition:transform .15s,background .15s;}
+.form-toggle.on::after{transform:translateX(16px);background:var(--accent);}
+
+/* ── roster table ── */
+.roster-table{width:100%;border-collapse:collapse;}
+.roster-table th{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;text-align:left;padding:8px 10px;border-bottom:1px solid var(--hairline-2);font-weight:normal;}
+.roster-table td{padding:10px;font-size:var(--text-body);color:var(--t1);border-bottom:1px solid var(--hairline);}
+.roster-table td.mono{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);}
+.roster-table td.role{color:var(--t2);}
+.roster-table tr:hover td{background:var(--row-hover);}
+.roster-table .roster-select{height:38px;padding:0 40px 0 14px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;min-width:180px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;}
+.roster-table .roster-select:focus{outline:none;border-color:var(--accent);}
+.roster-table .role-select{height:30px;padding:0 24px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:inherit;appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
+.roster-table .role-select:focus{outline:none;border-color:var(--accent);}
+.roster-table .remove-btn{height:26px;padding:0 8px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:color .15s,border-color .15s;}
+.roster-table .remove-btn:hover{color:var(--fail);border-color:var(--fail);}
+.roster-add-row{display:flex;align-items:center;gap:10px;padding:12px 10px;border:1px dashed var(--hairline-2);border-radius:var(--r-control);margin-top:8px;cursor:pointer;transition:border-color .15s,color .15s;color:var(--t3);}
+.roster-add-row:hover{border-color:var(--accent);color:var(--accent);}
+.roster-add-row svg{width:14px;height:14px;}
+
+/* ── auth badge ── */
+.auth-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.auth-badge.ok{color:var(--ok);}
+.auth-badge.warn{color:var(--warn);}
+.auth-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+
+/* ── review family box ── */
+.review-family-box{margin-top:14px;padding:14px 16px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);}
+.review-family-box .rf-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;}
+.review-family-box .rf-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.review-family-box .rf-badge{font-family:var(--font-mono);font-size:var(--text-meta);padding:3px 10px;border-radius:var(--r-chip);white-space:nowrap;}
+.review-family-box .rf-badge.ok{background:rgba(108,180,120,0.12);color:var(--ok);border:1px solid rgba(108,180,120,0.3);}
+.review-family-box .rf-badge.warn{background:rgba(224,166,74,0.12);color:var(--warn);border:1px solid rgba(224,166,74,0.3);}
+.review-family-box .rf-badge.fail{background:rgba(220,100,90,0.12);color:var(--fail);border:1px solid rgba(220,100,90,0.3);}
+.review-family-box .rf-body{font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+
+/* ── lane rows ── */
+.lane-row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--hairline);}
+.lane-row:last-child{border-bottom:none;}
+.lane-row .lane-id{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);width:56px;flex-shrink:0;}
+.lane-row .lane-body{flex:1;min-width:0;display:flex;align-items:center;gap:12px;}
+.lane-row .lane-model-select{height:34px;padding:0 28px 0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;flex:1;min-width:0;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;}
+.lane-row .lane-model-select:focus{outline:none;border-color:var(--accent);}
+.lane-row .lane-status{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.lane-row .lane-status.active{color:var(--ok);}
+.lane-row .lane-status.idle{color:var(--t3);}
+.lane-row .lane-status.unauth{color:var(--warn);}
+
+/* ── info callout ── */
+.lane-callout{padding:14px 16px;border-left:2px solid var(--accent-dim);background:var(--accent-surface);border-radius:0 var(--r-control) var(--r-control) 0;margin-bottom:20px;}
+.lane-callout .lc-title{font-family:var(--font-serif);font-size:var(--text-body);color:var(--t1);font-weight:600;margin-bottom:4px;}
+.lane-callout .lc-body{font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+
+/* ── provider rows ── */
+.provider-row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--hairline);}
+.provider-row:last-child{border-bottom:none;}
+.provider-row .pr-icon{width:36px;height:36px;border-radius:var(--r-chip);background:var(--raised);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);color:var(--accent);font-weight:600;}
+.provider-row .pr-body{flex:1;min-width:0;}
+.provider-row .pr-name{font-size:var(--text-body);color:var(--t1);font-weight:500;}
+.provider-row .pr-auth{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.provider-row .pr-model-select{height:30px;padding:0 24px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:var(--font-mono);appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
+.provider-row .pr-model-select:focus{outline:none;border-color:var(--accent);}
+.provider-row .pr-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);color:var(--t2);white-space:nowrap;}
+.provider-row .pr-status .dot{width:6px;height:6px;border-radius:50%;}
+.provider-row .pr-actions{display:flex;gap:8px;flex-shrink:0;}
+.pr-btn{height:28px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;}
+.pr-btn:hover{border-color:var(--accent);color:var(--accent);}
+.pr-btn.danger:hover{border-color:var(--fail);color:var(--fail);}
+
+.provider-add{display:flex;align-items:center;gap:10px;padding:14px 0;border:1px dashed var(--hairline-2);border-radius:var(--r-control);margin-top:12px;cursor:pointer;transition:border-color .15s,color .15s;color:var(--t3);padding-left:14px;}
+.provider-add:hover{border-color:var(--accent);color:var(--accent);}
+.provider-add svg{width:14px;height:14px;}
+
+/* ── machine rows ── */
+.machine-list{display:flex;flex-direction:column;}
+.machine-row{display:grid;grid-template-columns:40px 2fr 1.2fr 1.2fr 1.3fr auto;align-items:center;gap:20px;padding:18px 0;border-bottom:1px solid var(--hairline);}
+.machine-row:last-child{border-bottom:none;}
+.machine-row .mc-icon{width:36px;height:36px;border-radius:var(--r-chip);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);font-weight:600;}
+.machine-row .mc-body{min-width:0;}
+.machine-row .mc-name{font-size:var(--text-body);color:var(--t1);font-weight:500;display:flex;align-items:center;gap:8px;}
+.machine-row .mc-meta{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.machine-row .mc-ip{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);white-space:nowrap;}
+.machine-row .mc-factory{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.machine-row .mc-factory .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;}
+.machine-row .mc-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);font-family:var(--font-mono);color:var(--t2);white-space:nowrap;}
+.machine-row .mc-status .dot{width:6px;height:6px;border-radius:50%;}
+.machine-row .mc-actions{display:flex;gap:8px;flex-shrink:0;}
+.machine-row .mc-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);background:var(--accent-surface);border-radius:var(--r-chip);padding:1px 7px;font-weight:normal;}
+.machine-row .mc-tag.dim{color:var(--t3);background:var(--raised);border:1px solid var(--hairline);}
+
+/* ── appearance ── */
+.theme-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:4px;}
+.theme-card{padding:14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);cursor:pointer;transition:border-color .15s;}
+.theme-card:hover{border-color:var(--hairline-2);}
+.theme-card.selected{border-color:var(--accent);background:var(--row-active);}
+.theme-card .tc-swatch{width:100%;height:48px;border-radius:var(--r-chip);margin-bottom:10px;}
+.theme-card .tc-swatch.editorial{background:linear-gradient(135deg,#141311,#1a1816);}
+.theme-card .tc-swatch.mission{background:linear-gradient(135deg,#0a0e14,#0d1117);}
+.theme-card .tc-swatch.workshop{background:linear-gradient(135deg,#fafaf8,#f0eee8);}
+.theme-card .tc-swatch.twilight{background:linear-gradient(135deg,#1a1520,#2a1f30);}
+.theme-card .tc-swatch.carbon{background:linear-gradient(135deg,#08090a,#121316);}
+.theme-card .tc-swatch.paper{background:linear-gradient(135deg,#f5f0e8,#e8e0d4);}
+.theme-card .tc-name{font-family:var(--font-serif);font-size:var(--text-body);color:var(--t1);font-weight:600;}
+.theme-card .tc-desc{font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.theme-card.selected .tc-name{color:var(--accent);}
+
+/* ── auto-save status ── */
+.save-status-bar{flex-shrink:0;padding:8px 32px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:8px;background:var(--chrome);font-size:var(--text-meta);color:var(--t3);}
+.save-status-bar .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.save-status-bar.saved .save-text{color:var(--t3);}
+.save-status-bar.dirty .save-text{color:var(--accent);}
+.save-status-bar.dirty .dot{background:var(--accent);}
+
+.scope-name-inline{color:var(--accent);}
+
+/* ── modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(2px);}
+.modal-overlay.open{display:flex;}
+.modal{width:440px;max-width:90vw;background:var(--overlay);border:1px solid var(--hairline-2);border-radius:var(--r-control);box-shadow:var(--shadow);display:flex;flex-direction:column;}
+.modal-header{padding:18px 20px 14px;border-bottom:1px solid var(--hairline);}
+.modal-header h3{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);}
+.modal-header .modal-sub{font-size:var(--text-meta);color:var(--t3);margin-top:4px;}
+.modal-body{padding:20px;display:flex;flex-direction:column;gap:16px;}
+.modal-field{display:flex;flex-direction:column;gap:6px;}
+.modal-field label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.modal-field input,.modal-field select{height:36px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);transition:border-color .15s;}
+.modal-field input:focus,.modal-field select:focus{outline:none;border-color:var(--accent);}
+.modal-field .field-hint{font-size:var(--text-meta);color:var(--t3);}
+.modal-detection{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);}
+.modal-detection .detect-row{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);}
+.modal-detection .detect-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.modal-detection .detect-state{color:var(--t3);margin-left:auto;}
+.modal-detection .detect-hint{font-size:var(--text-meta);color:var(--t4);line-height:1.4;margin-top:2px;}
+.modal-footer{padding:14px 20px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:10px;justify-content:flex-end;}
+.modal-btn{height:32px;padding:0 16px;font-size:var(--text-meta);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);color:var(--t2);transition:border-color .15s,color .15s;cursor:pointer;}
+.modal-btn:hover{border-color:var(--t3);color:var(--t1);}
+.modal-btn.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600;}
+.modal-btn.primary:hover{opacity:0.9;}
+
+@media(max-width:1100px){.scope-pane{width:180px;}}
+@media(max-width:920px){.sidebar{display:none;}.scope-pane{width:160px;}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar" data-od-id="sidebar">
+    <div class="project-switcher" data-od-id="project-switcher" onclick="this.classList.toggle('open')">
+      <div class="proj-dot"></div>
+      <span class="proj-name">Project 1</span>
+      <svg class="proj-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+      <div class="project-menu">
+        <div class="project-menu-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="pm-dot" style="background:var(--accent)"></span>Project 1</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="pm-dot" style="background:var(--run)"></span>Project 2</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="pm-dot" style="background:var(--ok)"></span>Project 3</div>
+        <div class="project-menu-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="pm-dot" style="background:var(--neutral)"></span>Project 4</div>
+        <div class="project-menu-sep"></div>
+        <div class="project-menu-item add"><span class="pm-dot" style="background:transparent;border:1px dashed var(--accent)"></span>Add project…</div>
+      </div>
+    </div>
+    <div class="sidebar-search" data-od-id="sidebar-search">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4.5"/><path d="M9.5 9.5L12 12" stroke-linecap="round"/></svg>
+      <span>Search…</span>
+    </div>
+    <nav class="sidebar-nav" data-od-id="sidebar-nav">
+      <a class="nav-item" data-od-id="nav-home" href="home-v2.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 6l5-4 5 4v6H2z" stroke-linejoin="round"/><path d="M5 12V8h4v4"/></svg><span>Home</span></a>
+      <a class="nav-item" data-od-id="nav-board" href="board-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="3" height="10" rx="1"/><rect x="6" y="2" width="3" height="7" rx="1"/><rect x="10" y="2" width="2" height="5" rx="1"/></svg><span>Board</span><span class="nav-count">12</span></a>
+      <a class="nav-item" data-od-id="nav-runs" href="runs-gate-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7h3l2-4 3 8 2-4h2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Runs</span><span class="nav-count">9</span></a>
+      <a class="nav-item" data-od-id="nav-docs" href="docs-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h6l2 2v8H3z" stroke-linejoin="round"/><path d="M5 6h4M5 9h4"/></svg><span>Docs</span></a>
+      <a class="nav-item active" data-od-id="nav-settings" href="settings-v3.html"><svg class="nav-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2"/><path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.4 1.4M10.1 10.1l1.4 1.4M2.5 11.5l1.4-1.4M10.1 3.9l1.4-1.4" stroke-linecap="round"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="factory-status" data-od-id="factory-status">
+      <div class="fs-pulse">
+        <span class="dot"></span>
+        <span class="fs-text">Factory running · 3 active lanes</span>
+      </div>
+      <div class="fs-line"><span class="fs-label">Queue</span><span class="fs-val">2 ready · 3 running</span></div>
+      <div class="fs-line"><span class="fs-label">Uptime</span><span class="fs-val">14h 22m</span></div>
+      <div class="fs-help" data-od-id="nav-help"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5"/><path d="M5.5 5.5a1.5 1.5 0 0 1 3 0c0 1-.5 1.5-1 2v1" stroke-linecap="round"/><circle cx="7" cy="10" r="0.5" fill="currentColor"/></svg><span>Help & shortcuts</span></div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN COLUMN ═══ -->
+  <div class="main-col">
+    <div class="topbar" data-od-id="topbar">
+      <div class="breadcrumb" data-od-id="breadcrumb">
+        <span class="crumb-dim crumb-project" data-od-id="crumb-project" onclick="this.classList.toggle('open')">
+          <span class="cp-dot" style="background:var(--accent)"></span>
+          Project 1
+          <svg class="cp-chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l3 3 3-3" stroke-linecap="round"/></svg>
+          <div class="crumb-dropdown" data-od-id="crumb-dropdown">
+            <div class="crumb-dropdown-item active" onclick="switchProject(this,'Project 1','var(--accent)')"><span class="cpd-dot" style="background:var(--accent)"></span>Project 1</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 2','var(--run)')"><span class="cpd-dot" style="background:var(--run)"></span>Project 2</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 3','var(--ok)')"><span class="cpd-dot" style="background:var(--ok)"></span>Project 3</div>
+            <div class="crumb-dropdown-item" onclick="switchProject(this,'Project 4','var(--neutral)')"><span class="cpd-dot" style="background:var(--neutral)"></span>Project 4</div>
+          </div>
+        </span>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-here">Settings</span>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-btn" data-od-id="topbar-sync">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 3a5 5 0 1 0 1.5 4" stroke-linecap="round"/><path d="M11 1v3h-3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync
+        </button>
+      </div>
+    </div>
+
+    <div class="surface" data-od-id="surface">
+
+      <!-- ═══ LEFT: scope selector ═══ -->
+      <div class="scope-pane" data-od-id="scope-pane">
+        <div class="scope-header" data-od-id="scope-header">
+          <div class="label">Editing scope</div>
+          <h2>Settings for</h2>
+        </div>
+        <div class="scope-list" data-od-id="scope-list">
+          <div class="scope-section-label">Per project</div>
+          <div class="scope-item active" data-od-id="scope-sdl" onclick="selectScope(this)">
+            <span class="si-dot" style="background:var(--accent)"></span>
+            <span class="si-name">Project 1</span>
+            <span class="si-badge">active</span>
+          </div>
+          <div class="scope-item" data-od-id="scope-pi" onclick="selectScope(this)">
+            <span class="si-dot" style="background:var(--run)"></span>
+            <span class="si-name">Project 2</span>
+          </div>
+          <div class="scope-item" data-od-id="scope-skylos" onclick="selectScope(this)">
+            <span class="si-dot" style="background:var(--ok)"></span>
+            <span class="si-name">Project 3</span>
+          </div>
+          <div class="scope-item" data-od-id="scope-uiv2" onclick="selectScope(this)">
+            <span class="si-dot" style="background:var(--neutral)"></span>
+            <span class="si-name">Project 4</span>
+            <span class="si-badge">paused</span>
+          </div>
+          <div class="scope-add" data-od-id="scope-add">
+            <span class="si-dot" style="background:transparent;border:1px dashed var(--accent)"></span>
+            <span>Add project…</span>
+          </div>
+
+          <div class="scope-section-label" style="margin-top:12px">Global</div>
+          <div class="scope-item" data-od-id="scope-global" onclick="selectScope(this)">
+            <span class="si-dot" style="background:var(--t3)"></span>
+            <span class="si-name">Factory defaults</span>
+          </div>
+        </div>
+        <div class="scope-footer" data-od-id="scope-footer">
+          <span class="global">Per-project</span> settings override factory defaults. Switch scope to edit a different project's configuration.
+        </div>
+      </div>
+
+      <!-- ═══ RIGHT: form pane ═══ -->
+      <div class="form-pane" data-od-id="form-pane">
+
+        <!-- tab strip — 5 tabs, no Projects (scope selector handles that) -->
+        <div class="form-tabs" data-od-id="form-tabs">
+          <div class="form-tab active" data-od-id="tab-roster" onclick="selectTab(this,'roster')">Roster<span class="tab-count">5</span></div>
+          <div class="form-tab" data-od-id="tab-lanes" onclick="selectTab(this,'lanes')">Lanes<span class="tab-count">4</span></div>
+          <div class="form-tab" data-od-id="tab-providers" onclick="selectTab(this,'providers')">Providers<span class="tab-count">5</span></div>
+          <div class="form-tab" data-od-id="tab-machines" onclick="selectTab(this,'machines')">Machines<span class="tab-count">3</span></div>
+          <div class="form-tab" data-od-id="tab-appearance" onclick="selectTab(this,'appearance')">Appearance</div>
+        </div>
+
+        <div class="form-body" data-od-id="form-body">
+
+          <!-- ═══ ROSTER TAB ═══ -->
+          <div class="form-body-content fade-in" id="tab-content-roster" data-od-id="tab-content-roster">
+            <div class="form-panel-title">Agent roster · <span class="scope-name-inline">Project 1</span></div>
+            <div class="form-panel-sub">Pick which models do the work and which one reviews. Cross-family review is enforced — the writer's family can never review its own code.</div>
+
+            <div class="form-section">
+              <div class="form-section-title">
+                <span>Workhorses <span style="color:var(--t4);font-family:var(--font-sans);text-transform:none;letter-spacing:0">— agents that write code</span></span>
+                <span class="section-action" data-od-id="roster-add-agent" onclick="addAgentRow()">+ Add workhorse</span>
+              </div>
+              <table class="roster-table">
+                <thead><tr><th>Provider</th><th>Model</th><th>Authentication</th><th></th></tr></thead>
+                <tbody id="roster-tbody">
+                  <tr data-od-id="roster-row-grok">
+                    <td class="mono">xAI</td>
+                    <td>
+                      <select class="roster-select" data-od-id="roster-model-grok" onchange="markDirty();updateReviewFamily()">
+                        <option selected>Grok 4.5</option>
+                        <option>Grok 4</option>
+                        <option>Grok 3.5</option>
+                      </select>
+                    </td>
+                    <td><span class="auth-badge ok" data-od-id="roster-auth-grok"><span class="dot"></span> connected</span></td>
+                    <td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>
+                  </tr>
+                  <tr data-od-id="roster-row-glm">
+                    <td class="mono">Z.ai</td>
+                    <td>
+                      <select class="roster-select" data-od-id="roster-model-glm" onchange="markDirty();updateReviewFamily()">
+                        <option selected>GLM 5.2</option>
+                        <option>GLM 5</option>
+                        <option>GLM 4.5</option>
+                      </select>
+                    </td>
+                    <td><span class="auth-badge ok" data-od-id="roster-auth-glm"><span class="dot"></span> connected</span></td>
+                    <td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>
+                  </tr>
+                  <tr data-od-id="roster-row-kimi">
+                    <td class="mono">Moonshot</td>
+                    <td>
+                      <select class="roster-select" data-od-id="roster-model-kimi" onchange="markDirty();updateReviewFamily()">
+                        <option selected>Kimi K2.7</option>
+                        <option>Kimi K2</option>
+                        <option>Kimi K1.5</option>
+                      </select>
+                    </td>
+                    <td><span class="auth-badge ok" data-od-id="roster-auth-kimi"><span class="dot"></span> connected</span></td>
+                    <td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>
+                  </tr>
+                  <tr data-od-id="roster-row-qwen">
+                    <td class="mono">Alibaba</td>
+                    <td>
+                      <select class="roster-select" data-od-id="roster-model-qwen" onchange="markDirty();updateReviewFamily()">
+                        <option selected>Qwen 3.8-max</option>
+                        <option>Qwen 3.5</option>
+                        <option>Qwen 3</option>
+                      </select>
+                    </td>
+                    <td><span class="auth-badge warn" data-od-id="roster-auth-qwen"><span class="dot"></span> needs auth</span></td>
+                    <td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title">
+                <span>Reviewer <span style="color:var(--t4);font-family:var(--font-sans);text-transform:none;letter-spacing:0">— the one agent that checks the work</span></span>
+                <span class="section-action" data-od-id="roster-add-reviewer" onclick="addReviewerRow()">+ Add reviewer</span>
+              </div>
+              <table class="roster-table">
+                <thead><tr><th>Provider</th><th>Model</th><th>Authentication</th><th></th></tr></thead>
+                <tbody id="reviewer-tbody">
+                  <tr data-od-id="roster-row-opus">
+                    <td class="mono">Anthropic</td>
+                    <td>
+                      <select class="roster-select" data-od-id="roster-model-opus" onchange="markDirty();updateReviewFamily()">
+                        <option selected>Claude Opus 5</option>
+                        <option>Claude Opus 4.8</option>
+                        <option>Claude Sonnet 4.5</option>
+                      </select>
+                    </td>
+                    <td><span class="auth-badge ok" data-od-id="roster-auth-opus"><span class="dot"></span> connected</span></td>
+                    <td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="review-family-box" data-od-id="review-family-box">
+                <div class="rf-header">
+                  <span class="rf-label">Review family · auto-detected</span>
+                  <span class="rf-badge ok" id="rf-badge">Anthropic</span>
+                </div>
+                <div class="rf-body" id="rf-body">Workhorse families: <strong>xAI, Z.ai, Moonshot, Alibaba</strong>. Reviewer family <strong>Anthropic</strong> is cross-family compatible — no conflict.</div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- ═══ LANES TAB ═══ -->
+          <div class="form-body-content" id="tab-content-lanes" style="display:none" data-od-id="tab-content-lanes">
+            <div class="form-panel-title">Rate-limit buckets · <span class="scope-name-inline">Project 1</span></div>
+            <div class="form-panel-sub">Each provider account is one rate-limit bucket — a "lane." The factory spreads work across lanes so no single account hits its rate limit. Enable a lane and the factory auto-picks from it when work enters Ready.</div>
+
+            <div class="lane-callout" data-od-id="lane-callout">
+              <div class="lc-title">What is a lane?</div>
+              <div class="lc-body">A lane is one provider account = one rate-limit bucket. If you have one xAI account and one Z.ai account, you have two lanes. The factory can run two runs concurrently — one per lane — without either hitting the other's rate limit. Add more provider accounts in the Providers tab to get more lanes.</div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title">Active lanes</div>
+              <div class="lane-row" data-od-id="lane-a">
+                <span class="lane-id">Lane 1</span>
+                <div class="lane-body">
+                  <select class="lane-model-select" data-od-id="lane-model-a" onchange="markDirty()">
+                    <option selected>xAI · Grok 4.5</option>
+                    <option>Z.ai · GLM 5.2</option>
+                    <option>Moonshot · Kimi K2.7</option>
+                    <option>Alibaba · Qwen 3.8-max</option>
+                    <option>Anthropic · Claude Opus 5</option>
+                  </select>
+                  <span class="lane-status active">● running · 0:42</span>
+                </div>
+                <div class="form-toggle on" data-od-id="toggle-lane-a" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="lane-row" data-od-id="lane-b">
+                <span class="lane-id">Lane 2</span>
+                <div class="lane-body">
+                  <select class="lane-model-select" data-od-id="lane-model-b" onchange="markDirty()">
+                    <option>xAI · Grok 4.5</option>
+                    <option selected>Z.ai · GLM 5.2</option>
+                    <option>Moonshot · Kimi K2.7</option>
+                    <option>Alibaba · Qwen 3.8-max</option>
+                    <option>Anthropic · Claude Opus 5</option>
+                  </select>
+                  <span class="lane-status active">● running · 0:18</span>
+                </div>
+                <div class="form-toggle on" data-od-id="toggle-lane-b" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="lane-row" data-od-id="lane-c">
+                <span class="lane-id">Lane 3</span>
+                <div class="lane-body">
+                  <select class="lane-model-select" data-od-id="lane-model-c" onchange="markDirty()">
+                    <option>xAI · Grok 4.5</option>
+                    <option>Z.ai · GLM 5.2</option>
+                    <option selected>Moonshot · Kimi K2.7</option>
+                    <option>Alibaba · Qwen 3.8-max</option>
+                    <option>Anthropic · Claude Opus 5</option>
+                  </select>
+                  <span class="lane-status active">● running · 1:04</span>
+                </div>
+                <div class="form-toggle on" data-od-id="toggle-lane-c" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="lane-row" data-od-id="lane-d">
+                <span class="lane-id">Lane 4</span>
+                <div class="lane-body">
+                  <select class="lane-model-select" data-od-id="lane-model-d" onchange="markDirty()">
+                    <option>xAI · Grok 4.5</option>
+                    <option>Z.ai · GLM 5.2</option>
+                    <option>Moonshot · Kimi K2.7</option>
+                    <option selected>Alibaba · Qwen 3.8-max</option>
+                    <option>Anthropic · Claude Opus 5</option>
+                  </select>
+                  <span class="lane-status unauth">○ not authenticated</span>
+                </div>
+                <div class="form-toggle" data-od-id="toggle-lane-d" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="lane-row" data-od-id="lane-e">
+                <span class="lane-id">Lane 5</span>
+                <div class="lane-body">
+                  <select class="lane-model-select" data-od-id="lane-model-e" onchange="markDirty()">
+                    <option>xAI · Grok 4.5</option>
+                    <option>Z.ai · GLM 5.2</option>
+                    <option>Moonshot · Kimi K2.7</option>
+                    <option>Alibaba · Qwen 3.8-max</option>
+                    <option selected>Anthropic · Claude Opus 5</option>
+                  </select>
+                  <span class="lane-status idle">○ idle · reviewer only</span>
+                </div>
+                <div class="form-toggle on" data-od-id="toggle-lane-e" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title">Balancing</div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Max concurrent lanes</div><div class="form-hint">How many lanes can run at the same time</div></div>
+                <select class="form-select compact" data-od-id="select-max-lanes" onchange="markDirty()"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Retry budget per lane</div><div class="form-hint">Retries before parking the run</div></div>
+                <input class="form-input" type="number" value="3" min="0" max="10" style="width:80px" data-od-id="input-retry-budget" onchange="markDirty()">
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Auto-pick from Ready</div><div class="form-hint">Factory pulls work automatically when a lane frees up</div></div>
+                <div class="form-toggle on" data-od-id="toggle-auto-pick" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Reviewer gets its own lane</div><div class="form-hint">Dedicated lane for the reviewer so it never blocks workhorses</div></div>
+                <div class="form-toggle on" data-od-id="toggle-reviewer-lane" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ PROVIDERS TAB ═══ -->
+          <div class="form-body-content" id="tab-content-providers" style="display:none" data-od-id="tab-content-providers">
+            <div class="form-panel-title">Providers & auth · <span class="scope-name-inline">Project 1</span></div>
+            <div class="form-panel-sub">Connect a provider to bring its models into the factory. Most use OAuth or subscription auth.</div>
+
+            <div class="form-section">
+              <div class="form-section-title">
+                <span>Connected providers</span>
+                <span class="section-action" data-od-id="provider-add-btn" onclick="addProviderRow()">+ Add provider</span>
+              </div>
+
+              <div class="provider-row" data-od-id="provider-grok">
+                <div class="pr-icon">G</div>
+                <div class="pr-body">
+                  <div class="pr-name">xAI (Grok)</div>
+                  <div class="pr-auth">Auth: OAuth · token refreshes automatically</div>
+                </div>
+                <select class="pr-model-select" data-od-id="provider-model-grok" onchange="markDirty()">
+                  <option selected>Grok 4.5</option>
+                  <option>Grok 4</option>
+                  <option>Grok 3.5</option>
+                </select>
+                <div class="pr-status"><span class="dot" style="background:var(--ok)"></span> connected</div>
+                <div class="pr-actions">
+                  <button class="pr-btn" onclick="markDirty()">Reconnect</button>
+                  <button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button>
+                </div>
+              </div>
+
+              <div class="provider-row" data-od-id="provider-glm">
+                <div class="pr-icon">Z</div>
+                <div class="pr-body">
+                  <div class="pr-name">Z.ai (GLM)</div>
+                  <div class="pr-auth">Auth: API key · stored in keychain</div>
+                </div>
+                <select class="pr-model-select" data-od-id="provider-model-glm" onchange="markDirty()">
+                  <option selected>GLM 5.2</option>
+                  <option>GLM 5</option>
+                  <option>GLM 4.5</option>
+                </select>
+                <div class="pr-status"><span class="dot" style="background:var(--ok)"></span> connected</div>
+                <div class="pr-actions">
+                  <button class="pr-btn" onclick="markDirty()">Rotate key</button>
+                  <button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button>
+                </div>
+              </div>
+
+              <div class="provider-row" data-od-id="provider-kimi">
+                <div class="pr-icon">M</div>
+                <div class="pr-body">
+                  <div class="pr-name">Moonshot (Kimi)</div>
+                  <div class="pr-auth">Auth: OAuth · browser flow</div>
+                </div>
+                <select class="pr-model-select" data-od-id="provider-model-kimi" onchange="markDirty()">
+                  <option selected>Kimi K2.7</option>
+                  <option>Kimi K2</option>
+                  <option>Kimi K1.5</option>
+                </select>
+                <div class="pr-status"><span class="dot" style="background:var(--ok)"></span> connected</div>
+                <div class="pr-actions">
+                  <button class="pr-btn" onclick="markDirty()">Reconnect</button>
+                  <button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button>
+                </div>
+              </div>
+
+              <div class="provider-row" data-od-id="provider-qwen">
+                <div class="pr-icon">Q</div>
+                <div class="pr-body">
+                  <div class="pr-name">Alibaba (Qwen)</div>
+                  <div class="pr-auth">Auth: API key · opencode-go connector</div>
+                </div>
+                <select class="pr-model-select" data-od-id="provider-model-qwen" onchange="markDirty()">
+                  <option selected>Qwen 3.8-max</option>
+                  <option>Qwen 3.5</option>
+                  <option>Qwen 3</option>
+                </select>
+                <div class="pr-status"><span class="dot" style="background:var(--t3)"></span> not configured</div>
+                <div class="pr-actions">
+                  <button class="pr-btn" onclick="markDirty()">Add key</button>
+                  <button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button>
+                </div>
+              </div>
+
+              <div class="provider-row" data-od-id="provider-claude">
+                <div class="pr-icon">C</div>
+                <div class="pr-body">
+                  <div class="pr-name">Anthropic (Claude)</div>
+                  <div class="pr-auth">Auth: OAuth · used for review lane</div>
+                </div>
+                <select class="pr-model-select" data-od-id="provider-model-claude" onchange="markDirty()">
+                  <option selected>Claude Opus 5</option>
+                  <option>Claude Opus 4.8</option>
+                  <option>Claude Sonnet 4.5</option>
+                </select>
+                <div class="pr-status"><span class="dot" style="background:var(--ok)"></span> connected</div>
+                <div class="pr-actions">
+                  <button class="pr-btn" onclick="markDirty()">Reconnect</button>
+                  <button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button>
+                </div>
+              </div>
+
+              <div class="provider-add" data-od-id="provider-add" onclick="addProviderRow()">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 3v8M3 7h8" stroke-linecap="round"/></svg>
+                <span>Add a new provider…</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ MACHINES TAB ═══ -->
+          <div class="form-body-content" id="tab-content-machines" style="display:none" data-od-id="tab-content-machines">
+            <div class="form-panel-title">Machines · <span class="scope-name-inline">Factory defaults</span></div>
+            <div class="form-panel-sub">VPS servers that run factory instances. Each project dispatches its work to one machine. Plan locally, run remotely.</div>
+
+            <div class="form-section">
+              <div class="form-section-title">
+                <span>Connected servers <span style="color:var(--t4);font-family:var(--font-sans);text-transform:none;letter-spacing:0">— where factory instances run</span></span>
+                <span class="section-action" data-od-id="machines-add" onclick="addMachineRow()">+ Add server</span>
+              </div>
+              <div class="machine-list" id="machine-list" data-od-id="machine-list">
+                <div class="machine-row" data-od-id="machine-row-hetzner">
+                  <div class="mc-icon" style="background:var(--accent-surface);color:var(--accent)">H</div>
+                  <div class="mc-body">
+                    <div class="mc-name">hetzner-cax31 <span class="mc-tag">primary</span></div>
+                    <div class="mc-meta">Hetzner Cloud · CAX31 · 8 vCPU · 16 GB · Falkenstein</div>
+                  </div>
+                  <div class="mc-ip">49.12.84.231</div>
+                  <div class="mc-factory"><span class="dot" style="background:var(--ok)"></span>factory · v2.3.1</div>
+                  <div class="mc-status"><span class="dot" style="background:var(--ok)"></span> connected · 2 runs</div>
+                  <div class="mc-actions">
+                    <button class="pr-btn" onclick="markDirty()">SSH</button>
+                    <button class="pr-btn danger" onclick="removeMachineRow(this)">Remove</button>
+                  </div>
+                </div>
+                <div class="machine-row" data-od-id="machine-row-do">
+                  <div class="mc-icon" style="background:var(--raised);color:var(--t2)">D</div>
+                  <div class="mc-body">
+                    <div class="mc-name">do-fra1-s-2vcpu</div>
+                    <div class="mc-meta">DigitalOcean · Premium S · 2 vCPU · 4 GB · Frankfurt</div>
+                  </div>
+                  <div class="mc-ip">164.90.132.57</div>
+                  <div class="mc-factory"><span class="dot" style="background:var(--ok)"></span>factory · v2.3.1</div>
+                  <div class="mc-status"><span class="dot" style="background:var(--ok)"></span> connected · idle</div>
+                  <div class="mc-actions">
+                    <button class="pr-btn" onclick="markDirty()">SSH</button>
+                    <button class="pr-btn danger" onclick="removeMachineRow(this)">Remove</button>
+                  </div>
+                </div>
+                <div class="machine-row" data-od-id="machine-row-aws">
+                  <div class="mc-icon" style="background:var(--raised);color:var(--t2)">A</div>
+                  <div class="mc-body">
+                    <div class="mc-name">aws-ec2-t3-medium</div>
+                    <div class="mc-meta">AWS EC2 · t3.medium · 2 vCPU · 4 GB · eu-west-1 (Dublin)</div>
+                  </div>
+                  <div class="mc-ip">54.246.187.92</div>
+                  <div class="mc-factory"><span class="dot" style="background:var(--warn)"></span>factory · v2.2.0 (update)</div>
+                  <div class="mc-status"><span class="dot" style="background:var(--warn)"></span> connected · 1 run</div>
+                  <div class="mc-actions">
+                    <button class="pr-btn" onclick="markDirty()">SSH</button>
+                    <button class="pr-btn danger" onclick="removeMachineRow(this)">Remove</button>
+                  </div>
+                </div>
+                <div class="machine-row" data-od-id="machine-row-local">
+                  <div class="mc-icon" style="background:var(--raised);color:var(--t2)">L</div>
+                  <div class="mc-body">
+                    <div class="mc-name">localhost <span class="mc-tag dim">planning only</span></div>
+                    <div class="mc-meta">This machine · used for planning sessions, not for factory runs</div>
+                  </div>
+                  <div class="mc-ip">127.0.0.1</div>
+                  <div class="mc-factory"><span class="dot" style="background:var(--t3)"></span>no factory</div>
+                  <div class="mc-status"><span class="dot" style="background:var(--t3)"></span> local</div>
+                  <div class="mc-actions">
+                    <button class="pr-btn" onclick="markDirty()">Test</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title">Default dispatch</div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Default machine for new projects</div><div class="form-hint">Where a project runs if no machine is explicitly set</div></div>
+                <select class="form-select compact" data-od-id="select-default-machine" onchange="markDirty()">
+                  <option selected>hetzner-cax31 (primary)</option>
+                  <option>do-fra1-s-2vcpu</option>
+                  <option>aws-ec2-t3-medium</option>
+                  <option>Ask each time — prompt on first dispatch</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Failover</div><div class="form-hint">If the primary machine is unreachable, fall back to…</div></div>
+                <select class="form-select compact" data-od-id="select-failover" onchange="markDirty()">
+                  <option selected>do-fra1-s-2vcpu</option>
+                  <option>aws-ec2-t3-medium</option>
+                  <option>Queue work until primary returns</option>
+                  <option>None — fail hard</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="lane-callout" data-od-id="machine-callout">
+              <div class="lc-title">Why machines matter</div>
+              <div class="lc-body">Planning happens on your laptop. Factory execution happens on a VPS so runs don't compete with your local tools for CPU and RAM. Each project binds to one machine — you can see which one in the Runs and Board views. If a server goes down, failover reroutes work automatically.</div>
+            </div>
+          </div>
+
+          <!-- ═══ APPEARANCE TAB ═══ -->
+          <div class="form-body-content" id="tab-content-appearance" style="display:none" data-od-id="tab-content-appearance">
+            <div class="form-panel-title">Appearance & theme · <span class="scope-name-inline">Factory defaults</span></div>
+            <div class="form-panel-sub">Visual direction for the entire factory. This is a global setting — it applies to all projects.</div>
+
+            <div class="form-section">
+              <div class="form-section-title">Theme</div>
+              <div class="theme-cards">
+                <div class="theme-card selected" data-od-id="theme-editorial" onclick="selectTheme(this)">
+                  <div class="tc-swatch editorial"></div>
+                  <div class="tc-name">Editorial Instrument</div>
+                  <div class="tc-desc">Warm dark · amber · serif</div>
+                </div>
+                <div class="theme-card" data-od-id="theme-mission" onclick="selectTheme(this)">
+                  <div class="tc-swatch mission"></div>
+                  <div class="tc-name">Mission Console</div>
+                  <div class="tc-desc">Cool dark · cyan · mono</div>
+                </div>
+                <div class="theme-card" data-od-id="theme-workshop" onclick="selectTheme(this)">
+                  <div class="tc-swatch workshop"></div>
+                  <div class="tc-name">Light Workshop</div>
+                  <div class="tc-desc">Bright · indigo · grotesque</div>
+                </div>
+                <div class="theme-card" data-od-id="theme-twilight" onclick="selectTheme(this)">
+                  <div class="tc-swatch twilight"></div>
+                  <div class="tc-name">Twilight Press</div>
+                  <div class="tc-desc">Deep purple · rose · serif</div>
+                </div>
+                <div class="theme-card" data-od-id="theme-carbon" onclick="selectTheme(this)">
+                  <div class="tc-swatch carbon"></div>
+                  <div class="tc-name">Carbon Grid</div>
+                  <div class="tc-desc">Near-black · green · mono</div>
+                </div>
+                <div class="theme-card" data-od-id="theme-paper" onclick="selectTheme(this)">
+                  <div class="tc-swatch paper"></div>
+                  <div class="tc-name">Paper Notebook</div>
+                  <div class="tc-desc">Warm light · rust · serif</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title">Display</div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Density</div><div class="form-hint">Row height across the app</div></div>
+                <select class="form-select compact" data-od-id="select-density" onchange="markDirty()"><option>Compact (32px)</option><option selected>Editorial (36px)</option><option>Comfortable (44px)</option></select>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Mono font for data</div><div class="form-hint">Used for IDs, paths, timestamps</div></div>
+                <select class="form-select compact" data-od-id="select-mono" onchange="markDirty()"><option selected>Cascadia Mono</option><option>SF Mono</option><option>Consolas</option></select>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Status dots pulse</div><div class="form-hint">Animate status indicators for running work</div></div>
+                <div class="form-toggle on" data-od-id="toggle-pulse" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-label-group"><div class="form-label">Reduce motion</div><div class="form-hint">Disable pulse animations and transitions</div></div>
+                <div class="form-toggle" data-od-id="toggle-reduce-motion" onclick="this.classList.toggle('on');markDirty()"></div>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /form-body -->
+
+        <!-- auto-save status bar (no button) -->
+        <div class="save-status-bar saved" data-od-id="save-status-bar">
+          <span class="dot"></span>
+          <span class="save-text" id="save-text">All changes saved — Project 1 scope</span>
+        </div>
+
+      </div><!-- /form-pane -->
+    </div><!-- /surface -->
+  </div><!-- /main-col -->
+</div><!-- /app -->
+
+<!-- Add Project modal -->
+<div class="modal-overlay" id="add-project-modal" data-od-id="add-project-modal" onclick="if(event.target===this)closeAddProject()">
+  <div class="modal">
+    <div class="modal-header" data-od-id="modal-header">
+      <h3>Add project</h3>
+      <div class="modal-sub">Register a new project so the factory can run work on it.</div>
+    </div>
+    <div class="modal-body" data-od-id="modal-body">
+      <div class="modal-field">
+        <label>Project name</label>
+        <input type="text" placeholder="e.g. Project 5" data-od-id="modal-project-name">
+        <span class="field-hint">Used as the display name in the sidebar and scope list</span>
+      </div>
+      <div class="modal-field">
+        <label>Repository path</label>
+        <input type="text" placeholder="/path/to/repo" data-od-id="modal-project-path" oninput="checkInitStatus()">
+        <span class="field-hint">Local path to the git repo the factory will work in</span>
+      </div>
+      <div class="modal-field">
+        <label>Detection</label>
+        <div class="modal-detection" data-od-id="modal-detection">
+          <span class="detect-row"><span class="detect-dot" id="detect-git" style="background:var(--t3)"></span> Git repository <span class="detect-state" id="detect-git-state">— enter path</span></span>
+          <span class="detect-row"><span class="detect-dot" id="detect-factory" style="background:var(--t3)"></span> Factory initialized <span class="detect-state" id="detect-factory-state">— enter path</span></span>
+          <span class="detect-hint" id="detect-hint">Most new projects won't have documentation until the factory runs its first document phase.</span>
+        </div>
+      </div>
+      <div class="modal-field">
+        <label>Sync mode</label>
+        <select data-od-id="modal-project-sync">
+          <option selected>Pull on boot — factory pulls latest main at start</option>
+          <option>Manual — I sync before dispatching work</option>
+          <option>Watch — factory auto-pulls when main moves</option>
+        </select>
+        <span class="field-hint">How the factory keeps the working copy in sync with main</span>
+      </div>
+      <div class="modal-field">
+        <label>Inherit roster from</label>
+        <select data-od-id="modal-project-roster" onchange="toggleCopyFrom(this)">
+          <option selected>Factory defaults — use the global roster</option>
+          <option value="copy">Copy from existing project…</option>
+          <option>Start empty — I'll configure agents</option>
+        </select>
+      </div>
+      <div class="modal-field copy-from-project" id="copy-from-project" style="display:none">
+        <label>Copy from project</label>
+        <select data-od-id="modal-copy-from">
+          <option selected>Project 1</option>
+          <option>Project 2</option>
+          <option>Project 3</option>
+          <option>Project 4</option>
+        </select>
+        <span class="field-hint">Roster, lanes, and provider settings will be copied from the selected project</span>
+      </div>
+    </div>
+    <div class="modal-footer" data-od-id="modal-footer">
+      <button class="modal-btn" onclick="closeAddProject()">Cancel</button>
+      <button class="modal-btn primary" data-od-id="modal-add-btn" onclick="confirmAddProject()">Add project</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var PER_PROJECT_TABS = ['roster','lanes'];
+var GLOBAL_TABS = ['providers','machines','appearance'];
+
+function selectScope(el) {
+  document.querySelectorAll('.scope-item').forEach(function(s){ s.classList.remove('active'); });
+  el.classList.add('active');
+  var name = el.querySelector('.si-name').textContent;
+  var isGlobal = el.getAttribute('data-od-id') === 'scope-global';
+
+  /* update breadcrumb */
+  var crumb = document.querySelector('.breadcrumb .crumb-here');
+  var crumbProj = document.querySelector('.breadcrumb .crumb-project');
+  if (crumb) {
+    if (isGlobal) {
+      crumb.textContent = 'Settings · Factory defaults';
+    } else {
+      crumb.textContent = 'Settings';
+    }
+  }
+  if (crumbProj) {
+    var projText = crumbProj.childNodes[2];
+    if (isGlobal) {
+      if (projText) projText.textContent = ' Factory defaults ';
+      var cpDot = crumbProj.querySelector('.cp-dot');
+      if (cpDot) cpDot.style.background = 'var(--t3)';
+    } else {
+      if (projText) projText.textContent = ' ' + name + ' ';
+      var dot = el.querySelector('.si-dot');
+      if (dot) {
+        var cpDot2 = crumbProj.querySelector('.cp-dot');
+        if (cpDot2) cpDot2.style.background = getComputedStyle(dot).backgroundColor;
+      }
+    }
+  }
+
+  /* update save status */
+  document.getElementById('save-text').textContent = 'All changes saved — ' + (isGlobal ? 'Factory defaults' : name) + ' scope';
+
+  /* update panel title scope names */
+  document.querySelectorAll('.scope-name-inline').forEach(function(s){
+    s.textContent = isGlobal ? 'Factory defaults' : name;
+  });
+
+  /* update visible tabs based on scope */
+  var allowedTabs = isGlobal ? GLOBAL_TABS : PER_PROJECT_TABS;
+  document.querySelectorAll('.form-tab').forEach(function(tab){
+    var tabId = tab.getAttribute('data-od-id').replace('tab-','');
+    if (allowedTabs.indexOf(tabId) !== -1) {
+      tab.style.display = 'flex';
+    } else {
+      tab.style.display = 'none';
+    }
+  });
+
+  /* if active tab is now hidden, switch to first allowed tab */
+  var activeTab = document.querySelector('.form-tab.active');
+  var activeTabId = activeTab ? activeTab.getAttribute('data-od-id').replace('tab-','') : null;
+  if (allowedTabs.indexOf(activeTabId) === -1) {
+    var firstAllowed = document.querySelector('.form-tab[data-od-id="tab-' + allowedTabs[0] + '"]');
+    if (firstAllowed) {
+      selectTab(firstAllowed, allowedTabs[0]);
+    }
+  }
+
+  markDirty();
+}
+
+function selectTab(el, tab) {
+  document.querySelectorAll('.form-tab').forEach(function(t){ t.classList.remove('active'); });
+  el.classList.add('active');
+  document.querySelectorAll('.form-body-content').forEach(function(c){ c.style.display = 'none'; });
+  var panel = document.getElementById('tab-content-' + tab);
+  if (panel) {
+    panel.style.display = 'block';
+    panel.classList.remove('fade-in');
+    void panel.offsetWidth;
+    panel.classList.add('fade-in');
+  }
+}
+
+function selectTheme(el) {
+  document.querySelectorAll('.theme-card').forEach(function(c){ c.classList.remove('selected'); });
+  el.classList.add('selected');
+  markDirty();
+}
+
+/* ── cross-family review auto-detection ── */
+var MODEL_FAMILY = {
+  'Grok 4.5':'xAI','Grok 4':'xAI','Grok 3.5':'xAI',
+  'GLM 5.2':'Z.ai','GLM 5':'Z.ai','GLM 4.5':'Z.ai',
+  'Kimi K2.7':'Moonshot','Kimi K2':'Moonshot','Kimi K1.5':'Moonshot',
+  'Qwen 3.8-max':'Alibaba','Qwen 3.5':'Alibaba','Qwen 3':'Alibaba',
+  'Claude Opus 5':'Anthropic','Claude Opus 4.8':'Anthropic','Claude Sonnet 4.5':'Anthropic'
+};
+function updateReviewFamily() {
+  var workhorseFams = {};
+  document.querySelectorAll('#roster-tbody .roster-select').forEach(function(sel){
+    var fam = MODEL_FAMILY[sel.value];
+    if (fam) workhorseFams[fam] = true;
+  });
+  var reviewerSel = document.querySelector('[data-od-id="roster-model-opus"]');
+  var reviewerFam = reviewerSel ? MODEL_FAMILY[reviewerSel.value] : null;
+  var wfList = Object.keys(workhorseFams);
+  var badge = document.getElementById('rf-badge');
+  var body = document.getElementById('rf-body');
+  if (!badge || !body) return;
+  if (!reviewerFam) {
+    badge.className = 'rf-badge warn'; badge.textContent = 'none';
+    body.innerHTML = 'No reviewer selected. Pick a reviewer model to validate cross-family rule.';
+    return;
+  }
+  var conflict = workhorseFams[reviewerFam];
+  if (conflict) {
+    badge.className = 'rf-badge fail'; badge.textContent = reviewerFam;
+    body.innerHTML = 'Conflict — reviewer family <strong>' + reviewerFam + '</strong> is also a workhorse family. Pick a reviewer from a different family.';
+  } else {
+    badge.className = 'rf-badge ok'; badge.textContent = reviewerFam;
+    body.innerHTML = 'Workhorse families: <strong>' + (wfList.length ? wfList.join(', ') : 'none') + '</strong>. Reviewer family <strong>' + reviewerFam + '</strong> is cross-family compatible — no conflict.';
+  }
+}
+
+function markDirty() {
+  var bar = document.getElementById('save-status-bar') || document.querySelector('.save-status-bar');
+  if (!bar) return;
+  bar.classList.remove('saved');
+  bar.classList.add('dirty');
+  document.getElementById('save-text').textContent = 'Saving…';
+  clearTimeout(window._saveTimer);
+  window._saveTimer = setTimeout(function() {
+    bar.classList.remove('dirty');
+    bar.classList.add('saved');
+    var scope = document.querySelector('.scope-item.active .si-name');
+    var isGlobal = document.querySelector('.scope-item.active').getAttribute('data-od-id') === 'scope-global';
+    var scopeName = scope ? (isGlobal ? 'Factory defaults' : scope.textContent) : 'Project 1';
+    document.getElementById('save-text').textContent = 'All changes saved — ' + scopeName + ' scope';
+  }, 800);
+}
+
+function addAgentRow() {
+  var tbody = document.getElementById('roster-tbody');
+  var row = document.createElement('tr');
+  row.setAttribute('data-od-id', 'roster-row-new-' + Date.now());
+  row.innerHTML = '<td class="mono">—</td>' +
+    '<td><select class="roster-select" onchange="markDirty();updateReviewFamily()"><option>Choose model…</option><option>Grok 4.5</option><option>GLM 5.2</option><option>Kimi K2.7</option><option>Qwen 3.8-max</option></select></td>' +
+    '<td><span class="auth-badge warn"><span class="dot"></span> needs auth</span></td>' +
+    '<td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>';
+  tbody.appendChild(row);
+  markDirty();
+}
+
+function addReviewerRow() {
+  var tbody = document.getElementById('reviewer-tbody');
+  var row = document.createElement('tr');
+  row.setAttribute('data-od-id', 'roster-row-reviewer-' + Date.now());
+  row.innerHTML = '<td class="mono">—</td>' +
+    '<td><select class="roster-select" onchange="markDirty();updateReviewFamily()"><option>Choose model…</option><option>Claude Opus 5</option><option>Claude Sonnet 4.5</option><option>GPT-5</option><option>Gemini 3 Pro</option></select></td>' +
+    '<td><span class="auth-badge warn"><span class="dot"></span> needs auth</span></td>' +
+    '<td><button class="remove-btn" onclick="removeAgentRow(this)">Remove</button></td>';
+  tbody.appendChild(row);
+  markDirty();
+}
+
+function removeAgentRow(btn) {
+  btn.closest('tr').remove();
+  markDirty();
+}
+
+function addProviderRow() {
+  var section = document.querySelector('#tab-content-providers .form-section');
+  var addDiv = section.querySelector('.provider-add');
+  var row = document.createElement('div');
+  row.className = 'provider-row';
+  row.setAttribute('data-od-id', 'provider-new-' + Date.now());
+  row.innerHTML = '<div class="pr-icon">?</div>' +
+    '<div class="pr-body"><div class="pr-name">New provider</div><div class="pr-auth">Auth: — · configure on connect</div></div>' +
+    '<select class="pr-model-select" onchange="markDirty()"><option>Choose model…</option><option>Grok 4.5</option><option>GLM 5.2</option><option>Kimi K2.7</option><option>Qwen 3.8-max</option><option>Claude Opus 5</option></select>' +
+    '<div class="pr-status"><span class="dot" style="background:var(--t3)"></span> not configured</div>' +
+    '<div class="pr-actions"><button class="pr-btn" onclick="markDirty()">Connect</button><button class="pr-btn danger" onclick="removeProviderRow(this)">Remove</button></div>';
+  section.insertBefore(row, addDiv);
+  markDirty();
+}
+
+function removeProviderRow(btn) {
+  btn.closest('.provider-row').remove();
+  markDirty();
+}
+
+function addMachineRow() {
+  var list = document.getElementById('machine-list');
+  var row = document.createElement('div');
+  row.className = 'machine-row';
+  row.setAttribute('data-od-id', 'machine-new-' + Date.now());
+  row.innerHTML = '<div class="mc-icon" style="background:var(--raised);color:var(--t2)">?</div>' +
+    '<div class="mc-body"><div class="mc-name">new-server</div><div class="mc-meta">Configure host, provider, specs</div></div>' +
+    '<div class="mc-ip">—</div>' +
+    '<div class="mc-factory"><span class="dot" style="background:var(--t3)"></span>no factory</div>' +
+    '<div class="mc-status"><span class="dot" style="background:var(--t3)"></span> not configured</div>' +
+    '<div class="mc-actions"><button class="pr-btn" onclick="markDirty()">Connect</button><button class="pr-btn danger" onclick="removeMachineRow(this)">Remove</button></div>';
+  list.appendChild(row);
+  markDirty();
+}
+
+function removeMachineRow(btn) {
+  btn.closest('.machine-row').remove();
+  markDirty();
+}
+
+/* Add Project modal */
+function openAddProject() {
+  document.getElementById('add-project-modal').classList.add('open');
+  var nameInput = document.querySelector('[data-od-id="modal-project-name"]');
+  if (nameInput) nameInput.focus();
+}
+
+function closeAddProject() {
+  document.getElementById('add-project-modal').classList.remove('open');
+}
+
+function confirmAddProject() {
+  var nameInput = document.querySelector('[data-od-id="modal-project-name"]');
+  var name = nameInput && nameInput.value.trim() ? nameInput.value.trim() : 'New project';
+  closeAddProject();
+  markDirty();
+}
+
+function toggleCopyFrom(sel) {
+  var copyDiv = document.getElementById('copy-from-project');
+  if (copyDiv) copyDiv.style.display = sel.value === 'copy' ? 'flex' : 'none';
+}
+
+function checkInitStatus() {
+  var pathInput = document.querySelector('[data-od-id="modal-project-path"]');
+  var path = pathInput ? pathInput.value.trim() : '';
+  var gitDot = document.getElementById('detect-git');
+  var gitState = document.getElementById('detect-git-state');
+  var facDot = document.getElementById('detect-factory');
+  var facState = document.getElementById('detect-factory-state');
+  var hint = document.getElementById('detect-hint');
+  if (!path) {
+    if (gitDot) gitDot.style.background = 'var(--t3)';
+    if (gitState) gitState.textContent = '— enter path';
+    if (facDot) facDot.style.background = 'var(--t3)';
+    if (facState) facState.textContent = '— enter path';
+    if (hint) hint.textContent = "Most new projects won't have documentation until the factory runs its first document phase.";
+    return;
+  }
+  if (gitDot) gitDot.style.background = 'var(--ok)';
+  if (gitState) gitState.textContent = 'detected';
+  if (facDot) facDot.style.background = 'var(--warn)';
+  if (facState) facState.textContent = 'not initialized — factory will bootstrap on first run';
+  if (hint) hint.textContent = 'Git repo found. No factory workspace yet — the factory will create .factory/ on its first run.';
+}
+
+/* wire up add-project triggers */
+document.addEventListener('DOMContentLoaded', function() {
+  var scopeAdd = document.querySelector('[data-od-id="scope-add"]');
+  if (scopeAdd) scopeAdd.addEventListener('click', openAddProject);
+  var menuAdd = document.querySelector('.project-menu-item.add');
+  if (menuAdd) menuAdd.addEventListener('click', function(e){ e.stopPropagation(); openAddProject(); });
+  updateReviewFamily();
+});
+
+function switchProject(el, name, color) {
+  event.stopPropagation();
+  var colorMap = {
+    'var(--accent)':'#e0a64a',
+    'var(--run)':'#6ba4e8',
+    'var(--ok)':'#6dbb6e',
+    'var(--neutral)':'#7d7568'
+  };
+  var hexColor = colorMap[color] || color;
+  document.documentElement.style.setProperty('--accent', hexColor);
+  var crumb = document.querySelector('.crumb-project');
+  if (crumb) {
+    crumb.classList.remove('open');
+    var text = crumb.childNodes[2];
+    if (text) text.textContent = ' ' + name + ' ';
+    var dot = crumb.querySelector('.cp-dot');
+    if (dot) dot.style.background = color;
+  }
+  document.querySelectorAll('.crumb-dropdown-item').forEach(function(i){ i.classList.remove('active'); });
+  el.classList.add('active');
+  var projName = document.querySelector('.project-switcher .proj-name');
+  if (projName) projName.textContent = name;
+  var projDot = document.querySelector('.project-switcher .proj-dot');
+  if (projDot) projDot.style.background = color;
+  document.querySelectorAll('.project-menu-item').forEach(function(m){ m.classList.remove('active'); });
+  document.querySelectorAll('.project-menu-item').forEach(function(m){
+    if (m.textContent.trim() === name) m.classList.add('active');
+  });
+  var scopeItems = document.querySelectorAll('.scope-item');
+  scopeItems.forEach(function(s){ s.classList.remove('active'); });
+  scopeItems.forEach(function(s){
+    var siName = s.querySelector('.si-name');
+    if (siName && siName.textContent.trim() === name) s.classList.add('active');
+  });
+  document.querySelectorAll('.scope-name-inline').forEach(function(sn){ sn.textContent = name; });
+}
+</script>
+</body>
+</html>

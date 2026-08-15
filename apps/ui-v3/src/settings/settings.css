@@ -1,0 +1,301 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SETTINGS — ported rule-for-rule from docs/design/ui-v3-mocks/settings-v3.html.
+
+   The mock's class names are kept, so a rule here can be diffed against the
+   drawing byte for byte. Everything the shell already owns (the sidebar, the
+   topbar, the modal chrome, .dot / .status-triple / .empty-state) lives in
+   src/shell.css and is NOT repeated here.
+
+   Anything this file adds beyond the drawing is marked `v3 settings addition`
+   with the reason. There are only a few, and every one of them exists because
+   real data has a shape the illustration did not (a lane is named
+   "ollama-cloud", not "Lane 1") or because a drawn control has no write behind
+   it and must read as disabled rather than pretend.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ SCOPE SELECTOR (left) ═══ */
+.scope-pane{width:var(--scope-w);flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--hairline);background:var(--chrome);}
+.scope-header{padding:14px 16px;border-bottom:1px solid var(--hairline);flex-shrink:0;}
+.scope-header .label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;}
+.scope-header h2{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);}
+.scope-list{flex:1;overflow-y:auto;padding:8px 8px;}
+.scope-section-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;padding:10px 8px 6px;}
+.scope-item{display:flex;align-items:center;gap:10px;height:38px;width:100%;padding:0 10px;border-radius:var(--r-chip);color:var(--t2);font-size:var(--text-body);transition:background .12s,color .12s;cursor:pointer;position:relative;text-align:left;}
+.scope-item:hover{background:var(--row-hover);color:var(--t1);}
+.scope-item.active{background:var(--row-active);color:var(--t1);}
+.scope-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
+.scope-item .si-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
+.scope-item .si-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scope-item .si-badge{font-family:var(--font-mono);font-size:10px;color:var(--t3);padding:1px 6px;border:1px solid var(--hairline);border-radius:3px;}
+.scope-item.active .si-badge{color:var(--accent);border-color:var(--accent-dim);}
+.scope-add{display:flex;align-items:center;gap:10px;height:38px;width:100%;padding:0 10px;border-radius:var(--r-chip);color:var(--accent);font-size:var(--text-body);transition:background .12s;cursor:pointer;text-align:left;}
+.scope-add:hover{background:var(--row-hover);}
+.scope-footer{padding:10px 12px;border-top:1px solid var(--hairline);font-size:var(--text-meta);color:var(--t3);line-height:1.5;}
+.scope-footer .global{color:var(--t2);font-weight:500;}
+
+/* ═══ FORM PANE (right) ═══ */
+.form-pane{flex:1;min-width:0;display:flex;flex-direction:column;}
+
+.form-tabs{flex-shrink:0;display:flex;align-items:center;gap:0;padding:0 20px;border-bottom:1px solid var(--hairline);background:var(--chrome);height:42px;overflow-x:auto;}
+.form-tabs .form-tab{flex:1 1 0;display:flex;align-items:center;justify-content:center;gap:6px;height:42px;padding:0 16px;font-size:var(--text-body);color:var(--t3);border-bottom:2px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap;cursor:pointer;}
+.form-tabs::-webkit-scrollbar{display:none;}
+.form-tab:hover{color:var(--t1);}
+.form-tab.active{color:var(--t1);border-bottom-color:var(--accent);}
+.form-tab .tab-count{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);}
+.form-tab.active .tab-count{color:var(--accent);}
+
+.form-body{flex:1;overflow-y:auto;padding:28px 32px 60px;}
+.form-body-content{max-width:none;}
+.form-panel-title{font-family:var(--font-serif);font-size:24px;font-weight:600;color:var(--t1);letter-spacing:-0.3px;margin-bottom:6px;}
+.form-panel-sub{font-family:var(--font-serif);font-style:italic;font-size:var(--text-body);color:var(--t2);margin-bottom:28px;}
+
+.form-section{margin-bottom:32px;}
+.form-section-title{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.form-section-title .section-action{font-family:var(--font-sans);text-transform:none;letter-spacing:0;font-size:var(--text-meta);color:var(--accent);cursor:pointer;transition:opacity .15s;}
+.form-section-title .section-action:hover{opacity:0.8;}
+/* v3 settings addition: a section action with no endpoint behind it is drawn
+   and disabled, never wired to nothing. The reason travels in the section note
+   right below it, in words. */
+.form-section-title .section-action:disabled{color:var(--t4);cursor:default;opacity:1;}
+/* v3 settings addition: the mock writes "+ Add server" as text; this build uses
+   the drawing's own plus glyph, and an inline SVG with no intrinsic size paints
+   at its default 300x150 inside a text button. Sized here, once. */
+.form-section-title .section-action{display:inline-flex;align-items:center;gap:6px;}
+.form-section-title .section-action svg{width:12px;height:12px;flex-shrink:0;}
+.form-section-title .section-plain{font-family:var(--font-sans);text-transform:none;letter-spacing:0;color:var(--t4);}
+
+.form-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--hairline);}
+.form-row:last-child{border-bottom:none;}
+.form-label-group{flex:1;min-width:0;}
+.form-label{font-size:var(--text-body);color:var(--t1);}
+.form-hint{font-size:var(--text-meta);color:var(--t3);margin-top:3px;}
+.form-hint.mono{font-family:var(--font-mono);word-break:break-all;}
+.form-input{height:34px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);min-width:200px;transition:border-color .15s;}
+.form-input:focus{outline:none;border-color:var(--accent);}
+.form-select{height:34px;padding:0 28px 0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:inherit;appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;min-width:200px;}
+.form-select:focus{outline:none;border-color:var(--accent);}
+.form-select.compact{min-width:140px;}
+.form-toggle{width:36px;height:20px;border-radius:10px;background:var(--hairline-2);position:relative;cursor:pointer;transition:background .15s;flex-shrink:0;padding:0;border:none;}
+.form-toggle.on{background:var(--accent-dim);}
+.form-toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--t2);transition:transform .15s,background .15s;}
+.form-toggle.on::after{transform:translateX(16px);background:var(--accent);}
+/* v3 settings addition: the disabled state the mock never needed - a toggle
+   whose switch has nowhere to be written. */
+.form-input:disabled,.form-select:disabled{color:var(--t3);cursor:default;opacity:1;}
+.form-toggle:disabled{cursor:default;opacity:0.55;}
+/* v3 settings addition: real values are longer than the illustration's ("Cascadia
+   Mono", "ollama-cloud/kimi-k2.7-code", "medium"), and Chromium sizes an
+   appearance:none select to its text without reserving the room the chevron
+   background needs - so the last letters sit under the arrow. Two more pixels of
+   right padding and a floor on the compact width fix it everywhere at once. */
+.form-select{padding-right:34px;}
+.form-select.compact{min-width:170px;}
+
+/* ── roster table ── */
+.roster-table{width:100%;border-collapse:collapse;}
+.roster-table th{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;text-align:left;padding:8px 10px;border-bottom:1px solid var(--hairline-2);font-weight:normal;}
+.roster-table td{padding:10px;font-size:var(--text-body);color:var(--t1);border-bottom:1px solid var(--hairline);vertical-align:middle;}
+.roster-table td.mono{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);}
+.roster-table td.role{color:var(--t2);}
+.roster-table tr:hover td{background:var(--row-hover);}
+.roster-table .roster-select{height:38px;padding:0 40px 0 14px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;min-width:180px;max-width:100%;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;}
+.roster-table .roster-select:focus{outline:none;border-color:var(--accent);}
+.roster-table .role-select{height:30px;padding:0 24px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:inherit;appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
+.roster-table .role-select:focus{outline:none;border-color:var(--accent);}
+/* v3 settings addition: same chevron clearance as .form-select above - pi's
+   thinking words run to "minimal"/"medium", longer than the drawing's. */
+.roster-table .role-select{padding-right:30px;min-width:96px;}
+.roster-table .remove-btn{height:26px;padding:0 8px;font-size:var(--text-meta);color:var(--t3);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:color .15s,border-color .15s;}
+.roster-table .remove-btn:hover:not(:disabled){color:var(--fail);border-color:var(--fail);}
+.roster-table .remove-btn:disabled{color:var(--t4);cursor:default;}
+/* v3 settings addition: the roster's real rows carry a purpose sentence and an
+   inherited/own marker - the two facts `/config` returns that the illustrated
+   table had no column for. Both sit under the name, never in a new column. */
+.roster-table .rt-name{display:flex;flex-direction:column;gap:2px;}
+.roster-table .rt-agent{font-size:var(--text-body);color:var(--t1);}
+.roster-table .rt-purpose{font-size:var(--text-meta);color:var(--t3);line-height:1.45;max-width:42ch;}
+.roster-table .rt-source{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:var(--text-meta);color:var(--t4);}
+.roster-table .rt-source .rt-clear{color:var(--accent);cursor:pointer;}
+.roster-table .rt-source .rt-clear:hover{opacity:0.8;}
+.roster-table .rt-busy{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);}
+
+/* ── auth badge ── */
+.auth-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.auth-badge.ok{color:var(--ok);}
+.auth-badge.warn{color:var(--warn);}
+.auth-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+
+/* ── review family box ── */
+.review-family-box{margin-top:14px;padding:14px 16px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);}
+.review-family-box .rf-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;}
+.review-family-box .rf-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.review-family-box .rf-badge{font-family:var(--font-mono);font-size:var(--text-meta);padding:3px 10px;border-radius:var(--r-chip);white-space:nowrap;}
+.review-family-box .rf-badge.ok{background:rgba(108,180,120,0.12);color:var(--ok);border:1px solid rgba(108,180,120,0.3);}
+.review-family-box .rf-badge.warn{background:rgba(224,166,74,0.12);color:var(--warn);border:1px solid rgba(224,166,74,0.3);}
+.review-family-box .rf-badge.fail{background:rgba(220,100,90,0.12);color:var(--fail);border:1px solid rgba(220,100,90,0.3);}
+.review-family-box .rf-body{font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+.review-family-box .rf-body strong{color:var(--t1);font-weight:600;}
+
+/* ── lane rows ── */
+.lane-row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--hairline);}
+.lane-row:last-child{border-bottom:none;}
+/* The drawn width is 56px, which fits "Lane 1". A real lane is named after the
+   provider account it is ("ollama-cloud"), so the column is as wide as that
+   name - the one change the illustration's sample data hid. */
+.lane-row .lane-id{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);width:150px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lane-row .lane-body{flex:1;min-width:0;display:flex;align-items:center;gap:12px;}
+.lane-row .lane-status{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.lane-row .lane-status.active{color:var(--ok);}
+.lane-row .lane-status.idle{color:var(--t3);}
+.lane-row .lane-status.unauth{color:var(--warn);}
+/* v3 settings addition: the lane's models and agents are a read, not a select -
+   `writes_supported:false`, and a lane's model IS the roster's model. */
+.lane-row .lane-models{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.lane-row .lane-models .lm-model{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t1);overflow:hidden;text-overflow:ellipsis;}
+.lane-row .lane-models .lm-agents{font-size:var(--text-meta);color:var(--t3);}
+.lane-row .lane-slots{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);white-space:nowrap;}
+
+/* ── info callout ── */
+.lane-callout{padding:14px 16px;border-left:2px solid var(--accent-dim);background:var(--accent-surface);border-radius:0 var(--r-control) var(--r-control) 0;margin-bottom:20px;}
+.lane-callout .lc-title{font-family:var(--font-serif);font-size:var(--text-body);color:var(--t1);font-weight:600;margin-bottom:4px;}
+.lane-callout .lc-body{font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+
+/* ── provider rows ── */
+.provider-row{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--hairline);}
+.provider-row:last-child{border-bottom:none;}
+.provider-row .pr-icon{width:36px;height:36px;border-radius:var(--r-chip);background:var(--raised);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);color:var(--accent);font-weight:600;}
+.provider-row .pr-body{flex:1;min-width:0;}
+.provider-row .pr-name{font-size:var(--text-body);color:var(--t1);font-weight:500;}
+.provider-row .pr-auth{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.provider-row .pr-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);color:var(--t2);white-space:nowrap;}
+.provider-row .pr-status .dot{width:6px;height:6px;border-radius:50%;}
+.provider-row .pr-actions{display:flex;gap:8px;flex-shrink:0;}
+.pr-btn{height:28px;padding:0 12px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--raised);transition:border-color .15s,color .15s;}
+.pr-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.pr-btn.danger:hover:not(:disabled){border-color:var(--fail);color:var(--fail);}
+.pr-btn:disabled{color:var(--t4);border-color:var(--hairline);cursor:default;}
+/* v3 settings addition: a definition's models are a git-tracked fact, so they
+   read as text where the illustration drew a select over sample models. */
+.provider-row .pr-models{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;}
+.provider-row .pr-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);background:var(--accent-surface);border-radius:var(--r-chip);padding:1px 7px;white-space:nowrap;}
+
+.provider-add{display:flex;align-items:center;gap:10px;padding:14px;border:1px dashed var(--hairline-2);border-radius:var(--r-control);margin-top:12px;cursor:pointer;transition:border-color .15s,color .15s;color:var(--t3);width:100%;text-align:left;}
+.provider-add:hover{border-color:var(--accent);color:var(--accent);}
+.provider-add svg{width:14px;height:14px;flex-shrink:0;}
+
+/* v3 settings addition: the "Add a new provider…" form. It writes nothing this
+   wave, so it is built as an explainer with the fields drawn beside it - the
+   shape of the thing that will land, never a form that pretends to succeed. */
+.provider-form{margin-top:12px;padding:16px 18px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--raised);display:flex;flex-direction:column;gap:14px;}
+.provider-form .pf-title{font-family:var(--font-serif);font-size:var(--text-head);font-weight:600;color:var(--t1);}
+.provider-form .pf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;}
+.provider-form .pf-field{display:flex;flex-direction:column;gap:6px;}
+.provider-form .pf-field label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.provider-form .pf-field input{height:34px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);}
+.provider-form .pf-field input:focus{outline:none;border-color:var(--accent);}
+.provider-form .pf-plan{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-left:2px solid var(--accent-dim);background:var(--accent-surface);border-radius:0 var(--r-control) var(--r-control) 0;}
+.provider-form .pf-plan .pf-plan-title{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
+.provider-form .pf-plan ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
+.provider-form .pf-plan code{font-family:var(--font-mono);color:var(--t1);}
+.provider-form .pf-actions{display:flex;align-items:center;gap:10px;justify-content:flex-end;}
+.provider-form .pf-note{margin-right:auto;font-size:var(--text-meta);color:var(--t3);}
+
+/* ── machine rows ── */
+.machine-list{display:flex;flex-direction:column;}
+.machine-row{display:grid;grid-template-columns:40px 2fr 1.2fr 1.2fr 1.3fr auto;align-items:center;gap:20px;padding:18px 0;border-bottom:1px solid var(--hairline);}
+.machine-row:last-child{border-bottom:none;}
+.machine-row .mc-icon{width:36px;height:36px;border-radius:var(--r-chip);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);font-weight:600;}
+.machine-row .mc-body{min-width:0;}
+.machine-row .mc-name{font-size:var(--text-body);color:var(--t1);font-weight:500;display:flex;align-items:center;gap:8px;}
+.machine-row .mc-meta{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.machine-row .mc-ip{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);white-space:nowrap;}
+.machine-row .mc-factory{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
+.machine-row .mc-factory .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;}
+.machine-row .mc-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);font-family:var(--font-mono);color:var(--t2);white-space:nowrap;}
+.machine-row .mc-status .dot{width:6px;height:6px;border-radius:50%;}
+.machine-row .mc-actions{display:flex;gap:8px;flex-shrink:0;}
+.machine-row .mc-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);background:var(--accent-surface);border-radius:var(--r-chip);padding:1px 7px;font-weight:normal;}
+.machine-row .mc-tag.dim{color:var(--t3);background:var(--raised);border:1px solid var(--hairline);}
+
+/* ── appearance ── */
+.theme-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:4px;}
+.theme-card{padding:14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--raised);cursor:pointer;transition:border-color .15s;text-align:left;width:100%;}
+.theme-card:hover{border-color:var(--hairline-2);}
+.theme-card.selected{border-color:var(--accent);background:var(--row-active);}
+.theme-card .tc-swatch{width:100%;height:48px;border-radius:var(--r-chip);margin-bottom:10px;}
+.theme-card .tc-swatch.editorial{background:linear-gradient(135deg,#141311,#1a1816);}
+.theme-card .tc-swatch.mission{background:linear-gradient(135deg,#0a0e14,#0d1117);}
+.theme-card .tc-swatch.workshop{background:linear-gradient(135deg,#fafaf8,#f0eee8);}
+.theme-card .tc-swatch.twilight{background:linear-gradient(135deg,#1a1520,#2a1f30);}
+.theme-card .tc-swatch.carbon{background:linear-gradient(135deg,#08090a,#121316);}
+.theme-card .tc-swatch.paper{background:linear-gradient(135deg,#f5f0e8,#e8e0d4);}
+.theme-card .tc-name{font-family:var(--font-serif);font-size:var(--text-body);color:var(--t1);font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.theme-card .tc-desc{font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+.theme-card.selected .tc-name{color:var(--accent);}
+/* v3 settings addition: the five themes that are drawn but not built say so on
+   the card, so a click is never the first time the operator learns it. */
+.theme-card .tc-later{font-family:var(--font-mono);font-size:10px;font-weight:normal;color:var(--t4);border:1px solid var(--hairline);border-radius:3px;padding:1px 6px;flex-shrink:0;white-space:nowrap;}
+/* A real theme name wraps to two lines in a 140px card, and a centred badge
+   beside a two-line name reads as a caption on the second line. Top-aligned, it
+   reads as what it is: a stamp on the card. */
+.theme-card .tc-name{align-items:flex-start;}
+
+/* ── auto-save status ── */
+.save-status-bar{flex-shrink:0;padding:8px 32px;border-top:1px solid var(--hairline);display:flex;align-items:center;gap:8px;background:var(--chrome);font-size:var(--text-meta);color:var(--t3);}
+.save-status-bar .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0;}
+.save-status-bar.saved .save-text{color:var(--t3);}
+.save-status-bar.dirty .save-text{color:var(--accent);}
+.save-status-bar.dirty .dot{background:var(--accent);}
+/* v3 settings addition: a write can fail, and the bar is where the server's own
+   sentence lands. The mock had no failed state because it never wrote. */
+.save-status-bar.failed .dot{background:var(--fail);}
+.save-status-bar.failed .save-text{color:var(--fail);font-family:var(--font-mono);}
+.save-status-bar .save-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+.scope-name-inline{color:var(--accent);}
+
+/* v3 settings addition: one plain sentence under a section, for the truth a
+   control cannot carry on its own ("nothing is written here yet", "credentials
+   are never read on this machine"). Same grammar everywhere. */
+.section-note{font-size:var(--text-meta);color:var(--t3);line-height:1.6;margin-top:10px;max-width:78ch;}
+.section-note.mono{font-family:var(--font-mono);word-break:break-all;}
+.section-note strong{color:var(--t2);font-weight:600;}
+
+/* v3 settings addition: an empty state that lives INSIDE a section rather than
+   taking the whole surface (the surface-level one is the shell's .empty-state). */
+.section-empty{padding:18px 0;font-size:var(--text-body);color:var(--t2);line-height:1.6;max-width:78ch;}
+.section-empty .se-note{display:block;margin-top:6px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t4);word-break:break-all;}
+
+/* ── add-project modal: detection rows (the mock's own) ── */
+.modal-detection{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);}
+.modal-detection .detect-row{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t2);}
+.modal-detection .detect-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.modal-detection .detect-state{color:var(--t3);margin-left:auto;text-align:right;}
+.modal-detection .detect-hint{font-size:var(--text-meta);color:var(--t4);line-height:1.4;margin-top:2px;}
+
+/* v3 settings addition: the drawn modal is 440px wide and holds five fields;
+   this one also holds the detection block, two offered commands and the step
+   list, so it is wider and its body scrolls rather than growing past the
+   window. Nothing else about the modal chrome changes - .modal itself is the
+   shell's. */
+.modal.add-project{width:560px;max-height:86vh;}
+.modal.add-project .modal-body{overflow-y:auto;}
+
+/* v3 settings addition: a row inside the modal that offers a command rather
+   than asking for a value - the same shape as .form-row, at modal scale. J2's
+   "git init (offered, never silent)" is why these exist. */
+.modal-choice{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.modal-choice .form-label{font-size:var(--text-body);color:var(--t1);}
+.modal-choice .form-hint code{font-family:var(--font-mono);color:var(--t2);word-break:break-all;}
+
+/* v3 settings addition: Add runs a real sequence of real endpoints, so the
+   modal grows a step list that says what each one did, in the server's words. */
+.modal-steps{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);max-height:220px;overflow-y:auto;}
+.modal-steps .step-row{display:flex;align-items:flex-start;gap:8px;font-size:var(--text-meta);color:var(--t2);line-height:1.5;}
+.modal-steps .step-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:5px;}
+.modal-steps .step-text{min-width:0;}
+.modal-steps .step-detail{display:block;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;word-break:break-word;}
+.modal-field input:disabled,.modal-field select:disabled{color:var(--t3);cursor:default;}
+
+@media(max-width:1100px){.scope-pane{width:180px;}}
+@media(max-width:920px){.scope-pane{width:160px;}}
