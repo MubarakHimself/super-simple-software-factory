@@ -77,9 +77,13 @@ def ensure_run_worktree(main_root: Path, adw_id: str, prompt: str,
          applies to strangers too: never deleted, never written into.
       4. the branch exists without a worktree -> `worktree add <path> <branch>`
          (no `-b`: never re-cut an existing branch).
-      5. neither exists -> `worktree add -b <branch> <path> <base>`, one
-         atomic command that creates the branch AND the tree — this is why
-         the main checkout never moves (invariant 1).
+      5. neither exists -> if `cfg.trunk` (the factory trunk — `integration`
+         by default) does not resolve here yet, self-heal it from `main`
+         first (`ensure_factory_trunk`, MAP.md's integration-branch ruling —
+         a plain `git branch`, never a checkout of `main` itself), THEN
+         `worktree add -b <branch> <path> <base>`, one atomic command that
+         creates the run's branch AND its tree — this is why the main
+         checkout never moves (invariant 1).
     """
     root = resolve_root(main_root, cfg)
     prefix = f"adw/{adw_id}_"
@@ -111,6 +115,10 @@ def ensure_run_worktree(main_root: Path, adw_id: str, prompt: str,
     if existing_branch:
         git_helper.worktree_add(path, branch, tree=main_root)
     else:
+        if not git_helper.ref_exists(cfg.trunk, tree=main_root):
+            healed = ensure_factory_trunk(main_root, cfg.trunk)
+            if healed:
+                print(f"worktrees: {healed}")
         base = (cfg.trunk if git_helper.ref_exists(cfg.trunk, tree=main_root)
                else git_helper.current_branch(tree=main_root))
         if base != cfg.trunk:
@@ -123,6 +131,47 @@ def ensure_run_worktree(main_root: Path, adw_id: str, prompt: str,
     return RunWorktree(branch=branch, path=str(path), reused=bool(existing_branch), base=base)
 
 
+def ensure_factory_trunk(main_root: Path, trunk: str | None = None, *,
+                         source: str = "main") -> str:
+    """Self-heals the factory's own trunk (MAP.md's integration-branch
+    ruling, 2026-08-15): the first run against a fresh checkout finds no
+    `integration` branch at all, because nothing has cut one yet. Rather
+    than let that degrade every such checkout to basing off whatever the
+    main checkout happens to have checked out (`ensure_run_worktree`'s own
+    fallback, kept below for when even THIS cannot heal), cut `trunk` from
+    `source` right here — a plain `git branch <trunk> <source>`, never a
+    checkout, so `source` (always `"main"` in practice — the one branch
+    this call never creates, checks out, commits to, or moves) is left
+    exactly as it was. Pushed to `origin` too, best effort, so the hub has
+    it before any run's branch tries to compare against it remotely.
+
+    `trunk` defaults to `git_helper.factory_trunk()` — env override
+    `SSSF_INTEGRATION_BRANCH`, else `"integration"` — so a caller that just
+    wants "the factory's trunk, whatever it is configured as" (the engine,
+    a future server-side convergence step) can call this with no arguments.
+
+    Never raises. Returns `""` when there was nothing to do (`trunk`
+    already exists, or `trunk == source`) or nothing to heal FROM (`source`
+    does not resolve either — a brand new repo with no commits yet; the
+    caller's own fallback takes over from here) — else a short
+    human-readable note of what happened, for the caller to log.
+    """
+    trunk = trunk or git_helper.factory_trunk()
+    if trunk == source or git_helper.ref_exists(trunk, tree=main_root):
+        return ""
+    if not git_helper.ref_exists(source, tree=main_root):
+        return ""
+    try:
+        git_helper.create_branch_from(trunk, source, tree=main_root)
+    except RuntimeError as error:
+        return f"could not create {trunk!r} from {source!r}: {error}"
+    if not git_helper.has_remote("origin", tree=main_root):
+        return f"created {trunk!r} from {source!r} (no 'origin' remote - stays local)"
+    ok, push_error = git_helper.push_branch(trunk, tree=main_root)
+    return (f"created {trunk!r} from {source!r} and pushed to origin" if ok
+           else f"created {trunk!r} from {source!r} - push to origin failed: {push_error}")
+
+
 def worktree_for(main_root: Path, adw_id: str) -> Path | None:
     """The path already registered for `adw_id`, if any — a read-only lookup
     for a caller that must not create anything."""
@@ -131,6 +180,42 @@ def worktree_for(main_root: Path, adw_id: str) -> Path | None:
         if (w.get("branch") or "").startswith(prefix) and not w.get("prunable"):
             return Path(w["path"])
     return None
+
+
+# ── the branch return: push a finished run's branch to origin ───────────────
+#
+# MAP.md's two-box model: the laptop's Gate can only see and merge a run's
+# branch once it reaches the hub. Best-effort at run completion — never a
+# reason to fail an otherwise-finished run (`Run.finish()` is the one call
+# site; see runner.py).
+
+def push_run_branch(main_root: Path, branch: str, trunk: str) -> tuple[str, str]:
+    """Push `branch` to `origin`, IF it actually holds commits.
+
+    Runs from `main_root`: every worktree shares one `.git`, so `branch` is
+    a first-class ref there even when checked out in a linked worktree
+    elsewhere (or, under `worktrees.enabled: false`, in `main_root` itself)
+    — no need to cd anywhere to push it.
+
+    Returns `(status, detail)`:
+      - `("no-commits", "")` — nothing on `branch` beyond `trunk` yet (a
+        worktree cut but no commit phase reached, or a read-only-shaped
+        run) — nothing to make visible, so this is the silent, common case.
+      - `("no-remote", "")` — no `origin` configured (a fresh clone fixture,
+        a laptop-only experiment) — skip, not an error.
+      - `("pushed", "")` — a clean `git push -u origin <branch>`.
+      - `("failed", stderr)` — push attempted and refused; never raises,
+        never retried with `--force`, never touches anything but `branch`.
+    """
+    ahead = (git_helper.rev_list_count(f"{trunk}..{branch}", tree=main_root)
+             if trunk and git_helper.ref_exists(trunk, tree=main_root)
+             else 1)  # trunk doesn't resolve here - can't measure "ahead", so don't gate on it
+    if ahead == 0:
+        return "no-commits", ""
+    if not git_helper.has_remote("origin", tree=main_root):
+        return "no-remote", ""
+    ok, error = git_helper.push_branch(branch, tree=main_root)
+    return ("pushed", "") if ok else ("failed", error)
 
 
 # ── reconciliation: inventory, classify, prune_plan, render ─────────────────

@@ -122,12 +122,20 @@ prompt - and therefore its slug - can differ from the one that cut the branch.
 worktrees:
   enabled: true              # false = pre-worktree behaviour (branch in the main checkout)
   root: ""                   # "" = <parent of repo>/<repo-name>-worktrees
-  trunk: main                # what runs fork from and are measured against
+  trunk: integration         # what runs fork from and ff-merge into (main is human-owned)
   stale_after_minutes: 30    # a 'running' session silent this long is reported stale (8.3)
 ```
 
-Config only - no environment variable, no auto-discovery (MAP rule 12). `SSSF_CONFIG=other.yaml`
-already swaps the whole file for one run, which covers the server's different disk.
+Config only - no auto-discovery (MAP rule 12). `SSSF_CONFIG=other.yaml` already swaps the whole
+file for one run, which covers the server's different disk.
+
+One exception, added with the integration-branch ruling (MAP.md, 2026-08-15): `trunk` also reads
+`$SSSF_INTEGRATION_BRANCH` when that is set, because the engine and the worktree layer have to
+agree on the working line and a systemd unit selects it with an `Environment=` line rather than a
+hand-edited config. `adw_modules/git_helper.py` (`FACTORY_TRUNK_ENV` / `factory_trunk()`) is the
+one place that name is decided; everything else asks there. An unset or empty value means
+`integration`. If the branch does not exist yet, `worktrees.ensure_factory_trunk` creates it from
+`main` without ever checking `main` out.
 
 `enabled: false` exists for one reason: a box that cannot support worktrees (or a debugging
 session) must still be able to run the factory, and turning the layer off must be a written

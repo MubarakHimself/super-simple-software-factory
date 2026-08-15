@@ -398,7 +398,13 @@ class WorktreesConfig(BaseModel):
 
     enabled: bool = True
     root: str = ""                    # "" = <parent of repo>/<repo-name>-worktrees
-    trunk: str = "main"                # what runs fork from and are measured against
+    # What runs fork from and are measured against. `integration`, never `main`
+    # (MAP.md's integration-branch ruling, 2026-08-15): main is human-owned and
+    # moves only by the operator's squash merge. Kept as a literal rather than
+    # imported from `git_helper.FACTORY_TRUNK_DEFAULT` so this stays a pure data
+    # module with no subprocess dependency - git_helper is still the one place
+    # the name is DECIDED, and `$SSSF_INTEGRATION_BRANCH` still overrides both.
+    trunk: str = "integration"
     stale_after_minutes: int = 30      # a 'running' session silent this long is stale (4.5)
 
 

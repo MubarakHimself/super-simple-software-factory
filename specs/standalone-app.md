@@ -1,5 +1,10 @@
 # specs/standalone-app.md - the standalone app
 
+> Superseded notice (2026-08-14): parts of this spec are superseded. The app plane it describes
+> broke the no-new-route / no-pty invariants recorded in MAP.md, and the UI is being redesigned
+> as a laptop desktop app per MAP.md's "The two-box model" section (UI context now lives in
+> docs/user-journeys.md). This document remains the record of what v1 built and why.
+
 Builds MAP.md's **"Next front (operator-directed 2026-08-13 afternoon): the standalone app"**:
 the desktop app becomes the whole roof, not a viewer. Three parts - a Terminal surface, the
 install lens as first-run experience, and a Server lens.

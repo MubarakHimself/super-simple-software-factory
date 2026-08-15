@@ -202,4 +202,41 @@ class Run:
             self.console.note(f"not accepted: {note}")
         self.tracer.session_finish(self.adw_id, ok=ok)
         self.console.session_finished(ok, self.tokens, self.cost, self.cfg.observability.db)
+        self._push_run_branch()
         return 0 if ok else 1
+
+    def _push_run_branch(self) -> None:
+        """The branch return (MAP.md two-box model): push this run's own
+        branch to origin here, at the one place every writing ADW's `main()`
+        calls exactly once — success or failure of the run itself, as long
+        as the branch actually holds commits (11: a run that leaves
+        artifacts must be visible; silence is the bug). The four read-only
+        ADWs never cut a branch (`self.worktree` stays None their whole
+        life), so this is a no-op for them.
+
+        Never raises: an unexpected error here (bad remote config, a git
+        version quirk) must never take down an otherwise-finished run — the
+        same guarantee `worktrees.push_run_branch` already gives for the
+        ordinary push-failure case, extended to cover the freak one too.
+        """
+        if self.worktree is None:
+            return
+        branch = self.worktree.branch
+        try:
+            status, detail = worktrees.push_run_branch(
+                self.main_root, branch, self.cfg.worktrees.trunk)
+        except (RuntimeError, OSError) as error:   # never crash a finished run over this
+            status, detail = "failed", str(error)
+
+        if status == "pushed":
+            self.console.note(f"pushed {branch} to origin")
+        elif status == "no-remote":
+            print(f"push skipped: no 'origin' remote configured - {branch} stays local")
+        elif status == "failed":
+            phase_id = self.phases[-1].phase_id if self.phases else ""
+            self.tracer.event(EventRecord(
+                adw_id=self.adw_id, phase_id=phase_id, type="error", name="push_branch",
+                payload={"branch": branch, "error": detail}))
+            print(f"PUSH FAILED: could not push {branch} to origin - {detail}")
+        # "no-commits": nothing to make visible - silent, the common case for
+        # a run that never got past its worktree phase.

@@ -96,6 +96,19 @@ work FILE *ARGS:
 work-next *ARGS:
     uv run adws/dispatch.py --next --config {{config}} {{ARGS}}
 
+# ── engine ──────────────────────────────────────────────────────────────────
+# The always-on worker that runs the Board by itself (specs/engine.md). One
+# cycle every ~60s: pull, reap finished runs and push their card status back,
+# then dispatch every ready-for-agent card whose Needs: are satisfied, up to
+# --cap at once. On the server systemd runs this exact command as
+# sdl-engine.service; this recipe is the same process in the foreground -
+# `just engine --once` runs a single cycle and exits, which is the way to see
+# what it would do without leaving it running.
+
+# run the engine loop in the foreground (--once for a single cycle)
+engine *ARGS:
+    uv run adws/engine.py --config {{config}} {{ARGS}}
+
 # ── worktrees ───────────────────────────────────────────────────────────────
 # Reconciled against the sessions table, never guessed. A run either merges or
 # leaves a visible, named artifact explaining why not (MAP rule 11) - this is
@@ -110,6 +123,16 @@ worktrees *ARGS:
 # remove ONLY finished-and-merged worktrees; dry run unless you pass --yes
 worktrees-prune *ARGS:
     uv run adws/worktrees.py --config {{config}} --prune {{ARGS}}
+
+# ── shipping report ──────────────────────────────────────────────────────────
+# MAP.md's shipping report, replacing the morning-brief ritual: a deterministic,
+# code-assembled account of every commit and card sitting on `integration` that
+# `main` does not have yet - what `ship-check` reads before the operator's one
+# squash merge. Pure read-only git: nothing here pushes, merges, or touches main.
+
+# the shipping report for the current chunk (--changelog / --range BASE..TIP)
+ship-report *ARGS:
+    uv run adws/ship_report.py {{ARGS}}
 
 # ── hygiene ─────────────────────────────────────────────────────────────────
 # Regenerable tool caches only (.ruff_cache/.mypy_cache/.pytest_cache/every

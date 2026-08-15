@@ -18,9 +18,37 @@ own work happens in a worktree named by `run.repo_root` - so a git call with no
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
+
+# ── the factory trunk (MAP.md's integration-branch ruling, 2026-08-15) ──────
+#
+# Run branches fork from this and are measured against it - never `main`,
+# which is human-owned now, moved only by a squash merge in the UI, and
+# never checked out, committed to, or moved by anything in this file. Env
+# override so a server converge, a systemd unit, or an operator's shell can
+# name a different line without editing a config file (the same pattern
+# `SSSF_CONFIG` already uses for the roster - see dispatch.py/engine.py).
+FACTORY_TRUNK_ENV = "SSSF_INTEGRATION_BRANCH"
+FACTORY_TRUNK_DEFAULT = "integration"
+
+
+def factory_trunk() -> str:
+    """The factory's own working line: env override `SSSF_INTEGRATION_BRANCH`,
+    else `"integration"`. The one place this name is decided - every caller
+    that wants "the trunk, whatever it is configured as" asks here rather
+    than repeating the literal (engine.py's `integration_branch()` is a thin
+    alias over this, so the loop and the worktree layer can never disagree
+    about which branch the factory is standing on).
+
+    An unset variable and an EMPTY one mean the same thing: the default. A
+    systemd unit with a bare `Environment=SSSF_INTEGRATION_BRANCH=` would
+    otherwise hand every caller `""` as a branch name, which git answers for
+    with a different error at each call site.
+    """
+    return (os.environ.get(FACTORY_TRUNK_ENV) or "").strip() or FACTORY_TRUNK_DEFAULT
 
 
 def _git(*args: str, tree: Path | str | None = None) -> str:
@@ -74,10 +102,21 @@ def create_branch(name: str, *, tree: Path | str) -> str:
     return name
 
 
+def create_branch_from(name: str, base: str, *, tree: Path | str) -> str:
+    """`git branch <name> <base>` — creates `name` pointing at `base`
+    WITHOUT checking it out, unlike `create_branch` (`checkout -b`, only
+    safe when `tree` is a throwaway or single-purpose checkout). This is how
+    `worktrees.ensure_factory_trunk` self-heals the factory's own trunk from
+    `main`: `main` is read here exactly once, for its tip commit, and is
+    never checked out, committed to, or moved by this call."""
+    return _git("branch", name, base, tree=tree)
+
+
 # ── branch-per-run (MAP.md standing rule 11) ─────────────────────────────────
 #
-# `main` + short-lived `adw/<adw_id>_<slug>`, one branch per unit of work. The
-# branch is cut before any agent runs, so the slug has to come from something
+# The factory trunk (`factory_trunk()`, above) + short-lived `adw/<adw_id>_<slug>`,
+# one branch per unit of work. The branch is cut before any agent runs, so the
+# slug has to come from something
 # code already has at that point — the prompt string — not from an agent's
 # judgement. It is a legibility aid, not an identity: the adw_id is what
 # actually disambiguates two runs, so lookups match on the `adw/<adw_id>_`
@@ -384,6 +423,27 @@ def branch_delete(branch: str, *, tree: Path | str, force: bool = False) -> str:
     """`git branch -d <branch>` — never `-D` by default (9): an unmerged
     branch is refused by git itself, a third safety net."""
     return _git("branch", "-D" if force else "-d", branch, tree=tree)
+
+
+def has_remote(name: str = "origin", tree: Path | str | None = None) -> bool:
+    """True when `tree`'s repo has a remote named `name` configured. Never
+    raises - like `is_repo`, this is a question asked before an operation
+    that needs one, not an assertion."""
+    result = subprocess.run(["git", "remote"], cwd=tree, capture_output=True,
+                            text=True, encoding="utf-8")
+    return result.returncode == 0 and name in result.stdout.split()
+
+
+def push_branch(branch: str, *, tree: Path | str, remote: str = "origin") -> tuple[bool, str]:
+    """`git push -u <remote> <branch>` - never raises, never `--force`, and
+    `branch` is always the caller's own `adw/<id>_<slug>` name, never `main`.
+    Returns `(True, "")` on a clean push, `(False, stderr)` on any failure
+    (no network, rejected, auth...) - the caller decides how loud to be."""
+    result = subprocess.run(["git", "push", "-u", remote, branch], cwd=tree,
+                            capture_output=True, text=True, encoding="utf-8")
+    if result.returncode != 0:
+        return False, result.stderr.strip()
+    return True, ""
 
 
 def list_run_branches(tree: Path | str | None = None) -> list[dict]:

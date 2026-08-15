@@ -17,6 +17,7 @@ Two rules that hold everywhere in this file, both paid for already (MAP.md
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import json
 import os
@@ -38,6 +39,19 @@ from typing import Literal
 
 ALL = frozenset({"laptop", "server", "container"})
 SERVER_CONTAINER = frozenset({"server", "container"})
+
+# The roster the engine service runs on when the operator names none - the
+# same fallback `adws/engine.py` and the justfile use, kept in one string here
+# so the unit always states it out loud rather than inheriting it silently.
+DEFAULT_ENGINE_CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
+
+# Who the always-on engine commits card write-backs as on a host that cannot
+# auto-detect an identity (see `ensure_engine_git_identity`). The same two
+# strings as `adws/engine.py`'s COMMITTER_NAME / COMMITTER_EMAIL, repeated
+# rather than imported: this module is stdlib-only by contract (install.py
+# declares `dependencies = []`) and adws/ is not importable from here.
+ENGINE_GIT_NAME = "sdl-factory engine"
+ENGINE_GIT_EMAIL = "engine@sdl-factory.local"
 
 # Every write this module makes to the repo goes through `write_text`, which
 # checks this list first (spec section 8.1). The factory machinery is done and
@@ -125,6 +139,23 @@ class Ctx:
     log_path: Path           # install_dir / "<ts>-<target>.log"
     secrets_env_path: Path   # ~/.sdl-factory/secrets.env
     env_path: Path           # repo/.env
+    # The systemd unit path for the engine service (specs/engine.md 7).
+    # A Ctx field, same reason env_path/secrets_env_path are: it is the ONE
+    # place engine-service's detect/apply/verify read or write, so a test can
+    # point it at a tmp_path stand-in instead of the real
+    # /etc/systemd/system/ - this wizard runs its unit tests on a Windows
+    # laptop, where that path is not even valid.
+    engine_unit_path: Path = field(
+        default_factory=lambda: Path("/etc/systemd/system/sdl-engine.service"))
+    # The agent roster the engine service ships cards on, written into the
+    # unit as `Environment=SSSF_CONFIG=...` (specs/engine.md 7). Read from the
+    # environment here for the same reason the justfile reads it: `SSSF_CONFIG=
+    # adws/adw_sssf_config/sssf.shipping.config.yaml installer/install.py`
+    # is then the ONE supported way to point the always-on service at a
+    # different roster, and it converges instead of being parked on the next
+    # run the way a hand-edited unit would be.
+    engine_config: str = field(
+        default_factory=lambda: os.environ.get("SSSF_CONFIG") or DEFAULT_ENGINE_CONFIG)
     interp: str = field(default_factory=lambda: "python" if platform.system() == "Windows" else "python3")
     secrets: set[str] = field(default_factory=set)
     # Set by apply_just (spec 6.3's Windows note): a fresh winget install that
@@ -979,6 +1010,15 @@ def apply_pi(ctx: Ctx) -> Result:
     cli_js = Path(detected.data["cli_js"])
     pi_path_value = f"node {cli_js.as_posix()}"
     models_path_value = (ctx.home / ".pi" / "agent" / "models.json").as_posix()
+    # PI_BRIDGE_PATH: the pi-claude-bridge extension dir, same per-host
+    # derivation-then-.env-write as PI_PATH/PI_MODELS_PATH above (not a
+    # literal path baked into any tracked config - see
+    # sssf.shipping.config.yaml's `${PI_BRIDGE_PATH}/src/index.ts` and
+    # agents.py's expand_harness_paths). Written unconditionally, like
+    # PI_MODELS_PATH: the pi-packages step (which actually installs the
+    # package onto disk) runs after this one, so existence is confirmed
+    # later, at V3 verify time - not re-checked here.
+    bridge_path_value = (_pi_npm_dir(ctx) / "pi-claude-bridge").as_posix()
 
     env_existed = ctx.env_path.exists()
     if env_existed:
@@ -993,6 +1033,7 @@ def apply_pi(ctx: Ctx) -> Result:
     merged = merge_env_text(env_text, {
         "PI_PATH": quote_env_value(pi_path_value),
         "PI_MODELS_PATH": quote_env_value(models_path_value),
+        "PI_BRIDGE_PATH": quote_env_value(bridge_path_value),
     })
     if env_existed and merged == env_text:
         return Result(outcome, f"PI_PATH already set to {pi_path_value!r} - no changes")
@@ -1001,7 +1042,8 @@ def apply_pi(ctx: Ctx) -> Result:
     write_text(ctx.env_path, merged, ctx)
     if outcome == "ok":
         outcome = "installed"   # pi itself was already present, but .env changed
-    return Result(outcome, f"PI_PATH set to {pi_path_value!r}")
+    return Result(outcome, f"PI_PATH set to {pi_path_value!r}; "
+                  f"PI_BRIDGE_PATH set to {bridge_path_value!r}")
 
 
 def verify_pi(ctx: Ctx) -> Result:
@@ -1625,6 +1667,217 @@ def verify_auth(ctx: Ctx) -> Result:
                   detected.detail + (f" - missing: {missing}" if missing else ""))
 
 
+# ── engine service: sdl-engine.service, the systemd contract (specs/engine.md
+#    section 7) ────────────────────────────────────────────────────────────
+# Server/container only (SERVER_CONTAINER on the Step below) - this is the
+# two-box model's whole point (MAP.md "The two-box model"): nothing about the
+# always-on engine is ever installed laptop-side. Idempotent the same way
+# every other step here is (spec 7 BLOCKER 2 family): a unit file that
+# already matches, already enabled, already active is a full no-op.
+
+def ensure_engine_git_identity(ctx: Ctx) -> str:
+    """Give the checkout a committer identity if the host cannot name one.
+
+    Every record the engine keeps is a `git commit` (a card's status, a park,
+    a merge), and on a fresh container or VPS the service user has no
+    `~/.gitconfig` at all: git dies with *"unable to auto-detect email
+    address"*, the engine logs `commit failed, will retry next cycle` once a
+    minute forever, and `systemctl is-active` reports `active` the whole time.
+    A service that cannot commit is not converged, so this converges it.
+
+    Two rules make it safe to run on every converge:
+
+      - `git var GIT_COMMITTER_IDENT` decides. That is git's OWN resolution of
+        the question (config, environment and auto-detection folded in, strict
+        mode - exactly what `git commit` does), so a host that already knows
+        who it is is left completely alone. No operator identity is ever
+        overwritten, on any of the four config layers.
+      - the write is `git config --local`, INSIDE the checkout: it changes this
+        repo and nothing else on the machine.
+
+    `adws/engine.py` names the same two values in its own startup refusal
+    (`COMMITTER_NAME` / `COMMITTER_EMAIL`), so the line the journal prints and
+    the line this writes agree. Returns "" when there was nothing to do, else
+    a short note for the caller to append to its Result message.
+    """
+    probe = run(["git", "var", "GIT_COMMITTER_IDENT"], timeout=PROBE_TIMEOUT,
+                cwd=ctx.repo_root, ctx=ctx)
+    if probe.returncode == 0 and probe.stdout.strip():
+        return ""
+    if ctx.dry_run:
+        return (f"[dry-run] would set repo-local git identity {ENGINE_GIT_NAME} "
+                f"<{ENGINE_GIT_EMAIL}> - this host cannot auto-detect one and the engine "
+                f"commits every card write-back")
+    for key, value in (("user.name", ENGINE_GIT_NAME), ("user.email", ENGINE_GIT_EMAIL)):
+        result = run(["git", "config", "--local", key, value], timeout=PROBE_TIMEOUT,
+                     cwd=ctx.repo_root, ctx=ctx)
+        if result.returncode != 0:
+            return (f"could not set git {key} in {ctx.repo_root.as_posix()} "
+                    f"({result.stderr.strip()[-200:]}) - the engine will refuse to run cycles "
+                    f"until it is set by hand")
+    return (f"set repo-local git identity {ENGINE_GIT_NAME} <{ENGINE_GIT_EMAIL}> - this host "
+            f"could not auto-detect one and the engine commits every card write-back")
+
+
+def engine_service_user(ctx: Ctx) -> str:
+    """Who the unit must run as: the OWNER OF THE CHECKOUT (specs/engine.md 7).
+
+    Writing /etc/systemd/system/ needs root, so this wizard runs under sudo -
+    which means the current euid says nothing about whose factory this is, and
+    a unit with no `User=` is a unit systemd starts as root. On a normal VPS
+    checkout owned by the operator that is not a subtle problem: every `git`
+    call the engine makes dies with "detected dubious ownership in repository
+    at ...", so the pull fails on cycle 1 and the service does nothing at all
+    while `systemctl is-active` cheerfully reports `active`.
+
+    The checkout's owner is the exact answer to that (it is git's own test),
+    and it is right in both directions - a root-owned checkout on a root-only
+    VPS renders `User=root`, deliberately and visibly. `SUDO_USER` is the
+    fallback for a host where the owner cannot be named (no `pwd` module -
+    this wizard's unit tests run on Windows).
+    """
+    try:
+        import pwd  # POSIX only - absent on the Windows laptop these tests run on
+        return pwd.getpwuid(ctx.repo_root.stat().st_uid).pw_name
+    except (ImportError, KeyError, OSError):
+        return os.environ.get("SUDO_USER") or getpass.getuser()
+
+
+def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
+    """The exact unit specs/engine.md section 7 documents - `<repo>` filled
+    with this converge's real checkout, `uv run adws/engine.py` resolved to
+    an ABSOLUTE `uv` path. A systemd unit gets no login shell (spec 7's own
+    "ExecStart must resolve uv" bullet), so a bare `uv` on ExecStart would
+    fail every time systemd itself starts the unit, even though `which uv`
+    works fine in the operator's own shell.
+
+    `User=` and `Environment=SSSF_CONFIG=` are part of the contract, not
+    decoration:
+      - without `User=`, systemd starts the engine as root (see
+        `engine_service_user`).
+      - without `SSSF_CONFIG`, the always-on server ships every card on
+        whatever `adws/engine.py` defaults to, which is the TEST LANE roster.
+        The engine and dispatch both read this variable (the justfile already
+        did), so naming the roster here is the supported way to choose one:
+        `SSSF_CONFIG=<path> installer/install.py` converges the unit to it.
+        Hand-editing ExecStart is not - `detect_engine_service` compares this
+        rendering byte for byte and the next converge would park the edit.
+    """
+    return (
+        "[Unit]\n"
+        "Description=SDL factory engine - runs the Kanban\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"User={engine_service_user(ctx)}\n"
+        f"WorkingDirectory={ctx.repo_root.as_posix()}\n"
+        f"Environment=SSSF_CONFIG={ctx.engine_config}\n"
+        f"ExecStart={Path(uv_path).as_posix()} run adws/engine.py\n"
+        "Restart=always\n"
+        "RestartSec=10\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+
+
+def detect_engine_service(ctx: Ctx) -> Detected:
+    """Non-systemd host (no `systemctl` on PATH) is its own, distinct state -
+    not present, but not a failure either (apply/verify below report it
+    `deferred`, matching how every other step here expresses a state it
+    cannot converge). Everything past that first check assumes systemd."""
+    if which("systemctl") is None:
+        return Detected(False, "systemctl not found - not a systemd host", {"systemd": False})
+    uv_path = which("uv")
+    if uv_path is None:
+        return Detected(False, "uv not found on PATH - cannot render ExecStart",
+                         {"systemd": True})
+    expected = render_engine_unit(ctx, uv_path)
+    unit_path = ctx.engine_unit_path
+    if not unit_path.is_file():
+        return Detected(False, f"{unit_path} not present", {"systemd": True, "expected": expected})
+    current = unit_path.read_text(encoding="utf-8")
+    if current != expected:
+        return Detected(False, f"{unit_path} present but content differs from the "
+                         "specs/engine.md section 7 contract", {"systemd": True, "expected": expected})
+    enabled = run(["systemctl", "is-enabled", "sdl-engine"], timeout=PROBE_TIMEOUT, ctx=ctx)
+    active = run(["systemctl", "is-active", "sdl-engine"], timeout=PROBE_TIMEOUT, ctx=ctx)
+    is_enabled = enabled.stdout.strip() == "enabled"
+    is_active = active.stdout.strip() == "active"
+    return Detected(is_enabled and is_active,
+                     f"unit matches the contract; is-enabled={enabled.stdout.strip()!r} "
+                     f"is-active={active.stdout.strip()!r}",
+                     {"systemd": True, "expected": expected})
+
+
+def apply_engine_service(ctx: Ctx) -> Result:
+    if which("systemctl") is None:
+        return Result("deferred", "not a systemd host (no systemctl on PATH) - write "
+                       f"{ctx.engine_unit_path} yourself with the contents in specs/engine.md "
+                       "section 7, then `systemctl daemon-reload && systemctl enable --now "
+                       "sdl-engine`")
+    uv_path = which("uv")
+    if uv_path is None:
+        return Result("failed", "uv not found on PATH - the uv step must run (and succeed) "
+                       "before this one")
+    # Before the unit, not after: a service that starts without a committer
+    # identity is `active` and useless (see `ensure_engine_git_identity`), and
+    # this runs on EVERY converge, including one that finds the unit already
+    # perfect - the identity is part of "the engine works here", not part of
+    # "the unit file is current".
+    identity = ensure_engine_git_identity(ctx)
+    note = f"; {identity}" if identity else ""
+    # git refusing that write is not a converged step, however healthy the unit
+    # is: the service comes up `active` and fails every commit it ever makes.
+    stalled = identity.startswith("could not set git")
+
+    if ctx.dry_run:
+        detected = detect_engine_service(ctx)
+        if detected.present:
+            return Result("ok", "[dry-run] sdl-engine.service already matches, enabled, "
+                           f"active{note}")
+        return Result("ok", f"[dry-run] would write {ctx.engine_unit_path}, systemctl "
+                       f"daemon-reload, systemctl enable --now sdl-engine{note}")
+
+    detected = detect_engine_service(ctx)
+    if detected.present:
+        if stalled:
+            return Result("needs-operator",
+                          f"sdl-engine.service already matches, enabled, active{note}")
+        return Result("installed" if identity else "ok",
+                      f"sdl-engine.service already matches, enabled, active - no changes{note}")
+
+    expected = detected.data["expected"]
+    unit_path = ctx.engine_unit_path
+    current = unit_path.read_text(encoding="utf-8") if unit_path.is_file() else ""
+    if current != expected:
+        if unit_path.is_file():
+            park_replace(unit_path, ledger_path=ctx.ledger_path, run_id=ctx.run_id,
+                        step="engine-service")
+        write_text(unit_path, expected, ctx)
+
+    reload_result = run(["systemctl", "daemon-reload"], timeout=PROBE_TIMEOUT, ctx=ctx)
+    if reload_result.returncode != 0:
+        return Result("failed", f"systemctl daemon-reload exited {reload_result.returncode}: "
+                       f"{reload_result.stderr[-300:]}")
+    enable_result = run(["systemctl", "enable", "--now", "sdl-engine"], timeout=PROBE_TIMEOUT,
+                        ctx=ctx)
+    if enable_result.returncode != 0:
+        return Result("failed", f"systemctl enable --now sdl-engine exited "
+                       f"{enable_result.returncode}: {enable_result.stderr[-300:]}")
+    return Result("needs-operator" if stalled else "installed",
+                  f"{unit_path} written, daemon-reload'd, enabled --now{note}")
+
+
+def verify_engine_service(ctx: Ctx) -> Result:
+    if which("systemctl") is None:
+        return Result("deferred", "not a systemd host (no systemctl on PATH)")
+    detected = detect_engine_service(ctx)
+    return Result("ok" if detected.present else "needs-operator", detected.detail)
+
+
 # ── the step list (spec 4, the deliverable table) ────────────────────────────
 
 STEPS: list[Step] = [
@@ -1654,6 +1907,12 @@ STEPS: list[Step] = [
     Step("ui", "UI install", SERVER_CONTAINER, False, detect_ui, ui_install, verify_ui),
     Step("auth", "auth pass (xai, openai-codex, claude-bridge)", ALL, False,
          detect_auth, apply_auth, verify_auth),
+    # Last on purpose: the factory (packages, models, lanes, auth) has been
+    # fully converged by every step above by the time this one starts a live
+    # systemd service that immediately begins pulling/dispatching/pushing
+    # against it (MAP.md "The two-box model"; specs/engine.md section 7).
+    Step("engine-service", "sdl-engine.service (systemd)", SERVER_CONTAINER, True,
+         detect_engine_service, apply_engine_service, verify_engine_service),
 ]
 
 

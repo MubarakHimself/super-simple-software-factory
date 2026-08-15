@@ -24,9 +24,14 @@ feature, not a bug.
 
 ## 2. Your daily loop, end to end
 
-Works in **Claude Code, Codex (`$skill` form), or pi** — all three read the same skills.
+Two boxes, one loop. **Plan and merge happen on the laptop**, in your own harness — Claude
+Code, Codex (`$skill` form), or `pi` — all three read the same skills. **Work happens on the
+server**, picked up by an always-on engine you never have to poll yourself. One vocabulary note
+before the steps: `pi` is the *harness* the factory's workflows drive, never a provider itself —
+the providers are the accounts underneath it (Claude Code via the bridge, Codex, Grok/xAI,
+OpenCode, Ollama Cloud).
 
-1. **Plan** (heavy model, your side): brainstorm however you like — `/wayfinder`, `/grilling`,
+1. **Plan** (heavy model, laptop side): brainstorm however you like — `/wayfinder`, `/grilling`,
    or just talk.
 2. **Document**: `/documentation-factory` with no arguments. It asks *"what are you trying to
    do?"* and routes itself — you never need to remember its modes. For your NHI platform
@@ -36,16 +41,25 @@ Works in **Claude Code, Codex (`$skill` form), or pi** — all three read the sa
    contains features X, Y, Z — scoped, ordered, dependencies declared."
 3. **Spec → tickets → triage**, one feature at a time from the inventory: `/to-spec` →
    `/to-tickets` → `/triage`. No re-prompting — the inventory is the list.
-4. **Publish**: `/queue-publish` ("put this on the board"). The item appears on the Board on
-   its next poll. No restart, any harness.
-5. **Dispatch**: `just work queue/NNN-name.md` (or `just work-next` for the first ready item).
-   The factory routes it to the right workflow by its `Adw:` line, runs it **on its own branch
-   in its own worktree** — the main checkout never moves — and writes the status back to the
-   card as it goes. Watch it live in Trace.
-6. **Morning brief**: `/morning-brief` — plain words, per run: what it worked on, which branch
-   and worktree, what actually changed, what the checks concluded, what it cost. Then it asks
-   you: *"is this what we agreed?"* — and ends with the compare link. **The merge click is
-   yours; nothing ever merges itself.**
+4. **Publish, and hand off to the server**: `/queue-publish` commits the card *plus* whatever
+   docs changed on the way to it, and pushes — one act, both halves of the journey travel
+   together. That push is the whole handoff; there is no separate sync step and nothing to
+   restart.
+5. **The server picks it up on its own**: the always-on engine (`specs/engine.md`, `just
+   engine`, the `sdl-engine.service` systemd unit) pulls on its ~60s cycle, scans `queue/` for
+   `ready-for-agent` cards whose `Needs:` are satisfied, and dispatches — parallel across
+   independent cards up to a configurable cap (default 2), strictly ordered when `Needs:`
+   chains them. It isn't overnight-only; it works as long as there is work. Each run gets its
+   own branch and its own worktree — the main checkout never moves. Finished `adw/` branches
+   and card-status updates push back through the same GitHub hub the card arrived on.
+6. **Morning review, back on the laptop**: the app / `/morning-brief` narrates each run in
+   plain words — which branch and worktree, what actually changed, what the checks concluded,
+   what it cost — then asks you: *"is this what we agreed?"*
+7. **Merge, laptop-side**: fetch, `--ff-only` merge, move the card to `done/`, push. **The
+   click is yours; nothing in the factory ever merges itself.**
+8. **Docs catch up on their own**: right after the merge, a headless documentation-factory
+   `change`-mode session runs automatically on the laptop and pushes the updated docs through
+   the same hub. A failed doc run is shown to you; it never blocks the merge.
 
 ## 3. The commands that matter
 
@@ -64,8 +78,11 @@ Works in **Claude Code, Codex (`$skill` form), or pi** — all three read the sa
 
 1. **Re-login Grok and Codex** (`codex login`; Grok via pi). Until then everything runs on the
    ollama-cloud test lane — fine for exercising, not the shipping roster.
-2. **First deployment**: run the wizard on the Contabo VPS (or any host — laptop, Docker, it's
-   the same product) when you want the factory running headless.
+2. **First deployment**: the intended path is **connect-server** from the desktop app — host
+   and credentials once in Settings, SSH under the hood, autonomous provisioning; the app
+   converges the factory on the server itself and you never see a terminal. Until the app
+   ships, the interim path is running the wizard yourself on the host (Contabo VPS, or any
+   host — laptop, Docker, same product).
 3. **Skylos on this laptop reads "incomplete", never green** — that's honest fail-closed
    behaviour, not a bug (its dependency needs MSVC). On any Linux host it activates fully.
 

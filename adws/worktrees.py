@@ -10,7 +10,8 @@ Usage:
     uv run adws/worktrees.py --all                 # include sessions that never cut a tree
     uv run adws/worktrees.py --prune                # dry run: prints exactly what it would do
     uv run adws/worktrees.py --prune --yes          # perform it
-    uv run adws/worktrees.py --trunk main --config adws/adw_sssf_config/sssf.config.yaml
+    uv run adws/worktrees.py --trunk integration --config adws/adw_sssf_config/sssf.config.yaml
+    SSSF_INTEGRATION_BRANCH=integration uv run adws/worktrees.py   # same, via env override
 
 Exit codes: 0 nothing stranded - 1 at least one unmerged/orphan row - 2 the
 tool could not answer (not a git repo, unreadable db, two branches sharing an
@@ -24,6 +25,7 @@ into the very table this reads, crowding real runs out of `just sessions`
 
 import argparse
 import json
+import os
 import sys
 
 import yaml
@@ -72,7 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
-    parser.add_argument("--trunk", default=None, help="override worktrees.trunk for this run")
+    parser.add_argument("--trunk", default=os.environ.get(git_helper.FACTORY_TRUNK_ENV),
+                        help="override worktrees.trunk for this run (default: "
+                             "worktrees.trunk in --config, else "
+                             f"${git_helper.FACTORY_TRUNK_ENV} when set)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--all", action="store_true",
                         help="include sessions that never cut a tree (no-tree rows)")

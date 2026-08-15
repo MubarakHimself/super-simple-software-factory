@@ -22,8 +22,10 @@ body follows untouched, still the ADW's whole task.
 
 A command, not a daemon (MAP rule 1, KISS): one dispatch, one subprocess, two
 write-backs (claim, then terminal). It never moves the file to `queue/done/` -
-that is the MERGE event, and Gate owns it (`specs/ui.md` 5.4), which reads
-`sessions.status` and git directly and never this file's Status: line.
+that happens once the factory has integrated the run's branch into
+`integration` (MAP.md's integration-branch ruling, 2026-08-15: the engine
+rebases + re-runs the quality suite + ff-merges, autonomously), and parking
+the card is the engine's own job at that point, never this script's.
 
 Deliberately NOT an adw_*.py script: dispatch never opens its own session, so
 routing a bad item never litters a `sessions` row with it (same reasoning as
@@ -35,16 +37,27 @@ never both start an ADW. A `blocked` (failed) item re-dispatched with no
 `--adw-id` reuses the Adw-Id already on the card by itself: there is no
 running process to collide with, and rejoining the same run continues in the
 SAME worktree/branch rather than orphaning the failed attempt's.
+
+Needs: a card's optional `Needs:` header (queue/TEMPLATE.md's contract) names
+other card basenames this one is blocked on, and an edge is met when that card
+is MERGED - parked in `queue/done/` - not merely `done`. `read_card_header`
+and `needs_satisfied` below are importable helpers - the engine (MAP.md's
+"two-box model") uses them to decide what is dispatchable at all. This script
+uses the same `needs_satisfied` to refuse a direct dispatch of a card whose
+needs are not yet met: one line naming what is still outstanding, nonzero
+exit, the file untouched.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 from adw_modules import agents, git_helper
@@ -68,6 +81,13 @@ KNOWN_WRITING_ADWS = (
     "build", "build-review", "build-test", "document",
     "plan-build", "plan-build-test", "plan-build-test-quality", "simple-sdlc",
 )
+
+# The roster this dispatch routes to. `SSSF_CONFIG` is the factory's ONE way
+# of naming a different one - the justfile reads the same variable
+# (`config := env_var_or_default("SSSF_CONFIG", ...)`) - so a systemd unit, a
+# shell, and a recipe all select a roster the same way. The engine passes
+# --config explicitly to every dispatch it starts.
+DEFAULT_CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
 
 H1_RE = re.compile(r"^#\s+(.+?)\s*$")
 HEADER_LINE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*):[ \t]*(.*)$")
@@ -179,6 +199,61 @@ def write_status(path: Path, header: QueueHeader, status: str, adw_id: str | Non
     path.write_text(_render(header), encoding="utf-8")
 
 
+# ── needs ─────────────────────────────────────────────────────────────────────
+
+def _parse_needs(value: str) -> list[str]:
+    """The Needs: line's raw value -> a clean list of card basenames.
+    Comma-separated, whitespace trimmed off each; an absent or empty value
+    (or one that is only commas/whitespace) yields []."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def read_card_header(path: Path) -> dict[str, Any]:
+    """Parses one queue/*.md card into a plain dict for importers outside
+    this module (the engine, built next) - every Key: value line under the
+    H1 as its raw string, except `needs`, which is split into the list of
+    basenames it names (queue/TEMPLATE.md's contract; absent or empty -> [])."""
+    header = parse_header(Path(path).read_text(encoding="utf-8"))
+    # dict[str, Any], not header.fields' dict[str, str]: `needs` is the one
+    # field that comes back parsed (a list of basenames) rather than raw.
+    fields: dict[str, Any] = dict(header.fields)
+    fields["needs"] = _parse_needs(header.fields.get("needs", ""))
+    return fields
+
+
+def needs_satisfied(card_path: Path, main_root: Path) -> tuple[bool, list[str]]:
+    """Checks one card's Needs: list against the queue on disk. A named card
+    satisfies its edge once it is parked in queue/done/ - the point at which
+    the factory has integrated it into `integration` and moved its card
+    there itself (MAP.md's integration-branch ruling, 2026-08-15) - and not
+    one moment before.
+
+    `Status: done` while the card still sits in `queue/` is NOT enough, and
+    that distinction is the whole reason this header exists. `done` means an
+    ADW finished and pushed its own `adw/<id>_<slug>` branch; the work is not
+    in `integration` until the engine rebases that branch onto current
+    `integration`, re-runs the quality suite against the rebased tree, and
+    only then ff-merges it. A dependent dispatched on `done` alone cuts its
+    worktree from `integration` (`worktrees.ensure_run_worktree` bases a
+    fresh run on trunk) - that is `integration` WITHOUT its dependency's
+    code, so `Needs:` would order the dispatch and not the code, which is
+    the one thing it exists to do. Waiting for the merge costs a gate;
+    building on code that is not there costs the whole run, twice (the
+    dependent re-implements what it cannot see, and the two branches then
+    conflict).
+
+    Everything else is unmet too - a dependency still running, one that came
+    back `blocked`, or a basename matching no card file anywhere (fail closed:
+    a typo'd or not-yet-published dependency never silently passes).
+
+    Returns (True, []) once every need is met, else (False, unmet) with
+    unmet holding the outstanding basenames in the order Needs: named them."""
+    needs = read_card_header(card_path)["needs"]
+    done_dir = Path(main_root) / "queue" / "done"
+    unmet = [name for name in needs if not (done_dir / name).is_file()]
+    return (not unmet, unmet)
+
+
 # ── routing ──────────────────────────────────────────────────────────────────
 
 def resolve_script(main_root: Path, adw_value: str) -> Path:
@@ -266,6 +341,12 @@ def dispatch(path: Path, *, main_root: Path, config: str, adw_id_override: str |
 
     try:
         header = parse_header(path.read_text(encoding="utf-8"))
+        ok, unmet = needs_satisfied(path, main_root)
+        if not ok:
+            raise DispatchError(
+                f"needs not satisfied - waiting on: {', '.join(unmet)} (a need is met "
+                f"when the factory integrates the card into integration and parks it "
+                f"in queue/done/)")
         script = resolve_script(main_root, header.fields.get("adw", ""))
         adw_id = claim(path, header, adw_id_override)
         write_status(path, header, RUNNING, adw_id=adw_id)
@@ -297,7 +378,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("file", nargs="?", default=None, help="queue/NNN-slug.md to dispatch")
     parser.add_argument("--next", action="store_true",
                         help=f"dispatch the lowest-numbered {READY!r} item")
-    parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
+    parser.add_argument("--config", default=os.environ.get("SSSF_CONFIG") or DEFAULT_CONFIG,
+                        help=f"the agent roster to run this card on (default: "
+                             f"$SSSF_CONFIG, else {DEFAULT_CONFIG})")
     parser.add_argument("--queue-dir", default=None,
                         help="override the queue directory (default: <repo root>/queue)")
     parser.add_argument("--adw-id", default=None,

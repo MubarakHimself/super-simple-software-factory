@@ -10,6 +10,7 @@ code and its secret-safety guarantee (acceptance A7/A9/A12).
 
 import json
 import re
+import sys
 
 import pytest
 import steps
@@ -498,9 +499,12 @@ def test_apply_pi_is_a_full_no_op_when_env_already_has_the_quoted_values(tmp_pat
 
     pi_path_value = f"node {cli_js.as_posix()}"
     models_path_value = (ctx.home / ".pi" / "agent" / "models.json").as_posix()
+    bridge_path_value = (ctx.home / ".pi" / "agent" / "npm" / "node_modules"
+                          / "pi-claude-bridge").as_posix()
     seed_env = steps.merge_env_text("", {
         "PI_PATH": steps.quote_env_value(pi_path_value),
         "PI_MODELS_PATH": steps.quote_env_value(models_path_value),
+        "PI_BRIDGE_PATH": steps.quote_env_value(bridge_path_value),
     })
     ctx.env_path.write_text(seed_env, encoding="utf-8")
 
@@ -536,6 +540,42 @@ def test_apply_pi_parks_and_rewrites_only_when_the_env_value_actually_changed(tm
     assert f'PI_PATH="node {cli_js.as_posix()}"' in new_text          # quoted (BLOCKER 1)
     found, ok = steps.pi_path_line_round_trips(new_text)
     assert found and ok
+
+    # PI_BRIDGE_PATH: same host, same write, same quoting - derived from
+    # ctx.home, never from cli_js (the bridge extension is a sibling package
+    # under ~/.pi/agent/npm/node_modules, unrelated to pi's own install dir).
+    bridge_path_value = (ctx.home / ".pi" / "agent" / "npm" / "node_modules"
+                          / "pi-claude-bridge").as_posix()
+    assert f'PI_BRIDGE_PATH="{bridge_path_value}"' in new_text
+
+
+def test_apply_pi_writes_pi_bridge_path_derived_from_home_not_from_the_cli_js_location(
+        tmp_path, monkeypatch):
+    """PI_BRIDGE_PATH must track ctx.home (specs: `${PI_BRIDGE_PATH}/src/
+    index.ts` in sssf.shipping.config.yaml, `~/.pi/agent/npm/node_modules/
+    pi-claude-bridge`) even when npm's global root (where cli.js lives) is
+    somewhere else entirely - the two are independent locations."""
+    ctx = _make_ctx(tmp_path)
+    npm_root = tmp_path / "somewhere-else-entirely" / "npmroot"
+    cli_js = npm_root / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
+    cli_js.parent.mkdir(parents=True)
+    cli_js.write_text("// pi cli\n", encoding="utf-8")
+
+    def fake_run(argv, **kwargs):
+        if argv[:3] == ["npm", "root", "-g"]:
+            return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
+        raise AssertionError(f"unexpected run() call: {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_pi(ctx)
+
+    assert result.outcome == "installed"
+    bridge_path_value = (ctx.home / ".pi" / "agent" / "npm" / "node_modules"
+                          / "pi-claude-bridge").as_posix()
+    assert bridge_path_value in result.message
+    new_text = ctx.env_path.read_text(encoding="utf-8")
+    assert f'PI_BRIDGE_PATH="{bridge_path_value}"' in new_text
+    assert str(npm_root) not in bridge_path_value  # independent of npm's own root
 
 
 def test_apply_pi_packages_is_a_full_no_op_when_already_wired(tmp_path, monkeypatch):
@@ -822,3 +862,441 @@ def test_v7_no_mistakes_not_wired_fails_when_a_no_mistakes_remote_exists(tmp_pat
     result = steps.verify_v7_no_mistakes_not_wired(ctx)
 
     assert result.outcome == "failed"
+
+
+# ── engine-service: sdl-engine.service, the systemd contract (specs/engine.md
+#    section 7) ────────────────────────────────────────────────────────────
+# ctx.engine_unit_path always points under tmp_path in these tests - never
+# the real /etc/systemd/system/, which is not even a valid path on the
+# Windows laptop these tests run on.
+
+def _fake_which_systemd_host(cmd):
+    return {"systemctl": "/usr/bin/systemctl", "uv": "/usr/local/bin/uv"}.get(cmd)
+
+
+def test_render_engine_unit_matches_the_specs_engine_md_contract(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    monkeypatch.setattr(steps, "engine_service_user", lambda _ctx: "operator")
+
+    text = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+
+    assert text == (
+        "[Unit]\n"
+        "Description=SDL factory engine - runs the Kanban\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        "User=operator\n"
+        f"WorkingDirectory={ctx.repo_root.as_posix()}\n"
+        "Environment=SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml\n"
+        "ExecStart=/usr/local/bin/uv run adws/engine.py\n"
+        "Restart=always\n"
+        "RestartSec=10\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+
+
+def test_render_engine_unit_never_leaves_the_service_running_as_root_by_default(
+        tmp_path, monkeypatch):
+    """No `User=` means systemd starts the engine as root, and on an
+    operator-owned checkout every git call then dies with "dubious ownership"
+    while `systemctl is-active` still says active (specs/engine.md 7)."""
+    ctx = _make_ctx(tmp_path, target="server")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setattr(steps.getpass, "getuser", lambda: "operator")
+
+    unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+
+    assert "User=operator\n" in unit
+
+
+def test_engine_service_user_prefers_the_sudo_invoker_when_the_owner_cannot_be_named(
+        tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    monkeypatch.setenv("SUDO_USER", "mubarak")
+    monkeypatch.setattr(steps.getpass, "getuser", lambda: "root")
+
+    # `pwd` is POSIX-only; blocking it forces the same fallback path on every
+    # host, so the fallback itself is what gets tested here.
+    monkeypatch.setitem(sys.modules, "pwd", None)
+
+    assert steps.engine_service_user(ctx) == "mubarak"
+
+
+def test_the_unit_names_the_roster_so_the_service_is_not_silently_on_the_test_lane(
+        tmp_path, monkeypatch):
+    """`SSSF_CONFIG=<roster> install.py` is the ONE supported way to point the
+    always-on service at a roster - engine.py and dispatch.py read the same
+    variable the justfile does, and this converges instead of being parked."""
+    monkeypatch.setenv("SSSF_CONFIG", "adws/adw_sssf_config/sssf.shipping.config.yaml")
+    ctx = _make_ctx(tmp_path, target="server")      # reads it the way build_ctx does
+    monkeypatch.setattr(steps, "engine_service_user", lambda _ctx: "operator")
+
+    unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+
+    assert ("Environment=SSSF_CONFIG=adws/adw_sssf_config/sssf.shipping.config.yaml\n"
+            in unit)
+
+
+def test_apply_engine_service_is_deferred_on_a_non_systemd_host(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", lambda cmd: None)
+    monkeypatch.setattr(steps, "run", lambda argv, **kw: (_ for _ in ()).throw(
+        AssertionError(f"a non-systemd host must not shell out - got {argv}")))
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "deferred"
+    assert not ctx.engine_unit_path.exists()
+
+
+def test_verify_engine_service_is_deferred_on_a_non_systemd_host(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    monkeypatch.setattr(steps, "which", lambda cmd: None)
+
+    result = steps.verify_engine_service(ctx)
+
+    assert result.outcome == "deferred"
+
+
+def test_apply_engine_service_fails_when_uv_is_missing(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", lambda cmd: "/usr/bin/systemctl" if cmd == "systemctl" else None)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "failed"
+    assert not ctx.engine_unit_path.exists()
+
+
+def _knows_its_committer(argv):
+    """A host whose git can already name a committer - the normal case, and the
+    one `ensure_engine_git_identity` must leave completely alone."""
+    return steps.RunResult(argv, 0, "operator <operator@example.com> 1786000000 +0000", "", 0.01)
+
+
+def test_apply_engine_service_converges_a_fresh_host(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["git", "var"]:
+            return _knows_its_committer(argv)
+        return steps.RunResult(argv, 0, "", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "installed"
+    text = ctx.engine_unit_path.read_text(encoding="utf-8")
+    assert f"WorkingDirectory={ctx.repo_root.as_posix()}" in text
+    assert "ExecStart=/usr/local/bin/uv run adws/engine.py" in text
+    assert "Restart=always" in text
+    # identity checked BEFORE the unit is written (a service that cannot commit
+    # is `active` and useless), unit written BEFORE daemon-reload, daemon-reload
+    # BEFORE enable --now - writing after enabling would start the OLD unit.
+    assert calls == [
+        ["git", "var", "GIT_COMMITTER_IDENT"],
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "sdl-engine"],
+    ]
+
+
+def test_apply_engine_service_is_a_full_no_op_when_already_correct_enabled_active(
+        tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    ctx.engine_unit_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+    expected = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+    ctx.engine_unit_path.write_text(expected, encoding="utf-8")
+
+    def fake_run(argv, **kwargs):
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return _knows_its_committer(argv)
+        if argv == ["systemctl", "is-enabled", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "enabled\n", "", 0.01)
+        if argv == ["systemctl", "is-active", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "active\n", "", 0.01)
+        raise AssertionError(f"apply_engine_service must not shell out beyond the read-only "
+                              f"identity probe and is-enabled/is-active when already correct - "
+                              f"got {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "ok"
+    assert ctx.engine_unit_path.read_text(encoding="utf-8") == expected   # untouched
+    assert list(ctx.engine_unit_path.parent.glob("*.parked-*")) == []
+
+
+def test_apply_engine_service_reconverges_when_enabled_but_not_active(tmp_path, monkeypatch):
+    """Content matches, but the service is not actually running (e.g. it
+    crashed and was never restarted) - not a full no-op: enable --now is
+    re-run (idempotent either way), the unit file itself is untouched since
+    its content already matches."""
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    ctx.engine_unit_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+    expected = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+    ctx.engine_unit_path.write_text(expected, encoding="utf-8")
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return _knows_its_committer(argv)
+        if argv == ["systemctl", "is-enabled", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "enabled\n", "", 0.01)
+        if argv == ["systemctl", "is-active", "sdl-engine"]:
+            return steps.RunResult(argv, 3, "inactive\n", "", 0.01)
+        return steps.RunResult(argv, 0, "", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "installed"
+    assert ctx.engine_unit_path.read_text(encoding="utf-8") == expected   # unchanged content
+    assert list(ctx.engine_unit_path.parent.glob("*.parked-*")) == []     # so no park either
+    assert ["systemctl", "enable", "--now", "sdl-engine"] in calls
+
+
+def test_apply_engine_service_parks_and_rewrites_when_unit_content_is_stale(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    ctx.engine_unit_path.parent.mkdir(parents=True)
+    ctx.engine_unit_path.write_text("[Unit]\nDescription=stale\n", encoding="utf-8")
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["git", "var"]:
+            return _knows_its_committer(argv)
+        return steps.RunResult(argv, 0, "", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "installed"
+    parked = list(ctx.engine_unit_path.parent.glob("sdl-engine.service.parked-*"))
+    assert len(parked) == 1
+    assert parked[0].read_text(encoding="utf-8") == "[Unit]\nDescription=stale\n"
+    new_text = ctx.engine_unit_path.read_text(encoding="utf-8")
+    assert "Description=SDL factory engine - runs the Kanban" in new_text
+    assert calls == [
+        ["git", "var", "GIT_COMMITTER_IDENT"],
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "sdl-engine"],
+    ]
+
+
+def test_apply_engine_service_dry_run_writes_nothing_and_only_probes(tmp_path, monkeypatch):
+    """The one command a dry run may make is the READ-ONLY identity probe - it
+    is how the dry run knows whether to report that it would set one. Nothing
+    is written: no unit, no git config, no systemctl."""
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.dry_run = True
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return _knows_its_committer(argv)
+        raise AssertionError(f"dry-run must not shell out beyond the read-only identity "
+                              f"probe - got {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "ok"
+    assert "[dry-run]" in result.message
+    assert not ctx.engine_unit_path.exists()
+    assert calls == [["git", "var", "GIT_COMMITTER_IDENT"]]
+
+
+def test_apply_engine_service_dry_run_names_the_identity_it_would_set(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.dry_run = True
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    def fake_run(argv, **kwargs):
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return steps.RunResult(argv, 128, "", "fatal: unable to auto-detect email "
+                                    "address (got 'root@box.(none)')", 0.01)
+        raise AssertionError(f"dry-run must write nothing - got {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "ok"
+    assert "[dry-run] would set repo-local git identity sdl-factory engine" in result.message
+
+
+def test_apply_engine_service_dry_run_is_ok_when_already_converged(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.dry_run = True
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    ctx.engine_unit_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+    expected = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+    ctx.engine_unit_path.write_text(expected, encoding="utf-8")
+
+    def fake_run(argv, **kwargs):
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return _knows_its_committer(argv)
+        if argv == ["systemctl", "is-enabled", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "enabled\n", "", 0.01)
+        if argv == ["systemctl", "is-active", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "active\n", "", 0.01)
+        raise AssertionError(f"unexpected run() call under dry-run: {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "ok"
+    assert "already" in result.message
+
+
+# ── the committer identity the engine commits card write-backs as ───────────
+# A service that cannot commit is `active` and useless: the engine logs
+# "commit failed, will retry next cycle" once a minute forever (specs/engine.md
+# 7). This is the converge that stops that happening on a fresh host.
+
+def test_a_host_that_cannot_name_a_committer_gets_a_repo_local_identity(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs.get("cwd")))
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return steps.RunResult(argv, 128, "", "fatal: unable to auto-detect email "
+                                    "address (got 'root@box.(none)')", 0.01)
+        return steps.RunResult(argv, 0, "", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    note = steps.ensure_engine_git_identity(ctx)
+
+    assert [argv for argv, _ in calls] == [
+        ["git", "var", "GIT_COMMITTER_IDENT"],
+        ["git", "config", "--local", "user.name", "sdl-factory engine"],
+        ["git", "config", "--local", "user.email", "engine@sdl-factory.local"],
+    ]
+    # --local, and run INSIDE the checkout: this changes one repo, never the host.
+    assert all(cwd == ctx.repo_root for _, cwd in calls)
+    assert "set repo-local git identity sdl-factory engine" in note
+
+
+def test_an_identity_the_host_already_has_is_never_overwritten(tmp_path, monkeypatch):
+    """`git var GIT_COMMITTER_IDENT` is git's own resolution of the question -
+    config, environment and auto-detection folded in - so a host that already
+    knows who it is is left completely alone, on every config layer."""
+    ctx = _make_ctx(tmp_path, target="server")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return _knows_its_committer(argv)
+        raise AssertionError(f"an existing identity must never be written over - got {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    assert steps.ensure_engine_git_identity(ctx) == ""
+    assert calls == [["git", "var", "GIT_COMMITTER_IDENT"]]
+
+
+def test_an_identity_that_cannot_be_written_is_named_not_swallowed(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+
+    def fake_run(argv, **kwargs):
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return steps.RunResult(argv, 128, "", "fatal: unable to auto-detect email", 0.01)
+        return steps.RunResult(argv, 1, "", "error: could not lock config file", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    note = steps.ensure_engine_git_identity(ctx)
+
+    assert "could not set git user.name" in note
+    assert "could not lock config file" in note
+
+
+def test_an_engine_service_whose_identity_would_not_write_is_not_reported_converged(
+        tmp_path, monkeypatch):
+    """However healthy the unit is: a service that cannot commit comes up
+    `active` and fails every write-back it ever makes, so the step says
+    needs-operator rather than claiming the host is done."""
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    def fake_run(argv, **kwargs):
+        if argv == ["git", "var", "GIT_COMMITTER_IDENT"]:
+            return steps.RunResult(argv, 128, "", "fatal: unable to auto-detect email", 0.01)
+        if argv[:3] == ["git", "config", "--local"]:
+            return steps.RunResult(argv, 1, "", "error: could not lock config file", 0.01)
+        return steps.RunResult(argv, 0, "", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_engine_service(ctx)
+
+    assert result.outcome == "needs-operator"
+    assert "could not set git user.name" in result.message
+    assert ctx.engine_unit_path.is_file()      # the unit itself still converged
+
+
+def test_verify_engine_service_ok_when_unit_matches_enabled_active(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    ctx.engine_unit_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+    ctx.engine_unit_path.write_text(
+        steps.render_engine_unit(ctx, "/usr/local/bin/uv"), encoding="utf-8")
+
+    def fake_run(argv, **kwargs):
+        if argv == ["systemctl", "is-enabled", "sdl-engine"]:
+            return steps.RunResult(argv, 0, "enabled\n", "", 0.01)
+        return steps.RunResult(argv, 0, "active\n", "", 0.01)
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.verify_engine_service(ctx)
+
+    assert result.outcome == "ok"
+
+
+def test_verify_engine_service_needs_operator_when_unit_missing(tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.engine_unit_path = tmp_path / "fake-etc-systemd" / "sdl-engine.service"
+    monkeypatch.setattr(steps, "which", _fake_which_systemd_host)
+
+    result = steps.verify_engine_service(ctx)
+
+    assert result.outcome == "needs-operator"
+
+
+# ── STEPS registration: scoped, required, last (specs/engine.md; the two-box
+#    model - never laptop-side) ─────────────────────────────────────────────
+
+def test_engine_service_is_registered_server_container_scoped_and_last():
+    engine_step = next(s for s in steps.STEPS if s.id == "engine-service")
+
+    assert engine_step.targets == steps.SERVER_CONTAINER
+    assert "laptop" not in engine_step.targets
+    assert engine_step.required is True
+    assert steps.STEPS[-1] is engine_step   # after everything else converges

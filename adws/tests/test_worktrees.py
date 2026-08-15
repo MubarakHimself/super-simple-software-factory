@@ -43,7 +43,14 @@ def _run(*args: str, cwd: Path) -> str:
 def main_repo(tmp_path):
     """A throwaway git repo standing in for the main checkout — NOT chdir'd
     into: every worktrees.py/git_helper call below takes an explicit `tree=`,
-    which is the whole point of the seam (spec 5.2)."""
+    which is the whole point of the seam (spec 5.2).
+
+    Carries an `integration` branch alongside `main`, at the same tip — the
+    shape a real checkout has once MAP.md's integration-branch ruling
+    (2026-08-15) is converged: runs fork from and are measured against
+    `integration`, never `main`. Tests that specifically exercise the
+    self-heal path (`ensure_factory_trunk`) build their own bare `main`-only
+    repo instead of this fixture."""
     repo = tmp_path / "main"
     repo.mkdir()
     _run("init", "-q", "-b", "main", cwd=repo)
@@ -52,12 +59,13 @@ def main_repo(tmp_path):
     (repo / "README.md").write_text("hello\n", encoding="utf-8")
     _run("add", "-A", cwd=repo)
     _run("commit", "-q", "-m", "init", cwd=repo)
+    _run("branch", "integration", "main", cwd=repo)
     return repo
 
 
 @pytest.fixture
 def wcfg(tmp_path):
-    return WorktreesConfig(root=str(tmp_path / "worktrees"), trunk="main",
+    return WorktreesConfig(root=str(tmp_path / "worktrees"), trunk="integration",
                            stale_after_minutes=STALE)
 
 
@@ -89,8 +97,9 @@ def test_base_is_trunk_not_whatever_the_main_checkout_has_checked_out(main_repo,
 
     rw = worktrees.ensure_run_worktree(main_repo, "cafef00d", "add a feature", wcfg)
 
-    assert rw.base == "main"
-    assert git_helper.rev(rw.branch, tree=main_repo) == git_helper.rev("main", tree=main_repo)
+    assert rw.base == "integration"
+    assert git_helper.rev(rw.branch, tree=main_repo) == \
+        git_helper.rev("integration", tree=main_repo)
     assert not (Path(rw.path) / "other.txt").exists()
 
 
@@ -152,6 +161,137 @@ def test_git_worktree_mutex_refuses_a_second_checkout_of_the_same_branch(main_re
 
     with pytest.raises(RuntimeError, match="already used by worktree"):
         git_helper.worktree_add(path_b, "adw/aaaa1111_test", tree=main_repo)
+
+
+# ── self-heal: the factory trunk (integration) is created from main when it
+# is missing (MAP.md's integration-branch ruling, 2026-08-15) ──────────────
+#
+# `main_repo` (above) already carries `integration` — realistic once a
+# checkout has converged once. These tests build their own bare `main`-only
+# repo instead, to exercise the FIRST run against a fresh checkout, where
+# `integration` genuinely does not exist yet.
+
+@pytest.fixture
+def main_only_repo(tmp_path):
+    """A throwaway repo carrying `main` and NOTHING else — the pre-heal
+    shape: no `integration` branch has ever been cut."""
+    repo = tmp_path / "main-only"
+    repo.mkdir()
+    _run("init", "-q", "-b", "main", cwd=repo)
+    _run("config", "user.email", "test@example.com", cwd=repo)
+    _run("config", "user.name", "Test", cwd=repo)
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _run("add", "-A", cwd=repo)
+    _run("commit", "-q", "-m", "init", cwd=repo)
+    return repo
+
+
+def test_ensure_factory_trunk_creates_it_from_main_without_touching_main(main_only_repo):
+    before_head = git_helper.rev("HEAD", tree=main_only_repo)
+    before_branch = git_helper.current_branch(tree=main_only_repo)
+
+    note = worktrees.ensure_factory_trunk(main_only_repo, "integration")
+
+    assert "created 'integration' from 'main'" in note
+    assert git_helper.ref_exists("integration", tree=main_only_repo)
+    assert git_helper.rev("integration", tree=main_only_repo) == \
+        git_helper.rev("main", tree=main_only_repo)
+    # main itself: never checked out, never moved.
+    assert git_helper.rev("HEAD", tree=main_only_repo) == before_head
+    assert git_helper.current_branch(tree=main_only_repo) == before_branch
+
+
+def test_ensure_factory_trunk_pushes_to_origin_when_one_is_configured(main_only_repo, tmp_path):
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _run("init", "-q", "--bare", "-b", "main", cwd=origin)
+    _run("remote", "add", "origin", str(origin), cwd=main_only_repo)
+
+    note = worktrees.ensure_factory_trunk(main_only_repo, "integration")
+
+    assert "pushed to origin" in note
+    pushed = _run("branch", "--list", "integration", "--format=%(refname:short)", cwd=origin)
+    assert pushed.splitlines() == ["integration"]
+
+
+def test_ensure_factory_trunk_skips_the_push_with_no_remote(main_only_repo):
+    note = worktrees.ensure_factory_trunk(main_only_repo, "integration")
+
+    assert "no 'origin' remote" in note
+    assert git_helper.ref_exists("integration", tree=main_only_repo)
+
+
+def test_ensure_factory_trunk_is_a_noop_when_the_trunk_already_exists(main_repo):
+    # main_repo already carries integration (fixture above).
+    tip_before = git_helper.rev("integration", tree=main_repo)
+
+    note = worktrees.ensure_factory_trunk(main_repo, "integration")
+
+    assert note == ""
+    assert git_helper.rev("integration", tree=main_repo) == tip_before
+
+
+def test_ensure_factory_trunk_is_a_noop_when_trunk_equals_source(main_only_repo):
+    note = worktrees.ensure_factory_trunk(main_only_repo, "main", source="main")
+    assert note == ""
+
+
+def test_ensure_factory_trunk_has_nothing_to_heal_from_on_a_repo_with_no_source(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    _run("init", "-q", "-b", "scratch", cwd=empty)   # no commits at all yet
+
+    note = worktrees.ensure_factory_trunk(empty, "integration")
+
+    assert note == ""
+    assert not git_helper.ref_exists("integration", tree=empty)
+
+
+def test_ensure_factory_trunk_defaults_the_trunk_name_from_the_env(main_only_repo, monkeypatch):
+    monkeypatch.setenv(git_helper.FACTORY_TRUNK_ENV, "custom-trunk")
+
+    note = worktrees.ensure_factory_trunk(main_only_repo)   # no explicit trunk
+
+    assert "created 'custom-trunk' from 'main'" in note
+    assert git_helper.ref_exists("custom-trunk", tree=main_only_repo)
+
+
+def test_ensure_run_worktree_self_heals_integration_from_main_on_a_fresh_checkout(
+        main_only_repo, tmp_path):
+    wcfg = WorktreesConfig(root=str(tmp_path / "worktrees"), trunk="integration",
+                           stale_after_minutes=STALE)
+
+    rw = worktrees.ensure_run_worktree(main_only_repo, "deadbeef", "add a feature", wcfg)
+
+    assert rw.base == "integration"
+    assert git_helper.ref_exists("integration", tree=main_only_repo)
+    assert git_helper.rev(rw.branch, tree=main_only_repo) == \
+        git_helper.rev("integration", tree=main_only_repo)
+    # invariant 1 still holds through the self-heal path.
+    assert git_helper.current_branch(tree=main_only_repo) == "main"
+
+
+def test_ensure_run_worktree_still_falls_back_to_current_head_when_nothing_can_heal(
+        tmp_path, capsys):
+    # A repo with no "main" at all (its default branch is called something
+    # else) and no "integration" either - self-heal has nothing to work
+    # from, so the pre-ruling fallback (base off the main checkout's current
+    # HEAD, loudly) is what protects the run.
+    repo = tmp_path / "odd-default"
+    repo.mkdir()
+    _run("init", "-q", "-b", "trunk", cwd=repo)
+    _run("config", "user.email", "test@example.com", cwd=repo)
+    _run("config", "user.name", "Test", cwd=repo)
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _run("add", "-A", cwd=repo)
+    _run("commit", "-q", "-m", "init", cwd=repo)
+    wcfg = WorktreesConfig(root=str(tmp_path / "worktrees"), trunk="integration",
+                           stale_after_minutes=STALE)
+
+    rw = worktrees.ensure_run_worktree(repo, "deadbeef", "add a feature", wcfg)
+
+    assert rw.base == "trunk"
+    assert "does not resolve" in capsys.readouterr().out
 
 
 # ── classify: pure function, the four-state table + ordering rule ──────────

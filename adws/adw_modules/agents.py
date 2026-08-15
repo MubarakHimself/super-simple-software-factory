@@ -10,6 +10,7 @@ disposes.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -41,7 +42,7 @@ class GateFailure(RuntimeError):
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     defaults = raw.get("defaults", {}) or {}
-    default_harness = defaults.get("harness_engineering", []) or []
+    default_harness = expand_harness_paths(defaults.get("harness_engineering", []) or [])
     for agent in raw.get("agents", []) or []:
         for key in ("coding_agent", "model", "thinking", "color", "tools", "writes"):
             if key in defaults:
@@ -54,8 +55,27 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
         # agent that already names its own list would silently never gain a
         # roster-wide extension added to defaults later.
         agent["harness_engineering"] = merge_unique(
-            default_harness, agent.get("harness_engineering", []) or [])
+            default_harness, expand_harness_paths(agent.get("harness_engineering", []) or []))
     return SSSFConfig(**raw)
+
+
+def expand_harness_paths(entries: list[str]) -> list[str]:
+    """$VAR / ${VAR} (os.path.expandvars also covers %VAR% on Windows), then
+    ~, applied to every harness_engineering entry before it is ever used -
+    so a per-host, outside-the-repo extension path (e.g. PI_BRIDGE_PATH; see
+    sssf.shipping.config.yaml's own comment) never has to be a literal
+    absolute path baked into a config file tracked in git, the way the two-box
+    model's laptop/server split requires (MAP.md "Platform landmines": PI_PATH
+    is re-derived per host the same way).
+
+    An unresolved ${VAR} (the env var was never set - expandvars leaves the
+    string verbatim, e.g. "${PI_BRIDGE_PATH}/src/index.ts") is NOT caught
+    here: it is left exactly as written, a literal path that does not exist,
+    and fails LOUD downstream at validate() time when
+    agent_pi.resolve_model() cannot find a real pi extension there (the
+    existing SystemExit behavior - see validate() below).
+    """
+    return [os.path.expanduser(os.path.expandvars(entry)) for entry in entries]
 
 
 def merge_unique(base: list[str], extra: list[str]) -> list[str]:

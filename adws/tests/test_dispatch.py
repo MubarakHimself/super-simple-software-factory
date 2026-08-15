@@ -27,16 +27,25 @@ TEMPLATE_BODY = """## Agent Brief
 
 
 def _item(status: str = dispatch.READY, adw: str = "simple-sdlc", adw_id: str = "",
-         created: str = "2026-08-12", context: str = "DEC-0042") -> str:
-    """A fixture mirroring queue/TEMPLATE.md's exact shape."""
+         created: str = "2026-08-12", context: str = "DEC-0042",
+         needs: str | None = None) -> str:
+    """A fixture mirroring queue/TEMPLATE.md's exact shape. `needs=None`
+    omits the Needs: line entirely (the "absent" case, and the default so
+    every pre-existing test keeps seeing the original five-key header);
+    pass a string (even "") to include the line with that value."""
+    header_lines = [
+        f"Status: {status}",
+        f"Adw: {adw}",
+        f"Adw-Id: {adw_id}",
+        f"Created: {created}",
+        f"Context: {context}",
+    ]
+    if needs is not None:
+        header_lines.append(f"Needs: {needs}")
     return (
-        f"# Add a /health endpoint\n\n"
-        f"Status: {status}\n"
-        f"Adw: {adw}\n"
-        f"Adw-Id: {adw_id}\n"
-        f"Created: {created}\n"
-        f"Context: {context}\n\n"
-        f"{TEMPLATE_BODY}"
+        "# Add a /health endpoint\n\n"
+        + "\n".join(header_lines) + "\n\n"
+        + TEMPLATE_BODY
     )
 
 
@@ -70,6 +79,77 @@ def test_parse_header_reads_the_five_keys_and_the_body_below_them():
     }
     assert dispatch.body_of(header).startswith("## Agent Brief")
     assert "**Out of scope:**" in dispatch.body_of(header)
+
+
+# ── Needs: parsing (read_card_header) ───────────────────────────────────────
+
+def test_read_card_header_parses_needs_as_a_comma_separated_list(tmp_path):
+    path = _write(tmp_path, "003-x.md",
+                  _item(needs="001-auth-model.md, 002-schema.md"))
+    header = dispatch.read_card_header(path)
+    assert header["needs"] == ["001-auth-model.md", "002-schema.md"]
+    assert header["status"] == dispatch.READY   # the other keys pass through as-is
+
+
+@pytest.mark.parametrize("needs", [None, "", "   ", ",, ,"])
+def test_read_card_header_needs_absent_or_empty_is_an_empty_list(tmp_path, needs):
+    path = _write(tmp_path, "003-x.md", _item(needs=needs))
+    assert dispatch.read_card_header(path)["needs"] == []
+
+
+# ── needs_satisfied ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def queue_root(tmp_path):
+    """A throwaway repo root with queue/ and queue/done/ on disk, standing in
+    for `main_root` in needs_satisfied's own lookups."""
+    root = tmp_path / "main"
+    (root / "queue" / "done").mkdir(parents=True)
+    return root
+
+
+def test_needs_satisfied_true_when_there_is_no_needs_line(queue_root):
+    card = _write(queue_root / "queue", "003-x.md", _item(needs=None))
+    assert dispatch.needs_satisfied(card, queue_root) == (True, [])
+
+
+def test_needs_satisfied_true_when_the_needed_card_is_parked_in_done(queue_root):
+    _write(queue_root / "queue" / "done", "001-auth-model.md",
+          _item(status=dispatch.READY))   # status irrelevant once it's in done/
+    card = _write(queue_root / "queue", "003-x.md", _item(needs="001-auth-model.md"))
+    assert dispatch.needs_satisfied(card, queue_root) == (True, [])
+
+
+def test_needs_satisfied_false_when_the_needed_card_is_done_but_not_merged(queue_root):
+    """`done` means an ADW finished and pushed its own branch - its code is
+    NOT in integration until the factory integrates it and parks the card in
+    queue/done/. A dependent dispatched here would cut its worktree from an
+    integration without its dependency in it, which is the one thing Needs:
+    exists to prevent."""
+    _write(queue_root / "queue", "001-auth-model.md", _item(status=dispatch.DONE))
+    card = _write(queue_root / "queue", "003-x.md", _item(needs="001-auth-model.md"))
+    assert dispatch.needs_satisfied(card, queue_root) == (False, ["001-auth-model.md"])
+
+
+def test_needs_satisfied_false_when_the_needed_card_is_not_done_yet(queue_root):
+    _write(queue_root / "queue", "001-auth-model.md", _item(status=dispatch.RUNNING))
+    card = _write(queue_root / "queue", "003-x.md", _item(needs="001-auth-model.md"))
+    assert dispatch.needs_satisfied(card, queue_root) == (False, ["001-auth-model.md"])
+
+
+def test_needs_satisfied_fails_closed_on_a_reference_that_matches_no_card(queue_root):
+    card = _write(queue_root / "queue", "003-x.md", _item(needs="999-does-not-exist.md"))
+    assert dispatch.needs_satisfied(card, queue_root) == (False, ["999-does-not-exist.md"])
+
+
+def test_needs_satisfied_reports_only_the_unmet_ones_among_several_in_order(queue_root):
+    _write(queue_root / "queue" / "done", "001-a.md", _item(status=dispatch.DONE))
+    _write(queue_root / "queue", "002-b.md", _item(status=dispatch.BLOCKED))
+    card = _write(queue_root / "queue", "003-x.md",
+                  _item(needs="001-a.md, 002-b.md, 999-missing.md"))
+    ok, unmet = dispatch.needs_satisfied(card, queue_root)
+    assert ok is False
+    assert unmet == ["002-b.md", "999-missing.md"]
 
 
 # ── request_prompt: the branch-slug source (specs/worktrees.md 3.2) ────────
@@ -236,6 +316,45 @@ def test_dispatch_rejoin_with_matching_adw_id_proceeds_past_the_refusal(main_roo
     final = path.read_text(encoding="utf-8")
     assert "Status: done\n" in final
     assert "Adw-Id: cafebabe\n" in final
+
+
+# ── Needs: refusal (dispatch invoked directly on a blocked card) ────────────
+
+def test_dispatch_refuses_a_card_with_unmet_needs_and_leaves_it_untouched(main_root, monkeypatch, capsys):
+    def _boom(*a, **k):
+        raise AssertionError("must never spawn a subprocess for unmet needs")
+    monkeypatch.setattr(dispatch, "_stream", _boom)
+
+    original = _item(needs="001-auth-model.md")
+    path = _write(main_root, "003-add-billing.md", original)
+
+    code = dispatch.dispatch(path, main_root=main_root, config="cfg.yaml", adw_id_override=None)
+
+    assert code == 2
+    assert path.read_text(encoding="utf-8") == original   # no mutation on refusal
+    err = capsys.readouterr().err
+    assert "needs not satisfied" in err
+    assert "001-auth-model.md" in err
+
+
+def test_dispatch_proceeds_once_the_needed_card_is_satisfied(main_root, monkeypatch):
+    calls = []
+
+    def _fake_stream(cmd, *, cwd, env):
+        calls.append(cmd)
+        return 0
+    monkeypatch.setattr(dispatch, "_stream", _fake_stream)
+
+    # needs_satisfied looks under <main_root>/queue/done for the needed card:
+    # merged (parked in done/) is the bar, not merely Status: done.
+    (main_root / "queue" / "done").mkdir(parents=True)
+    _write(main_root / "queue" / "done", "001-auth-model.md", _item(status=dispatch.DONE))
+    path = _write(main_root, "003-add-billing.md", _item(needs="001-auth-model.md"))
+
+    code = dispatch.dispatch(path, main_root=main_root, config="cfg.yaml", adw_id_override=None)
+
+    assert code == 0
+    assert len(calls) == 1
 
 
 # ── end-to-end dispatch (the subprocess boundary faked) ─────────────────────

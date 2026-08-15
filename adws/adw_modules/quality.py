@@ -259,7 +259,7 @@ def typecheck(run) -> QualityCheckResult:
     ), run)
 
 
-def ai_defects(run, trunk: str = "main") -> QualityCheckResult:
+def ai_defects(run, trunk: str | None = None) -> QualityCheckResult:
     """Skylos: a deterministic scan for the failure modes of the agent that
     just wrote the code — missing guards, fake/unfinished helpers, invented
     package APIs, disabled controls, impossible dependency versions.
@@ -275,6 +275,13 @@ def ai_defects(run, trunk: str = "main") -> QualityCheckResult:
     (no git, no trunk, a single-commit repo), the scan falls back to the whole
     repo: noisy beats a gate that silently always passes.
 
+    `trunk=None` means the factory trunk (`git_helper.factory_trunk()` -
+    `integration`, MAP.md 2026-08-15), NOT `main`. Runs fork from integration
+    now, so a merge-base against `main` would reach back to the operator's
+    last squash and scope the scan over every OTHER run integrated since -
+    precisely the "someone else's findings become this builder's repair spec"
+    failure this block is scoped to avoid.
+
     FAIL-CLOSED on Windows: skylos depends on tree-sitter-dart-orchard, an
     sdist-only package that needs an MSVC toolchain uv cannot provision on
     this laptop (see pyproject.toml's `scan` group). `_classify_ai_defects`
@@ -285,7 +292,7 @@ def ai_defects(run, trunk: str = "main") -> QualityCheckResult:
     """
     argv = [*_scan(run), "skylos", ".", "--ai-defects", "--format", "concise"]
     try:
-        base = git_helper.merge_base(trunk, tree=run.repo_root)
+        base = git_helper.merge_base(trunk or git_helper.factory_trunk(), tree=run.repo_root)
     except (RuntimeError, OSError):
         base = ""
     if base:

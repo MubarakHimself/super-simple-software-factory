@@ -55,7 +55,7 @@ observability:
 worktrees:
   enabled: true
   root: ""                         # "" = <parent of repo>/<repo-name>-worktrees
-  trunk: main                      # what runs fork from and are measured against
+  trunk: integration               # what runs fork from and ff-merge into (main is human-owned)
   stale_after_minutes: 30          # a 'running' session silent this long is stale on rejoin
 
 agents:

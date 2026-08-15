@@ -13,6 +13,76 @@ sessions from his laptop (Matt Pocock skill chain → Kanban queue), documenting
 observable through a UI. The operator appears at exactly two moments — ratifying the plan, and the
 pre-merge morning brief. Done when a queue item ships to `main` without him between those gates.
 
+## The two-box model — settled 2026-08-14 (operator rulings; supersedes anything below that disagrees)
+
+- **The factory core lives ONLY on the server.** One machine. It is not distributed and is not
+  meant to be. The laptop is the workplace: planning, ideation, documentation via the operator's
+  own harnesses (Claude Code, Codex, pi) and the planning skills. **Nothing planning-side is ever
+  installed on the server**; the skills once hand-synced there are dead ("bloody unnecessary") and
+  get wiped at the next redeploy.
+- **What crosses machines:** documentation, tickets (queue cards), status, and finished branches.
+  **Transport: git, with GitHub as the hub** (ratified). Laptop publishes — `queue-publish`
+  commits the card *plus* the docs that changed in that journey and pushes (triggered by the
+  publish act itself, zero extra commands). Server engine pulls, ships, pushes `adw/` branches and
+  card-status write-backs. Gate (laptop) fetches, `--ff-only` merges, moves the card to `done/`,
+  pushes. **Post-merge, automatically:** the app spawns a headless documentation-factory
+  `change`-mode session ON THE LAPTOP; updated docs push through the same hub. A failed doc run is
+  shown, never blocks the merge.
+- **The engine** (closes the unattended gap — the trigger upstream never built,
+  `video-2-notes.md:726`): an always-on systemd service on the server (ratified). Cycle ~60s:
+  pull → scan `queue/` for `ready-for-agent` cards whose `Needs:` are satisfied → dispatch.
+  Parallel across worktrees up to a configurable cap (default 2) when cards are independent;
+  strictly ordered when `Needs:` chains them. Cards gain a **`Needs:` header** so upstream
+  blocking edges finally reach the Kanban. Not overnight-only: it works **as long as there is
+  work**.
+- **The UI is a DESKTOP APP on the laptop.** It was never meant to be a web dashboard; that shape
+  came from the poorly-designed first UI. Its job: observe (Board / runs / what happened since
+  last checked), sync visibility, click-to-merge, provider + model config (multiple accounts per
+  provider must be possible), and connect-server with autonomous provisioning — **SSH under the
+  hood** (ratified): host + credentials once in Settings, then the app converges the factory on
+  the server itself; the operator never sees a terminal. The UI does not plan. Operator is
+  redesigning it (layouts ~done); implementation is a separate session whose context is
+  `docs/user-journeys.md`.
+- **Vocabulary, corrected: pi is the HARNESS, not a provider.** The ADWs drive pi; pi talks to
+  the provider accounts underneath. Providers: Claude Code (via bridge), Codex, Grok/xAI,
+  OpenCode, Ollama Cloud — for now, and pluggable.
+- **The factory is skill-free** (operator 2026-08-14): no skills load inside factory runs; all
+  guidance rides in the card/spec from upstream. Supersedes the shadcn-pinned-skill note below.
+- **Void/dropped:** "Server install also installs the UI" (the UI is laptop-side; the server
+  target installs factory + engine service only) · deploy-the-dashboard-to-the-server ("push it")
+  · Contabo password rotation (operator: don't mind it) · Grok CLI on the server stays.
+- **THE INTEGRATION BRANCH (operator-ratified 2026-08-15).** Runs cut from and ff-merge INTO
+  `integration`; the factory performs that merge AUTONOMOUSLY after deterministic checks — rebase
+  onto current integration, then re-run the quality suite against the rebased tree (this IS the
+  merge_check phase; no new review agent). Conflict or red → card `blocked` with the reason,
+  visible. `Needs:` chains unblock at integration — waves roll without the operator. **`main` is
+  human-owned: ONE squash commit per finished chunk**, merged in the UI ("what comes on main is
+  never split work"). Consequence, forced by main-only-moves-by-squash: **integration is the
+  living line** — docs, queue cards and status write-backs live and sync on `integration`; main
+  holds clean combined snapshots only. This OVERRIDES the git-flow dead-list entry by operator
+  ruling (one integration branch, not three; the stranding risk that killed git-flow is
+  machine-owned) and amends rule 11 accordingly. Per-project init converges the integration
+  branch; CI/CD, where a project declares it, centralizes there.
+- **Context engineering over model choice (operator, 2026-08-15):** "99% of 2026 models can code;
+  the problem is the context you give them." Effort goes to skills, briefs and deterministic
+  self-checks. **Model selection is the operator's alone, in the UI — agents do no model
+  research** (DeepSeek's dead-list status is his to revisit). Planning-models roster section is a
+  later UI addition. The in-factory planner STAYS, narrowed: upstream plans the product; the
+  factory's scout+planner plan the diff against integration as it exists at run time.
+- **T3-style usage-log crawl: DEAD** (the custom UI borrows no platform logic). Lane slots +
+  visible holds are the deterministic placeholder; headroom balancing returns later on the
+  operator's terms. Vocabulary: one provider account = one LANE (one quota pool); a lane's SLOT
+  count = how many parallel runs may draw on it.
+- **The supply line goes in-house (operator, 2026-08-15):** doc-factory (enhancement pass: ingest
+  transcripts + artifacts + design packets (Open Design/BMAD design.md + screenshots); capture
+  the SDLC end-to-end — stack, database/schemas, custom libraries, API contracts, CI/CD;
+  HITL grilling with recommendations when ambiguous; orchestrator + subagents) → `/to-kanban`
+  (opens `_docwork/`, obeys `--handoff` order, batch-publishes cards with `Needs:`,
+  subagent-per-feature on real batches). Two sessions, not one giant skill. The Pocock bundle
+  stays installed (park never delete) but leaves the factory's supply line. pi's extension system
+  is the native mechanism for the dynamic-provider work (mechanism research allowed; model
+  research not).
+
 ## The shape — disler's core, four additions
 
 The core is **untouched**: deterministic Python ADWs own sequencing/retries/acceptance; agents are
@@ -296,11 +366,13 @@ auto-reconnect, key management, herdr (researched-later; sessions die with the a
   per entry path (greenfield / brownfield / import / small feature / big feature), and exactly what
   documentation-factory contributes at each. The previous diagram confused him; needs a clean
   visual + a short discussion. **Deferred by the operator (2026-08-12) until the factory is
-  visibly running — not load-bearing for the build.** Related fact: **documentation-factory was never edited** — five
-  enhancements are agreed but unbuilt: a *front door* ("what are you trying to do?" on invocation,
-  then it picks its own mode), *architecture-preflight* (prove reuse-or-new before building), OKF
-  provenance frontmatter, plus lens/skeleton additions. Project specifics enter as **rider files at
-  Stage 1**, never as edits to the skill.
+  visibly running — not load-bearing for the build.** Related fact — **STALE, corrected 2026-08-15**: the five once-"unbuilt" enhancements (front
+  door, architecture-preflight, OKF provenance frontmatter, feature inventory, lens/skeleton
+  additions) are ALL BUILT and live in the skill (verified line-by-line:
+  `docs/research/doc-factory-deep-read-2026-08-15.md`). Remaining real gaps: design-packet
+  ingestion (Open Design exports), stack/CI-CD/custom-library capture, grill-with-recommendations
+  HITL, layer taxonomy (backend/UI/middleware/database), batch↔`--waves` wiring. Project specifics
+  still enter as **rider files at Stage 1**, never as edits to the skill.
 - **Whether `/to-spec` can batch** — **RESOLVED 2026-08-13**, the operator's own answer shape,
   built: `/to-spec` never batches; **documentation-factory now emits the feature inventory** at
   Stage 4 (`_docwork/feature_inventory.yaml`: FEAT-ids, scope, ledger tracing, blocking edges,

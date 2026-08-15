@@ -62,13 +62,21 @@
 #    planner/reviewer call through this config IS the round trip, and it must
 #    be a real ticket, not a probe (MAP rule 4 forbids spending Anthropic
 #    quota on a test).
-# 3. The bridge extension path below is this box's real, verified install
-#    (`~/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts`, resolved
-#    absolute because it lives outside the repo, under the user's pi home —
-#    unlike `subagents.ts`, which the repo carries and can reference
-#    relatively). A fresh host re-derives this path the same way `PI_PATH`
-#    is re-derived after a pi reinstall (MAP landmine): confirm the extension
-#    is actually installed there before pointing an agent at it.
+# 3. The bridge extension path below is `${PI_BRIDGE_PATH}/src/index.ts` — a
+#    per-host env var, never a literal path baked into this tracked file. The
+#    wizard (`installer/steps.py`, the `pi` step) writes `PI_BRIDGE_PATH` into
+#    `.env` on every host it converges, right alongside `PI_PATH`: derived
+#    from that host's own `~/.pi/agent/npm/node_modules/pi-claude-bridge`
+#    install location, quoted, merge-not-overwrite. `agents.py`'s
+#    `load_config` expands both `$VAR`/`${VAR}` and `~` in every
+#    harness_engineering entry (defaults and per-agent) before it is ever
+#    used — unlike `subagents.ts`, which the repo carries and can reference
+#    relatively, the bridge extension lives outside the repo under the user's
+#    pi home, so it needs this per-host expansion. A fresh host re-derives
+#    nothing by hand: install the wizard, and `PI_BRIDGE_PATH` is there. If
+#    the wizard never ran (or `.env` was hand-edited), an unset
+#    `PI_BRIDGE_PATH` fails LOUD at `validate()` time — a SystemExit naming
+#    the unresolved model, never a silent skip.
 defaults:
   coding_agent: pi
   # Safety net only: every agent below sets its own model explicitly, so this
@@ -87,7 +95,7 @@ defaults:
   # names, so it is loaded-but-unused for them, same as any other extension
   # tool nobody's allowlist requests.
   harness_engineering:
-    - C:/Users/Mubarak/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts
+    - ${PI_BRIDGE_PATH}/src/index.ts
   tools:
     - read
     - bash
@@ -109,7 +117,7 @@ observability:
 worktrees:
   enabled: true
   root: ""
-  trunk: main
+  trunk: integration
   stale_after_minutes: 30
 
 agents:

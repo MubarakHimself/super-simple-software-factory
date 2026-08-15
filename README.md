@@ -66,8 +66,9 @@ just worktrees   # every run's worktree, reconciled -- exit 1 means work is stra
 
 ## The daily loop
 
-The full walkthrough lives in [`docs/day-one.md`](docs/day-one.md). In
-outline, it is six steps:
+Two boxes: you plan and merge on the **laptop**; the **server** runs an
+always-on engine that works the queue on its own. The full walkthrough lives
+in [`docs/day-one.md`](docs/day-one.md). In outline, it is six steps:
 
 1. **Document** -- `/documentation-factory` (no arguments; it asks what you're
    doing and routes itself), then **ratify** the decision ledger it produces
@@ -76,14 +77,15 @@ outline, it is six steps:
    ordered, dependencies declared.
 3. **Spec / tickets / triage** -- `/to-spec` -> `/to-tickets` -> `/triage`,
    one feature at a time from the inventory.
-4. **Queue-publish** -- `/queue-publish` puts the ticket on the Board as
-   `queue/NNN-slug.md`. No restart, any harness.
-5. **Dispatch** -- `just work-next` (or `just work queue/NNN-slug.md`) routes
-   it to the right workflow, runs it on its own branch in its own worktree,
-   and writes status back to the card as it goes.
-6. **Morning brief, then your merge click** -- `/morning-brief` narrates the
+4. **Queue-publish, laptop to server** -- `/queue-publish` commits the card
+   plus whatever docs changed and pushes. That push is the whole handoff.
+5. **The server dispatches on its own** -- its always-on engine pulls, scans
+   `queue/` for ready cards whose `Needs:` are satisfied, and runs them on
+   their own branch and worktree as soon as they're ready -- no manual
+   dispatch, no restart.
+6. **Morning brief, then your merge click** -- `/morning-brief` narrates each
    run in plain words and ends with the compare link -- Gate 2, the only
-   place anything ever merges.
+   place anything ever merges, back on the laptop.
 
 ---
 
@@ -102,6 +104,10 @@ outline, it is six steps:
 ---
 
 ## Configuration
+
+One vocabulary note: `pi` is the harness these workflows drive, never a
+provider itself -- the providers are the accounts underneath it (Claude Code
+via the bridge, Codex, Grok/xAI, OpenCode, Ollama Cloud).
 
 `SSSF_CONFIG` swaps the whole agent roster for one run, no code change:
 
