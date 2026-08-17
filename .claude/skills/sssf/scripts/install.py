@@ -75,6 +75,11 @@ def main() -> int:
           root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
           args.force, stamped, skipped)
     stamp(TEMPLATES / "env.sample", root / ".env.sample", args.force, stamped, skipped)
+    # The queue is the seam between planning and the factory - a stamped repo
+    # without queue/ has a Board pointing at nothing and readiness reporting
+    # queue_template absent right after a successful install.
+    stamp(TEMPLATES / "queue" / "TEMPLATE.md", root / "queue" / "TEMPLATE.md",
+          args.force, stamped, skipped)
     # The recipes are part of the operating experience, and several cookbooks
     # plus the run banner tell you to use them, so a stamped repo has to have
     # them. Skipped like any other file if the repo already has a justfile.

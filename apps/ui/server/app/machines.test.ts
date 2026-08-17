@@ -39,10 +39,16 @@ import { dirname, join } from "node:path";
 import { Server, utils, type Connection } from "ssh2";
 // Type-only, so it is erased before it can load the module: the runtime import
 // below must not happen until SDL_FACTORY_HOME is redirected.
+import type { ProviderSyncRun } from "../../shared/types.ts";
 import type { MachineRecord } from "./machines.ts";
 
 const home = await mkdtemp(join(tmpdir(), "sdl-machines-"));
 process.env["SDL_FACTORY_HOME"] = home;
+// The provider-sync round-trip below loads `providers-v3.ts`, whose local-home
+// probes must never reach the operator's real `~/.pi`, `~/.codex` or
+// `~/.claude`. Both overrides are read at call time, so setting this here is
+// enough and it cannot collide with providers-v3.test.ts's own temp home.
+process.env["SDL_FACTORY_LOCAL_HOME"] = home;
 
 const {
   addMachine,
@@ -51,19 +57,27 @@ const {
   generateUsableKeyPair,
   isPublicKeyLine,
   keyDir,
+  localRow,
   machineId,
   machinesHome,
   parseProbeOutput,
   parseStepLine,
   probeMachine,
+  providerSyncSummary,
   readBindings,
+  readProviderSyncLog,
   readRegistry,
   registryPath,
   repoDirName,
   shq,
   startDeploy,
+  toRow,
   writeRegistry,
 } = await import("./machines.ts");
+
+/** The providers plane's own writer, used only to prove that the file this
+ * module reads is the file that module writes. Nothing here syncs anything. */
+const { providersRegistryPath, writeProvidersRegistry } = await import("./providers-v3.ts");
 
 /* ── the fake VPS ──────────────────────────────────────────────────────────
    A real SSH server; a scripted shell. `authorizedKeys` is the box's own
@@ -308,6 +322,138 @@ describe("ids and paths", () => {
     expect(machinesHome()).toBe(home);
     expect(registryPath().startsWith(home)).toBe(true);
     expect(keyDir().startsWith(home)).toBe(true);
+  });
+});
+
+/* ── the providers a machine actually carries ──────────────────────────────
+   A deployed box with no provider credentials cannot run one model, and that
+   was invisible from this pane. These tests hold the two halves of the fix:
+   the summary is honest about zero, and the file this module reads is the file
+   `providers-v3.ts` writes - the one thing a duplicated filename could break. */
+
+describe("the provider sync summary on a machine row", () => {
+  function record(id: string): MachineRecord {
+    return {
+      id,
+      name: "box",
+      host: "203.0.113.10",
+      port: 22,
+      user: "root",
+      key_path: join(home, "keys", id),
+      key_generated: true,
+      added_at: "2026-01-01T00:00:00.000Z",
+      last_connected_at: null,
+      repo_dir: null,
+      host_fingerprint: null,
+    };
+  }
+
+  function run(machine: string, results: ProviderSyncRun["results"]): ProviderSyncRun {
+    return {
+      machine_id: machine,
+      machine_name: "box",
+      at: "2026-08-17T09:00:00.000Z",
+      ok: results.every((result) => result.state === "applied"),
+      results,
+    };
+  }
+
+  test("counts each state separately and names only what landed", () => {
+    const summary = providerSyncSummary(
+      run("m-1", [
+        { provider_id: "deepseek", bucket: "api-key", state: "applied", reason: "written" },
+        { provider_id: "groq", bucket: "api-key", state: "applied", reason: "written" },
+        { provider_id: "claude", bucket: "signed-in", state: "needs-you", reason: "run claude setup-token" },
+        { provider_id: "codex", bucket: "signed-in", state: "failed", reason: "no ~/.codex/auth.json" },
+      ]),
+    )!;
+    expect(summary).toEqual({
+      at: "2026-08-17T09:00:00.000Z",
+      ok: false,
+      applied: 2,
+      needs_you: 1,
+      failed: 1,
+      applied_ids: ["deepseek", "groq"],
+    });
+  });
+
+  test("a run where nothing landed is applied:0, never a null that reads as 'not checked'", () => {
+    const summary = providerSyncSummary(
+      run("m-1", [{ provider_id: "claude", bucket: "signed-in", state: "needs-you", reason: "no token" }]),
+    )!;
+    expect(summary.applied).toBe(0);
+    expect(summary.applied_ids).toEqual([]);
+    expect(summary.ok).toBe(false);
+  });
+
+  test("no run at all is null - the state the pane warns on", () => {
+    expect(providerSyncSummary(null)).toBeNull();
+    expect(providerSyncSummary(undefined)).toBeNull();
+    // A hand-edited record with no results array must not become a fake zero.
+    expect(providerSyncSummary({ machine_id: "m", machine_name: "m", at: "x" } as unknown as ProviderSyncRun)).toBeNull();
+  });
+
+  test("a reason string never reaches a machine row - only counts and ids do", () => {
+    const summary = providerSyncSummary(
+      run("m-1", [
+        { provider_id: "deepseek", bucket: "api-key", state: "applied", reason: "key written into /root/.pi/agent/auth.json" },
+      ]),
+    )!;
+    expect(JSON.stringify(summary)).not.toContain("auth.json");
+    expect(Object.keys(summary).sort()).toEqual(["applied", "applied_ids", "at", "failed", "needs_you", "ok"]);
+  });
+
+  test("the log this module reads is the file providers-v3 writes, under the same home", async () => {
+    // The one thing spelling the filename twice could break. providers-v3's
+    // own writer puts the file down; this module's reader has to find it.
+    expect(providersRegistryPath()).toBe(join(machinesHome(), "providers.json"));
+    await writeProvidersRegistry({
+      version: 1,
+      providers: [],
+      sync: { "m-live": run("m-live", [{ provider_id: "deepseek", bucket: "api-key", state: "applied", reason: "ok" }]) },
+    });
+    const log = await readProviderSyncLog();
+    expect(providerSyncSummary(log["m-live"])!.applied_ids).toEqual(["deepseek"]);
+    // A machine with no run of its own reads null, not the neighbour's run.
+    expect(providerSyncSummary(log["m-other"])).toBeNull();
+  });
+
+  test("no key in the registry can reach a machine row", async () => {
+    await writeProvidersRegistry({
+      version: 1,
+      providers: [
+        {
+          id: "deepseek",
+          label: "DeepSeek",
+          api: "openai-completions",
+          base_url: "https://api.deepseek.com",
+          auth_header: true,
+          compat: null,
+          models: [{ id: "deepseek-v4-flash", name: null }],
+          key: "sk-SECRETVALUE-machines-test",
+          added_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+          source: "deepseek",
+        },
+      ],
+      sync: { "m-1": run("m-1", [{ provider_id: "deepseek", bucket: "api-key", state: "applied", reason: "ok" }]) },
+    });
+    const log = await readProviderSyncLog();
+    const row = toRow(record("m-1"), null, null, providerSyncSummary(log["m-1"]));
+    expect(JSON.stringify(row)).not.toContain("SECRETVALUE");
+    expect(row.providers).toMatchObject({ applied: 1, applied_ids: ["deepseek"] });
+  });
+
+  test("an unreadable providers file degrades to 'nothing synced', never to a false success", async () => {
+    await writeFile(providersRegistryPath(), "{ not json", "utf-8");
+    expect(await readProviderSyncLog()).toEqual({});
+    expect(toRow(record("m-1"), null, null, providerSyncSummary((await readProviderSyncLog())["m-1"])).providers).toBeNull();
+    await rm(providersRegistryPath(), { force: true });
+  });
+
+  test("the local row never claims a provider sync - nothing is synced to this laptop", () => {
+    expect(localRow().providers).toBeNull();
+    expect(localRow().kind).toBe("local");
   });
 });
 

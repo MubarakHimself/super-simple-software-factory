@@ -38,6 +38,10 @@ process.env["SDL_FACTORY_LOCAL_HOME"] = userHomeDir;
 // expectations (or into a fake box).
 delete process.env["CLAUDE_CODE_OAUTH_TOKEN"];
 
+/** The machines plane's own reader of the record this module writes — imported
+ * so the two halves of the journey are proved joined, not assumed to be. */
+const { providerSyncSummary, readProviderSyncLog } = await import("./machines.ts");
+
 const {
   PRESETS,
   applyLocally,
@@ -763,6 +767,65 @@ describe("sync to a machine", () => {
     const stored = await readProvidersRegistry();
     expect(stored.sync[record.id]!.results[0]!.state).toBe("applied");
     expect((await buildResponse()).sync[record.id]!.machine_name).toBe("test-box");
+  });
+
+  test("the remembered run carries the machine and the time the pane prints, and no credential", async () => {
+    const { record } = await boxWithMachine();
+    await writeProvidersRegistry({ version: 1, providers: [storedProvider()], sync: {} });
+    await mkdir(join(userHomeDir, ".codex"), { recursive: true });
+    await writeFile(codexAuthPath(), '{"tokens":{"access":"CODEXTOKEN"}}', "utf-8");
+
+    // No provider_ids: everything, the way the pane's one button syncs.
+    await syncToMachine(record, { claudeToken: "sk-ant-oat-PASTEDONCE" });
+
+    const remembered = (await buildResponse()).sync[record.id]!;
+    // Exactly what "synced to <machine> at <time>" is built from.
+    expect(remembered.machine_name).toBe("test-box");
+    expect(Number.isNaN(Date.parse(remembered.at))).toBe(false);
+    expect(remembered.results.map((result) => result.provider_id).sort()).toEqual(["claude", "codex", "ollama-cloud"]);
+    for (const result of remembered.results) {
+      expect(result.state).toBe("applied");
+      // "applied" with an empty reason is a row that says nothing on hover.
+      expect(result.reason.length).toBeGreaterThan(20);
+    }
+    // The run is written to disk and read back by the machines pane as well, so
+    // it is the one record a credential must never be able to reach.
+    expect(JSON.stringify(remembered)).not.toContain("SECRETVALUE");
+    const onDisk = await readFile(providersRegistryPath(), "utf-8");
+    expect(onDisk).not.toContain("PASTEDONCE");
+    expect(onDisk).not.toContain("CODEXTOKEN");
+  });
+
+  test("after a real sync the machines pane can say the box has providers", async () => {
+    // The other half of the journey, end to end: this module writes the run,
+    // `machines.ts` reads it back through its own reader, and the machine row
+    // stops warning. Nothing between them is mocked.
+    const { record } = await boxWithMachine();
+    await writeProvidersRegistry({ version: 1, providers: [storedProvider()], sync: {} });
+
+    // Before any sync the row's answer is null - the state the pane warns on.
+    expect(providerSyncSummary((await readProviderSyncLog())[record.id])).toBeNull();
+
+    await syncToMachine(record, { providerIds: ["ollama-cloud"] });
+
+    const summary = providerSyncSummary((await readProviderSyncLog())[record.id])!;
+    expect(summary.applied).toBe(1);
+    expect(summary.applied_ids).toEqual(["ollama-cloud"]);
+    expect(summary.at).toBe((await readProvidersRegistry()).sync[record.id]!.at);
+    expect(JSON.stringify(summary)).not.toContain("SECRETVALUE");
+  });
+
+  test("a sync where nothing lands leaves the machine row still warning", async () => {
+    const { record } = await boxWithMachine();
+    // No api-key provider registered, no codex login, no claude token: three
+    // needs-you/failed lines and not one applied.
+    await writeProvidersRegistry({ version: 1, providers: [], sync: {} });
+    await syncToMachine(record, { providerIds: ["claude", "codex"] });
+
+    const summary = providerSyncSummary((await readProviderSyncLog())[record.id])!;
+    expect(summary.applied).toBe(0);
+    expect(summary.needs_you).toBe(2);
+    expect(summary.ok).toBe(false);
   });
 });
 

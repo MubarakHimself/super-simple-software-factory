@@ -61,6 +61,15 @@
  * has not proven is `null` with a reason beside it. Nothing here needs the
  * Electron shell: the SSH happens in this Bun server, so the plain browser at
  * :4700 has every capability the desktop app has.
+ *
+ * ── Providers, on the machine row ───────────────────────────────────────────
+ * A deployed box with no provider credentials on it is a factory that cannot
+ * run one model, and that used to be invisible from this pane: the operator saw
+ * `engine active` and reasonably read it as finished. So every row now carries
+ * `providers` — a count-only summary of the last sync `providers-v3.ts` ran
+ * against that machine, read from that module's own registry (see
+ * `readProviderSyncLog`). `null`, or zero applied, is what the pane draws the
+ * warning from. Nothing on this path reads a key.
  */
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -72,9 +81,11 @@ import type {
   DeployStep,
   MachineDeployRequest,
   MachineProbe,
+  MachineProviderSync,
   MachineRegistryRow,
   MachinesRegistryResponse,
   NewMachineRequest,
+  ProviderSyncRun,
 } from "../../shared/types.ts";
 import { appError, appJson, appSafely, csrfGuard } from "./guard.ts";
 import { appHome, findProject, readManifest, writeManifest, type ManifestProject } from "./manifest.ts";
@@ -166,6 +177,55 @@ export async function readRegistry(): Promise<Registry> {
 export async function writeRegistry(registry: Registry): Promise<void> {
   await mkdir(machinesHome(), { recursive: true });
   await writeFile(registryPath(), `${JSON.stringify(registry, null, 2)}\n`, "utf-8");
+}
+
+// ── what providers landed on a machine (read-only) ──────────────────────────
+
+/**
+ * The providers registry, `~/.sdl-factory/providers.json`, which
+ * `providers-v3.ts` owns and is the only module that writes.
+ *
+ * The filename is spelled again here rather than imported, on this plane's own
+ * stated precedent (`providers-v3.ts:which()` — "local duplication over
+ * cross-chunk coupling"): that module already imports THIS one for its SSH
+ * helpers, so importing it back would turn one filename into a load-time
+ * import cycle. `machines.test.ts` writes the file through providers-v3's own
+ * writer and reads it back through this function, so the two cannot drift
+ * apart silently.
+ *
+ * ONLY the `sync` map is read. The same file holds every API key this app
+ * stores; nothing on this path touches `providers`, and the summary below
+ * carries counts and ids, never a credential and never a reason string.
+ */
+export async function readProviderSyncLog(): Promise<Record<string, ProviderSyncRun>> {
+  const path = join(machinesHome(), "providers.json");
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf-8")) as { sync?: unknown };
+    const sync = parsed.sync;
+    return sync && typeof sync === "object" && !Array.isArray(sync) ? (sync as Record<string, ProviderSyncRun>) : {};
+  } catch (error) {
+    // A hand-edited providers file must not take the machines list down. It
+    // degrades to "no sync is on record", which reads as the honest warning
+    // that no provider has landed - never as a false "synced".
+    console.error(`[ui] machines: could not read the provider sync log at ${path}: ${(error as Error).message}`);
+    return {};
+  }
+}
+
+/** One run, reduced to what a machine row draws. A run with zero `applied` is
+ * the state this whole field exists for: a box with no model credentials. */
+export function providerSyncSummary(run: ProviderSyncRun | null | undefined): MachineProviderSync | null {
+  if (!run || !Array.isArray(run.results) || typeof run.at !== "string") return null;
+  const applied = run.results.filter((result) => result.state === "applied");
+  return {
+    at: run.at,
+    ok: run.ok === true,
+    applied: applied.length,
+    needs_you: run.results.filter((result) => result.state === "needs-you").length,
+    failed: run.results.filter((result) => result.state === "failed").length,
+    applied_ids: applied.map((result) => result.provider_id),
+  };
 }
 
 /** Stable id from host+user+port, so re-adding the same box updates its row
@@ -904,10 +964,19 @@ export function localRow(): MachineRegistryRow {
     probe: null,
     probe_reason: "this machine runs the app; nothing to reach over the network",
     deploy: null,
+    // Providers are synced TO a factory machine. This row is not one, so the
+    // field is null rather than an empty run that would read as "nothing
+    // landed here yet".
+    providers: null,
   };
 }
 
-export function toRow(record: MachineRecord, probe: MachineProbe | null, deploy: DeployJobView | null): MachineRegistryRow {
+export function toRow(
+  record: MachineRecord,
+  probe: MachineProbe | null,
+  deploy: DeployJobView | null,
+  providers: MachineProviderSync | null,
+): MachineRegistryRow {
   return {
     id: record.id,
     name: record.name,
@@ -926,6 +995,7 @@ export function toRow(record: MachineRecord, probe: MachineProbe | null, deploy:
     probe_reason:
       probe === null ? "not probed on this read - ask for it with ?probe=1" : null,
     deploy,
+    providers,
   };
 }
 
@@ -946,9 +1016,12 @@ async function listMachines(req: Request): Promise<Response> {
   const probes = await Promise.all(
     registry.machines.map(async (record) => (wantProbe ? cachedProbe(record, refresh) : null)),
   );
+  // One read for the whole list: the sync log is a single small file, and a
+  // per-row read of it would open it once per machine for no new fact.
+  const syncLog = await readProviderSyncLog();
   registry.machines.forEach((record, index) => {
     const job = getDeploy(record.id);
-    rows.push(toRow(record, probes[index] ?? null, job ? deployView(job) : null));
+    rows.push(toRow(record, probes[index] ?? null, job ? deployView(job) : null, providerSyncSummary(syncLog[record.id])));
   });
 
   const response: MachinesRegistryResponse = {

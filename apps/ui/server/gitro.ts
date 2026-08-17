@@ -61,11 +61,22 @@ export class GitRepo {
     return code === 0;
   }
 
+  /**
+   * `git branch --show-current`, not `rev-parse --abbrev-ref HEAD`.
+   *
+   * The two agree on every repo that has a commit, and they disagree on the
+   * one this app creates itself: a repo that `POST /init/git` just made has an
+   * UNBORN HEAD, and `rev-parse` fails there ("ambiguous argument 'HEAD'"),
+   * which this returned as `null` - so the moment after Initialize git
+   * succeeded, readiness reported "branch unknown" for a repo plainly on
+   * `main`. `--show-current` prints `main` for that repo and prints nothing on
+   * a detached HEAD, which is exactly the two answers wanted, so the empty
+   * string keeps meaning "detached" as before.
+   */
   async currentBranch(): Promise<string | null> {
-    const { code, stdout } = await run(this.root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    const { code, stdout } = await run(this.root, ["branch", "--show-current"]);
     if (code !== 0) return null;
-    const branch = stdout.trim();
-    return branch === "HEAD" ? null : branch; // detached HEAD
+    return stdout.trim() || null; // empty -> detached HEAD
   }
 
   async remoteUrl(name = "origin"): Promise<string | null> {

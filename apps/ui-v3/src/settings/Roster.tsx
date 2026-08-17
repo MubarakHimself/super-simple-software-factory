@@ -50,6 +50,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiPost } from "../lib/api.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
 import { ReadFailure } from "../shell/EmptyState.tsx";
+import { InitializeFactory } from "../shell/InitializeFactory.tsx";
 import { PlusIcon } from "./icons.tsx";
 import { HowThisWorks } from "./notices.tsx";
 import type { SaveReporter } from "./save.ts";
@@ -386,11 +387,16 @@ export function Roster({
         </div>
         <div className="form-panel-sub">The five agents a run walks through, and the model each one runs on.</div>
         <p className="section-empty">
-          This project has no roster file, so there is nothing to edit yet. The factory writes one when it is
-          initialized — Settings · scope list · Add project runs that step, or <code>uv run</code> the sssf installer in
-          the repo.
+          This project has no roster file, so there is nothing to edit yet. The factory installer writes one, and it
+          runs from right here.
           <span className="se-note">{CONFIG_PATH}</span>
         </p>
+        {/* This used to say "or `uv run` the sssf installer in the repo",
+            which sends the operator out of the app to a terminal for a command
+            the app is allowed to run itself. It is one of the two commands
+            this app may ever run — so it is offered here, with the job's own
+            output, instead of being described. */}
+        <InitializeFactory projectId={projectId} projectName={projectName} onInitialized={config.refresh} />
       </div>
     );
   }

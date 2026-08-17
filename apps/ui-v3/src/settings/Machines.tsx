@@ -33,10 +33,20 @@
  * generated ed25519 key into the server's `~/.ssh/authorized_keys`. It is never
  * written to disk and never sent back in a response (`server/app/machines.ts`).
  *
+ * ── The half a deploy does not finish ───────────────────────────────────────
+ * `engine active` reads as done, and it is not: a box with no provider
+ * credential on it cannot answer one prompt. So every server row carries what
+ * the last provider sync landed there — a tag when something did, a warn Alert
+ * with a word-link into Providers when nothing has. The same link is the last
+ * line of a finished deploy. The counts come from
+ * `GET /api/app/machines`'s own `providers` field; this pane reads no key and
+ * is shown none.
+ *
  * Types are declared here, on this directory's convention ("a surface owns its
  * own types in its own directory"), mirrored from `apps/ui/shared/types.ts`.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useShell } from "../App.tsx";
 import { apiGet, apiPost, type Project } from "../lib/api.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
@@ -89,6 +99,17 @@ interface DeployNone {
 
 type DeployRead = DeployJobView | DeployNone;
 
+/** Counts from the last provider sync onto this machine. No key, no reason
+ * string — enough to answer "does the factory here have any models?" */
+interface MachineProviderSync {
+  at: string;
+  ok: boolean;
+  applied: number;
+  needs_you: number;
+  failed: number;
+  applied_ids: string[];
+}
+
 interface MachineRegistryRow {
   id: string;
   name: string;
@@ -107,6 +128,8 @@ interface MachineRegistryRow {
   probe: MachineProbe | null;
   probe_reason: string | null;
   deploy: DeployJobView | null;
+  /** null = no provider has ever been synced onto this box (see `providersOf`) */
+  providers: MachineProviderSync | null;
 }
 
 interface MachinesRegistryResponse {
@@ -208,6 +231,55 @@ function factoryOf(row: MachineRegistryRow): { color: string; text: string; titl
     return { color: DIM, text: `engine unknown · ${checkout}`, title: "systemd could not answer — this box may have no sdl-engine unit yet" };
   }
   return { color: FAIL, text: `engine ${engine} · ${checkout}`, title: `systemctl is-active sdl-engine = ${engine}` };
+}
+
+/**
+ * What this machine can actually run, in one word and one warning.
+ *
+ * `engine active` used to be the last thing this pane said, and it reads as
+ * finished — but a box with no provider credential on it cannot answer one
+ * prompt. So the missing half is a state of its own here: `null` (nothing was
+ * ever synced) and `applied: 0` (a sync ran and landed nothing) both raise the
+ * warning, and only a landed provider earns the tag.
+ */
+function providersOf(row: MachineRegistryRow): { tag: string | null; title: string; warn: string | null } {
+  if (row.kind === "local") return { tag: null, title: "", warn: null };
+  const sync = row.providers;
+  if (sync === null) {
+    return {
+      tag: null,
+      title: "No provider has been synced to this machine from this app.",
+      warn: "no providers synced — the factory has no models here",
+    };
+  }
+  const when = new Date(sync.at).toLocaleString();
+  if (sync.applied === 0) {
+    return {
+      tag: null,
+      title: `The sync at ${when} landed nothing: ${sync.needs_you} need you, ${sync.failed} failed.`,
+      warn: "the last sync landed no provider — the factory has no models here",
+    };
+  }
+  const pending = sync.needs_you + sync.failed;
+  return {
+    tag: `${sync.applied} provider${sync.applied === 1 ? "" : "s"}`,
+    title: `${sync.applied_ids.join(", ")} synced to ${row.name} at ${when}.${pending > 0 ? ` ${sync.needs_you} still need you, ${sync.failed} failed - Providers says which.` : ""}`,
+    // Deliberately no warning here. One provider is enough for the factory to
+    // run, and most operators will always have a signed-in lane they never
+    // carried over - a permanent alert for that would teach the eye to skip
+    // the one alert that means the box is dead.
+    warn: null,
+  };
+}
+
+/** The one word that chains this pane to Providers. Settings panes are routes,
+ * so this really navigates — the operator can come back to it. */
+function GoProviders({ onGo, children }: { onGo: () => void; children: string }) {
+  return (
+    <button type="button" className="pa-link" onClick={onGo}>
+      {children}
+    </button>
+  );
 }
 
 /** The pinned host key, as a tooltip line rather than a printed paragraph. */
@@ -439,11 +511,13 @@ function DeployPanel({
   projects,
   defaultProjectId,
   onFinished,
+  onGoProviders,
 }: {
   row: MachineRegistryRow;
   projects: Project[];
   defaultProjectId: string;
   onFinished: () => void;
+  onGoProviders: () => void;
 }) {
   const [projectId, setProjectId] = useState(defaultProjectId);
   const [job, setJob] = useState<DeployRead | null>(row.deploy);
@@ -562,6 +636,15 @@ function DeployPanel({
 
       {error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}
 
+      {/* The journey's next link. A finished deploy is an installed factory
+          with nothing to think with, and this is the only place the operator
+          is looking when that becomes true. */}
+      {view?.state === "done" && (row.providers === null || row.providers.applied === 0) ? (
+        <Alert kind="warn">
+          Factory installed — now <GoProviders onGo={onGoProviders}>sync providers</GoProviders>, or this box runs no model.
+        </Alert>
+      ) : null}
+
       {view && view.steps.length > 0 ? (
         <div className="modal-steps" style={{ maxHeight: 260 }}>
           {view.steps.map((step, index) => (
@@ -611,6 +694,7 @@ function Row({
   isDefault,
   onChanged,
   onRemoved,
+  onGoProviders,
 }: {
   row: MachineRegistryRow;
   projects: Project[];
@@ -618,6 +702,7 @@ function Row({
   isDefault: boolean;
   onChanged: () => void;
   onRemoved: (note: string) => void;
+  onGoProviders: () => void;
 }) {
   const isLocal = row.kind === "local";
   const [open, setOpen] = useState(false);
@@ -627,6 +712,7 @@ function Row({
 
   const status = statusOf(row);
   const factory = factoryOf(row);
+  const credentials = providersOf(row);
 
   // A row whose deploy is mid-flight opens itself: a running job must never be
   // hidden behind a click the operator does not know to make.
@@ -672,6 +758,11 @@ function Row({
               <>
                 <span className="mc-tag">factory</span>
                 {isDefault ? <span className="mc-tag dim">default</span> : null}
+                {credentials.tag ? (
+                  <span className="mc-tag dim" title={credentials.title}>
+                    {credentials.tag}
+                  </span>
+                ) : null}
               </>
             )}
           </div>
@@ -727,6 +818,15 @@ function Row({
         </div>
       </div>
 
+      {/* The state that is invisible everywhere else: a box the factory is
+          installed on, with no credential to think with. */}
+      {credentials.warn ? (
+        <Alert kind="warn">
+          <strong>{row.name}</strong>: {credentials.warn}.{" "}
+          <GoProviders onGo={onGoProviders}>Sync providers</GoProviders>
+        </Alert>
+      ) : null}
+
       {confirming ? (
         <Alert kind="warn" onDismiss={() => setConfirming(false)}>
           Remove takes {row.name} out of this laptop&apos;s list only — nothing on {row.host} is stopped or deleted.
@@ -735,7 +835,13 @@ function Row({
       {error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}
 
       {open && !isLocal ? (
-        <DeployPanel row={row} projects={projects} defaultProjectId={defaultProjectId} onFinished={onChanged} />
+        <DeployPanel
+          row={row}
+          projects={projects}
+          defaultProjectId={defaultProjectId}
+          onFinished={onChanged}
+          onGoProviders={onGoProviders}
+        />
       ) : null}
     </div>
   );
@@ -753,10 +859,18 @@ export function Machines(_legacy: {
   machines?: Resource<unknown>;
 }) {
   const { projectId, projects } = useShell();
+  const navigate = useNavigate();
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
+
+  /** The other half of the journey. Providers is a global pane, so any
+   * project's path reaches the same one. */
+  const goProviders = useCallback(
+    () => navigate(`/p/${encodeURIComponent(projectId)}/settings/providers`),
+    [navigate, projectId],
+  );
 
   const list = useResource<MachinesRegistryResponse>("machines-registry", "/api/app/machines?probe=1", LIST_POLL_MS);
   const { refresh } = list;
@@ -857,6 +971,7 @@ export function Machines(_legacy: {
                 isDefault={list.data?.default_machine === row.id}
                 onChanged={refresh}
                 onRemoved={setNotice}
+                onGoProviders={goProviders}
               />
             ))}
           </div>
@@ -876,6 +991,11 @@ export function Machines(_legacy: {
             server target, strip planning skills, confirm <code>sdl-engine</code> is active. Each step reports itself; a
             failure names the step and stops there. Running it twice reports <strong>already present</strong> rather
             than installing anything twice.
+          </p>
+          <p>
+            A deploy installs the factory, not the accounts it thinks with: a box with no provider synced onto it runs
+            no model. Its row says so until one lands, and{" "}
+            <GoProviders onGo={goProviders}>Providers</GoProviders> is where that is done.
           </p>
           <p>
             A row says <strong>reachable</strong> only when this app just spoke to the box over SSH — anything unproven

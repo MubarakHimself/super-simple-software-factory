@@ -32,6 +32,27 @@
 .dl-label{font-size:var(--text-meta);font-weight:600;color:var(--t1);white-space:nowrap;}
 .dl-sentence{font-size:var(--text-meta);line-height:1.5;color:var(--t3);min-width:0;}
 
+/* ── initialize factory: the panel Home and Roster mount when it is absent ──
+   Reuses `.detect-rows`/`.detect-line` above (the same two facts, read the
+   same way) and `.ob-primary`/`.ob-secondary` for its buttons — the log strip
+   and the alert line are the only new shapes. */
+.init-factory{display:flex;flex-direction:column;gap:12px;width:100%;max-width:64ch;text-align:left;padding:16px;background:var(--raised);border:1px solid var(--hairline);border-radius:var(--r-control);}
+.if-head{display:flex;flex-direction:column;gap:5px;}
+.if-title{font-size:var(--text-body);font-weight:600;color:var(--t1);}
+.if-sub{font-size:var(--text-meta);line-height:1.6;color:var(--t3);}
+.if-sub code{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);}
+.if-log{max-height:200px;overflow:auto;padding:10px 12px;background:var(--canvas);border:1px solid var(--hairline);border-radius:var(--r-control);}
+.if-line{font-family:var(--font-mono);font-size:var(--text-mono);line-height:1.6;color:var(--t2);white-space:pre-wrap;word-break:break-all;}
+.if-line.dropped{color:var(--t3);font-style:italic;}
+.if-alert{display:grid;grid-template-columns:6px 1fr;align-items:baseline;gap:9px;padding:10px 12px;border-radius:var(--r-control);border:1px solid var(--hairline);background:var(--canvas);}
+.if-alert .dot{align-self:center;}
+.if-alert.fail{border-color:var(--fail);}
+.if-alert.ok{border-color:var(--ok);}
+.if-alert-text{font-size:var(--text-meta);line-height:1.6;color:var(--t2);min-width:0;}
+.if-actions{display:flex;align-items:center;gap:14px;}
+.if-actions .ob-primary{margin-top:0;}
+.if-actions .ob-primary:disabled{opacity:0.55;}
+
 /* ── project menu: the remove word and its one question ─────────────────── */
 .project-menu-row{display:flex;align-items:center;}
 .project-menu-row .project-menu-item{flex:1;min-width:0;}

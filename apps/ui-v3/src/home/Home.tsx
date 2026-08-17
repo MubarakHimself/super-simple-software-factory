@@ -31,6 +31,7 @@ import { useResource, type Resource } from "../lib/poll.ts";
 import { Dot, type Tone } from "../shared/Dot.tsx";
 import { BookmarkIcon } from "../shared/Icons.tsx";
 import { EmptyState, ReadFailure } from "../shell/EmptyState.tsx";
+import { InitializeFactory } from "../shell/InitializeFactory.tsx";
 import type { CardsPayload, HomeCard, HomeLiveRun, HomeSession, RunsPayload, ShipReportPayload } from "./types.ts";
 import "./home.css";
 
@@ -166,15 +167,33 @@ function ShippingReport({ projectId, ship }: { projectId: string; ship: Resource
  *
  * Never "no data yet" on its own, and never a fabricated row.
  */
-function NothingYet({ projectId, factoryAbsent, readyCount }: { projectId: string; factoryAbsent: boolean; readyCount: number }) {
+function NothingYet({
+  projectId,
+  projectName,
+  factoryAbsent,
+  readyCount,
+  onInitialized,
+}: {
+  projectId: string;
+  projectName: string;
+  factoryAbsent: boolean;
+  readyCount: number;
+  onInitialized: () => void;
+}) {
   const boardPath = `/p/${encodeURIComponent(projectId)}/board`;
   if (factoryAbsent) {
+    // "No factory here" used to end the sentence and stop, which left a
+    // registered project with nothing to press — the operator's own report.
+    // The installer is one of exactly two commands this app may run, and this
+    // is where it is offered.
     return (
       <div className="home-empty">
         <EmptyState
           heading="No factory here"
           sentence="This project has no adws/ in it yet, so there is nothing for the engine to run — the factory installer is what puts the roster, the queue seam and the config in place."
-        />
+        >
+          <InitializeFactory projectId={projectId} projectName={projectName} onInitialized={onInitialized} />
+        </EmptyState>
       </div>
     );
   }
@@ -229,7 +248,7 @@ function RunGroup({ header, tone, pulse, rows }: { header: string; tone: Tone; p
 }
 
 export default function Home() {
-  const { projectId, live } = useShell();
+  const { projectId, project, live } = useShell();
   const [greeting] = useState(greetingText);
 
   const ship = useResource<ShipReportPayload>(`${projectId}|ship-report`, `/api/app/p/${encodeURIComponent(projectId)}/ship/report`);
@@ -300,7 +319,19 @@ export default function Home() {
         <RunGroup header="Blocked" tone="warn" rows={blockedCards.map((c) => cardRow(c, "warn", projectId))} />
 
         {nothingToShow && settled ? (
-          <NothingYet projectId={projectId} factoryAbsent={factoryAbsent} readyCount={readyCount} />
+          <NothingYet
+            projectId={projectId}
+            projectName={project?.name ?? "this project"}
+            factoryAbsent={factoryAbsent}
+            readyCount={readyCount}
+            onInitialized={() => {
+              // The two reads that answer "is there a factory here" — once
+              // they land, `factoryAbsent` is false and this block replaces
+              // itself with the real surface.
+              cardsRes.refresh();
+              runsRes.refresh();
+            }}
+          />
         ) : null}
       </div>
     </div>

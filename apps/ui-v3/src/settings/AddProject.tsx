@@ -122,10 +122,17 @@ export function AddProject({ onClose, onAdded }: { onClose: () => void; onAdded:
 
   const readinessOf = (id: string) => apiGet<Readiness>(`/api/app/projects/${encodeURIComponent(id)}/readiness`);
 
-  const waitForJob = async (jobId: string): Promise<JobStatus> => {
+  /** Polls one job to completion. While it is still running the step it owns
+   * is rewritten on every poll with the job's OWN latest line — the installer
+   * stamps 44 files and takes a real second or two, and a step that says
+   * "Running…" with nothing under it for that whole time reads as hung. The
+   * detail is never a sentence this app invented: it is the last thing the
+   * process printed. */
+  const waitForJob = async (jobId: string, what: string): Promise<JobStatus> => {
     for (;;) {
       const status = await apiGet<JobStatus>(`/api/app/jobs/${encodeURIComponent(jobId)}`);
       if (status.state !== "running" || !alive.current) return status;
+      settleLast({ tone: "run", text: `Running ${what}…`, detail: lastLine(status.lines) ?? undefined });
       await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS));
     }
   };
@@ -160,7 +167,7 @@ export function AddProject({ onClose, onAdded }: { onClose: () => void; onAdded:
           pushStep({ tone: "run", text: "Running git init…" });
           try {
             const handle = await apiPost<JobHandle>(`/api/app/p/${encodeURIComponent(project.id)}/init/git`, {});
-            settleLast(jobStep(await waitForJob(handle.job_id), "git init"));
+            settleLast(jobStep(await waitForJob(handle.job_id, "git init"), "git init"));
           } catch (failure) {
             settleLast({ tone: "fail", text: "git init was refused.", detail: (failure as Error).message });
           }
@@ -202,7 +209,7 @@ export function AddProject({ onClose, onAdded }: { onClose: () => void; onAdded:
         pushStep({ tone: "run", text: "Running the factory installer…" });
         try {
           const handle = await apiPost<JobHandle>(`/api/app/p/${encodeURIComponent(project.id)}/init/factory`, {});
-          settleLast(jobStep(await waitForJob(handle.job_id), "the factory installer"));
+          settleLast(jobStep(await waitForJob(handle.job_id, "the factory installer"), "the factory installer"));
         } catch (failure) {
           settleLast({ tone: "fail", text: "The factory installer did not start.", detail: (failure as Error).message });
         }

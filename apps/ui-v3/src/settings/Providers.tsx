@@ -37,6 +37,18 @@
  * `needs you` or `unknown`, and `unknown` is what it says before any sync has
  * ever run: this pane does not poll a server it was not asked to touch.
  *
+ * ── What survives a reload ─────────────────────────────────────────────────
+ * `syncToMachine` writes its run back into `~/.sdl-factory/providers.json`, so
+ * `GET /api/app/providers-v3` returns the last run per machine and everything
+ * a sync said — every per-provider line, the machine's name and the time —
+ * renders again tomorrow. `live` is the one bit that does not survive, and the
+ * summary line says so rather than implying the state was just re-checked.
+ *
+ * ── The journey chains both ways ───────────────────────────────────────────
+ * A key with no machine is as stuck as a machine with no key, so the empty
+ * state here links into Machines, and every machine row over there warns and
+ * links back here until a provider has actually landed on it.
+ *
  * ── The catalog ────────────────────────────────────────────────────────────
  * Roster's model dropdown reads `/api/app/models`, which shells
  * `pi -ne --list-models` — pi's MERGED catalog, so a provider written into
@@ -46,6 +58,8 @@
  * find Roster still blind to it until a restart.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useShell } from "../App.tsx";
 import { apiGet, apiPost } from "../lib/api.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
 import { ReadFailure } from "../shell/EmptyState.tsx";
@@ -139,13 +153,16 @@ interface ProvidersV3Response {
   catalog_note: string;
 }
 
-/** Only what this pane needs off the machine registry: a name to sync to. */
+/** Only what this pane needs off the machine registry: a name to sync to, and
+ * whether anything has ever landed there — a box with nothing on it is the one
+ * most likely to be the box the operator meant to pick. */
 interface MachineRow {
   id: string;
   name: string;
   kind: "local" | "server";
   host: string | null;
   user: string | null;
+  providers: { applied: number } | null;
 }
 
 interface MachinesRegistryResponse {
@@ -182,6 +199,14 @@ const SYNC_WORD: Record<ProviderSyncResult["state"], string> = {
   "needs-you": "needs you",
   failed: "failed",
 };
+
+/** The row tag's whole sentence: what happened, to which machine, WHEN, and
+ * the server's own reason. The `when` is the half a reload used to lose — the
+ * run is persisted in the providers registry precisely so this reads the same
+ * tomorrow as it does one second after the sync. */
+function syncTitle(result: ProviderSyncResult, run: ProviderSyncRun): string {
+  return `${SYNC_WORD[result.state]} to ${run.machine_name} at ${new Date(run.at).toLocaleString()} — ${result.reason}`;
+}
 
 /** The state of a row: a dot and one word. The server's own sentence about WHY
  * it is in that state rides on the tooltip — it is the answer to a question the
@@ -505,6 +530,16 @@ export function Providers({
   const providers = useResource<ProvidersV3Response>("providers-v3", "/api/app/providers-v3");
   const machines = useResource<MachinesRegistryResponse>("providers-machines", "/api/app/machines?probe=0");
   const { refresh } = providers;
+  const { projectId } = useShell();
+  const navigate = useNavigate();
+
+  /** The other half of the journey: a key with no machine to put it on is as
+   * stuck as a machine with no key. Machines is a global pane, so any
+   * project's path reaches the same one. */
+  const goMachines = useCallback(
+    () => navigate(`/p/${encodeURIComponent(projectId)}/settings/machines`),
+    [navigate, projectId],
+  );
 
   const [addOpen, setAddOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -588,12 +623,20 @@ export function Providers({
     }
   }, [chosen, claudeToken, refresh]);
 
-  /** Per-provider result from the last sync to the chosen machine — the row's
-   * "synced / needs you / unknown". */
-  const lastFor = (id: string): ProviderSyncResult | null => {
-    const stored = chosen ? (run?.machine_id === chosen.id ? run : (data?.sync[chosen.id] ?? null)) : null;
-    return stored?.results.find((result) => result.provider_id === id) ?? null;
-  };
+  /**
+   * The sync this pane is describing: the one that just ran when it was for the
+   * chosen machine, otherwise the one the registry remembers for it. A reload
+   * loses the first and keeps the second — which is the whole reason
+   * `syncToMachine` writes its run back into `providers.json`, and why every
+   * result below still renders after the operator closes the app.
+   */
+  const shown: ProviderSyncRun | null = chosen ? (run?.machine_id === chosen.id ? run : (data?.sync[chosen.id] ?? null)) : null;
+  /** true when `shown` is this session's own run rather than a remembered one */
+  const live = shown !== null && shown === run;
+
+  /** Per-provider result from that run — the row's "synced / needs you". */
+  const lastFor = (id: string): ProviderSyncResult | null =>
+    shown?.results.find((result) => result.provider_id === id) ?? null;
 
   /** Lanes the roster names that have no key on this laptop. A lane the factory
    * draws on with no credential registered is a fact worth one line. */
@@ -640,9 +683,9 @@ export function Providers({
                 <div className="pr-body">
                   <div className="pr-name">
                     {row.label} <span className="pr-tag">{row.id}</span>
-                    {last ? (
-                      <span className="pr-tag" style={{ color: SYNC_COLOR[last.state], background: "transparent" }} title={last.reason}>
-                        {SYNC_WORD[last.state]} · {chosen?.name}
+                    {last && shown ? (
+                      <span className="pr-tag" style={{ color: SYNC_COLOR[last.state], background: "transparent" }} title={syncTitle(last, shown)}>
+                        {SYNC_WORD[last.state]} · {shown.machine_name}
                       </span>
                     ) : null}
                   </div>
@@ -719,9 +762,9 @@ export function Providers({
               <div className="pr-body">
                 <div className="pr-name">
                   {row.label} <span className="pr-tag">{row.cli}</span>
-                  {last ? (
-                    <span className="pr-tag" style={{ color: SYNC_COLOR[last.state], background: "transparent" }} title={last.reason}>
-                      {SYNC_WORD[last.state]} · {chosen?.name}
+                  {last && shown ? (
+                    <span className="pr-tag" style={{ color: SYNC_COLOR[last.state], background: "transparent" }} title={syncTitle(last, shown)}>
+                      {SYNC_WORD[last.state]} · {shown.machine_name}
                     </span>
                   ) : null}
                 </div>
@@ -749,11 +792,16 @@ export function Providers({
                       placeholder="paste it here, then sync"
                       onChange={(event) => setClaudeToken(event.target.value)}
                     />
+                    {/* One command mints it, and this app cannot run that
+                        command for you: `claude setup-token` opens a browser
+                        and waits for a human. The box is write-only — the
+                        token is sent with the next sync, never read back by
+                        any route, and the field clears itself afterwards. */}
                     <span
                       className="field-hint"
-                      title="Sent with the next sync and written on that machine only, into its own ~/.sdl-factory/secrets.env (0600). This laptop never stores it, and the box clears itself once the sync has run."
+                      title="Mint it with one command on a machine that has a browser: `claude setup-token` (run `claude` once first if you have never logged in). Paste what it prints here. It is sent with the next sync and written on THAT machine only, into its own ~/.sdl-factory/secrets.env (0600) - one paste per machine. This laptop never stores it, no route ever reads it back, and the box clears itself once the sync has run."
                     >
-                      Goes to the server on the next sync; never stored here.
+                      Mint it with <code>claude setup-token</code>; it goes to the server on the next sync, never stored here.
                     </span>
                   </div>
                 ) : null}
@@ -817,6 +865,7 @@ export function Providers({
               servers.map((row) => (
                 <option key={row.id} value={row.id}>
                   {row.name} ({row.user}@{row.host})
+                  {(row.providers?.applied ?? 0) === 0 ? " · nothing synced yet" : ` · ${row.providers!.applied} synced`}
                 </option>
               ))
             )}
@@ -827,15 +876,21 @@ export function Providers({
         </div>
 
         {servers.length === 0 ? (
-          <p className="section-empty">
-            No server registered, so there is nothing to sync to.
-            <span className="se-note">{machines.error ?? "Machines takes an IP and a password once."}</span>
-          </p>
+          <Alert kind="warn">
+            No server registered, so there is nothing to sync to —{" "}
+            <button type="button" className="pa-link" onClick={goMachines}>
+              add one in Machines
+            </button>
+            . {machines.error ?? "It takes an IP and a password, once."}
+          </Alert>
         ) : null}
 
-        {run ? (
+        {/* Rendered from `shown`, not from this session's `run`: the registry
+            remembers the last sync per machine, so re-opening the app still
+            says what landed on that box and when. */}
+        {shown ? (
           <div className="modal-steps" style={{ marginTop: 12, maxHeight: "none" }}>
-            {run.results.map((result) => (
+            {shown.results.map((result) => (
               <div className="step-row" key={`${result.provider_id}-${result.state}`}>
                 <span className="step-dot" style={{ background: SYNC_COLOR[result.state] }} />
                 <span className="step-text">
@@ -847,12 +902,15 @@ export function Providers({
               </div>
             ))}
             <div className="step-row">
-              <span className="step-dot" style={{ background: run.ok ? "var(--ok)" : "var(--warn)" }} />
+              <span className="step-dot" style={{ background: shown.ok ? "var(--ok)" : "var(--warn)" }} />
               <span className="step-text">
-                {run.ok
-                  ? `Every provider landed on ${run.machine_name}.`
-                  : `Some providers need you, or failed, on ${run.machine_name}. Each line above says which and why.`}
-                <span className="step-detail">{new Date(run.at).toLocaleString()}</span>
+                {shown.ok
+                  ? `Every provider landed on ${shown.machine_name}.`
+                  : `Some providers need you, or failed, on ${shown.machine_name}. Each line above says which and why.`}
+                <span className="step-detail">
+                  synced to {shown.machine_name} at {new Date(shown.at).toLocaleString()}
+                  {live ? "" : " · remembered from the last sync, not re-checked"}
+                </span>
               </span>
             </div>
           </div>

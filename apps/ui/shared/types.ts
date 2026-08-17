@@ -939,6 +939,26 @@ export interface DeployNone {
   reason: string;
 }
 
+/**
+ * What the last provider sync actually wrote onto one machine, summarised from
+ * the providers registry's own record so a machine row can answer the question
+ * a deployed box cannot answer for itself: *does the factory here have any
+ * models at all?*
+ *
+ * Counts and provider ids only. No key, no fingerprint, and deliberately no
+ * `reason` string — the per-provider reasons belong to the Providers pane,
+ * which owns the sync that produced them.
+ */
+export interface MachineProviderSync {
+  at: string;
+  ok: boolean;
+  applied: number;
+  needs_you: number;
+  failed: number;
+  /** the ids that landed, so the row can name them without a second read */
+  applied_ids: string[];
+}
+
 export interface MachineRegistryRow {
   id: string;
   name: string;
@@ -964,6 +984,9 @@ export interface MachineRegistryRow {
   probe_reason: string | null;
   /** the most recent deploy this app started for that machine, if any */
   deploy: DeployJobView | null;
+  /** the last provider sync run against this machine, or null when none ever
+   * has - which is a factory with no model credentials on it at all */
+  providers: MachineProviderSync | null;
 }
 
 export interface MachinesRegistryResponse {
