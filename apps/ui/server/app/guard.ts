@@ -65,15 +65,58 @@ export function appError(message: string, status = 400): Response {
   return appJson({ error: message } satisfies AppApiError, status);
 }
 
+/**
+ * The only names this server answers to.
+ *
+ * WHY A HOST CHECK EXISTS AT ALL. `csrfGuard` covers the WRITE plane, but every
+ * `/api/app/*` GET was reachable with no token and no origin check, and this
+ * server - though bound to 127.0.0.1 - answers whatever arrives at that socket
+ * whatever name it was asked by. That is the DNS-rebinding shape: a page on
+ * `evil.example` whose name resolves, on its second lookup, to 127.0.0.1, then
+ * reads `/api/app/terminals/:id/raw` (a live shell's whole ring buffer),
+ * `/api/app/machines` (hosts, users, key paths, fingerprints) and
+ * `/api/app/auth-session` (scrubbed transcripts plus the live pairing code) -
+ * and `GET /` hands out the per-process APP_TOKEN in the injected HTML, so the
+ * write plane falls with the read plane.
+ *
+ * A rebound request carries the ATTACKER's name in `Host`, because that is the
+ * name the browser was told to fetch. Bun builds `req.url` from that header, so
+ * comparing its hostname against loopback is the whole check, and no browser
+ * can spoof it (`Host` is a forbidden header name - script cannot set it).
+ *
+ * Port-blind on purpose: the Vite dev servers proxy with `changeOrigin: false`,
+ * so their `Host` is `127.0.0.1:4730`, and pinning the port would break every
+ * dev read while adding nothing (an attacker who can choose a loopback name has
+ * already lost this check).
+ */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "0000:0000:0000:0000:0000:0000:0000:0001"]);
+
+/** True when this request asked for a loopback name. Anything else is a request
+ * that reached our socket under somebody else's name. */
+export function isLoopbackRequest(req: Request): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(req.url).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTS.has(hostname.toLowerCase());
+}
+
 /** Wraps any `/api/app/*` handler so a throw becomes `{error}` + 500 instead
  * of taking the whole server down mid-request (spec 1.3: "wrapped so a throw
  * returns {error} + 500, never a dead server") - the app-plane twin of
- * index.ts's `safely()`. */
+ * index.ts's `safely()`.
+ *
+ * It is also where the loopback-host check lives, so it covers the READ plane
+ * as well as the write plane (`csrfGuard` wraps itself in this function). One
+ * place, every `/api/app/*` route. */
 export function appSafely(
   handler: (req: Request) => Response | Promise<Response>,
 ): (req: Request) => Promise<Response> {
   return async (req) => {
     try {
+      if (!isLoopbackRequest(req)) return appError("this server answers on loopback only", 403);
       return await handler(req);
     } catch (error) {
       console.error(`[ui] app ${req.method} ${new URL(req.url).pathname}:`, error);

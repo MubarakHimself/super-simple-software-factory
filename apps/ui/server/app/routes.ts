@@ -15,6 +15,7 @@
  */
 import { hostname } from "node:os";
 import { acceptanceRoutes } from "./acceptance.ts";
+import { authSessionRoutes } from "./auth-sessions.ts";
 import { cardsRoutes } from "./cards.ts";
 import { criteriaRoutes } from "./criteria.ts";
 import { getDocsFile, getDocsSearch, getDocsTree } from "./docs.ts";
@@ -150,6 +151,12 @@ export const appRoutes = {
   // machine over L2's SSH helpers. Supersedes `/api/app/providers` for v3; that
   // read-only binary probe stays mounted above for the parked v1/v2 SPAs.
   ...providersV3Routes(APP_TOKEN, SELF_ORIGINS),
+  // SIGN IN ON <MACHINE>: the login that actually works for the two
+  // subscription CLIs - the command runs ON the machine over the same SSH
+  // layer, the link it prints comes back here, and the row only says signed in
+  // when a read-only re-probe finds the credential on that box. Nothing here
+  // copies an auth file; providers-v3's sync still owns the API-key path.
+  ...authSessionRoutes(APP_TOKEN, SELF_ORIGINS),
 
   "/api/app/p/:id/docs/tree": appSafely(getDocsTree),
   "/api/app/p/:id/docs/file": appSafely(getDocsFile),

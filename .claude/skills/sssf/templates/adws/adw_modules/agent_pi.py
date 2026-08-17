@@ -65,7 +65,30 @@ def _resolve_pi_cmd() -> list[str]:
     return cmd
 
 
-PI_CMD = _resolve_pi_cmd()
+def pi_cmd() -> list[str]:
+    """`_resolve_pi_cmd()`, ON DEMAND — never at import.
+
+    This was a module-level `PI_CMD = _resolve_pi_cmd()`, and that one line
+    turned a config problem into a dead factory. `adws/engine.py` imports this
+    module transitively (engine -> dispatch -> agents -> agent_pi), so an unset,
+    unparseable or moved `PI_PATH` raised before `argparse` had even run: even
+    `uv run adws/engine.py --help` died with a raw traceback. Under the server
+    unit's `Restart=always` that is a ten-second crash loop, for a process that
+    never spawns pi itself — the exact shape specs/engine.md 7/9 promises cannot
+    happen ("nothing here is fatal"; a config problem "must not turn the service
+    into a systemd restart loop"). A pi upgrade that moves `dist/cli.js`, or a
+    lost `.env`, was enough to do it overnight.
+
+    Resolved at the CALL now, so the failure lands where pi is actually being
+    launched: per card and visibly for a run, one named line and a held cycle
+    for the engine's own preflight (`engine.pi_launchable`). Deliberately
+    uncached for the same reason — an operator who repairs `PI_PATH` is picked
+    up on the next call, with no restart. It is `shlex.split` plus one
+    `is_file()`, which is nothing beside spawning a coding agent.
+    """
+    return _resolve_pi_cmd()
+
+
 # Unattended runs must never discover ambient extensions that could prompt and
 # hang — explicit `-e <path>` per request.extensions still works (rule 12).
 NO_EXTENSION_DISCOVERY = ["-ne"]
@@ -108,7 +131,7 @@ def _pi_catalog(extensions: tuple[str, ...] = ()) -> list[tuple[str, str, int]]:
     """
     try:
         result = subprocess.run(
-            [*PI_CMD, *NO_EXTENSION_DISCOVERY,
+            [*pi_cmd(), *NO_EXTENSION_DISCOVERY,
              *[flag for ext in extensions for flag in ("-e", ext)],
              "--list-models"],
             capture_output=True, text=True, encoding="utf-8",
@@ -295,7 +318,7 @@ def run(request: PiRequest, on_event: Callable[[dict], None] | None = None,
     extensions = tuple(request.extensions)
     provider, model_id = resolve_model(request.model, extensions=extensions)
     cmd = [
-        *PI_CMD, *NO_EXTENSION_DISCOVERY, "-p", "--mode", "json",
+        *pi_cmd(), *NO_EXTENSION_DISCOVERY, "-p", "--mode", "json",
         "--provider", provider, "--model", model_id,
         "--thinking", request.thinking,
         "--session-id", request.session_id,

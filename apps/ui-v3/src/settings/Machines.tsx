@@ -567,6 +567,25 @@ function DeployPanel({
     }
   }, [projectId, row.id]);
 
+  /**
+   * Stop a deploy that is not going to finish.
+   *
+   * Without this a wedged run held the machine for the life of the app server:
+   * the server returns the RUNNING job for a machine that already has one, so
+   * "Deploy again" silently did nothing and this panel polled a state that
+   * would never change. Nothing on the far end is rolled back — every bootstrap
+   * step is idempotent, so the next deploy converges from wherever this stopped.
+   */
+  const cancel = useCallback(async () => {
+    setError(null);
+    try {
+      const stopped = await apiPost<DeployJobView>(`/api/app/machines/${encodeURIComponent(row.id)}/deploy/cancel`, {});
+      if (alive.current) setJob(stopped);
+    } catch (caught) {
+      if (alive.current) setError(errorText(caught));
+    }
+  }, [row.id]);
+
   const view = job !== null && job.state !== "none" ? (job as DeployJobView) : null;
 
   const headline = (() => {
@@ -615,10 +634,26 @@ function DeployPanel({
           className="pr-btn"
           onClick={() => void start()}
           disabled={running || starting || projects.length === 0}
-          title="Pushes one POSIX script over SFTP and runs it: apt essentials, uv, Node, just, clone this project's own origin, check out integration, uv sync, the installer's server target, then confirm sdl-engine is active. Every step is idempotent."
+          // HONEST STATES: "the installer's server target" was true only of the
+          // sdl-factory repo itself, which is the only checkout that carries
+          // installer/. A stamped project takes bootstrap.sh's inline path,
+          // whose step 14b says out loud that it cannot converge the pi
+          // providers or skylos. Both paths are named here rather than the one
+          // the operator will almost never take.
+          title="Pushes one POSIX script over SFTP and runs it: apt essentials, uv, Node, just, clone this project's own origin, check out integration, uv sync, then either the installer's server target (only the sdl-factory repo has an installer/) or the same steps inline (any stamped project — that path cannot converge the pi providers or skylos, and says so), then confirm sdl-engine is active. Every step is idempotent."
         >
           {running ? "Deploying…" : starting ? "Starting…" : view ? "Deploy again" : "Deploy"}
         </button>
+        {running ? (
+          <button
+            type="button"
+            className="pr-btn danger"
+            onClick={() => void cancel()}
+            title="Drops the SSH connection, which stops the script on the machine. Nothing is rolled back - every step is idempotent, so the next deploy carries on from where this one stopped."
+          >
+            Cancel
+          </button>
+        ) : null}
         <span className="form-hint" style={{ flex: 1, minWidth: 160 }} title="No repository URL is ever typed twice.">
           Clones this project&apos;s own <code>origin</code>
         </span>
@@ -1011,7 +1046,11 @@ export function Machines(_legacy: {
       <div className="form-section">
         <div className="form-section-title">
           <span>
-            Runs on <span className="section-plain">— which machine each project dispatches to</span>
+            {/* HONEST STATES: no dispatch routing exists. The binding is written
+                into the manifest and read back only for THIS list — every
+                deployed box's engine ships whatever its own checkout holds. The
+                title says what the field is, not what it is not yet. */}
+            Runs on <span className="section-plain">— a label on this list; nothing routes work by it yet</span>
           </span>
         </div>
 
@@ -1046,8 +1085,11 @@ export function Machines(_legacy: {
         <div className="form-row">
           <div className="form-label-group">
             <div className="form-label">Everything else</div>
+            {/* Same honesty as the section title above: this value is stored and
+                shown (it is what puts the "default" badge on a row) and nothing
+                dispatches by it. */}
             <div className="form-hint" title="The binding is a field on this machine's own project list, beside the repository path — it never enters the project's repository.">
-              Where a project runs when nothing above binds it
+              The machine marked default when nothing above names one
             </div>
           </div>
           <select

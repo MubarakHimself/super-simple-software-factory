@@ -823,6 +823,69 @@ export interface ProvidersV3Response {
   catalog_note: string;
 }
 
+// -- sign in on a machine (server/app/auth-sessions.ts) ----------------------
+// The operator's ruling: copying an auth file or a token to the server does
+// not work for Claude Code or Codex. The login command runs ON the machine
+// over SSH, prints a link, and the sign-in completes in the machine's own
+// credential store. Nothing in these shapes ever carries a credential: every
+// transcript line is scrubbed before it is stored, let alone returned.
+
+/** One flow the app can run (or, for `pi-codex`, only check). `command: null`
+ * means no non-interactive command exists for that lane and this app refuses
+ * to invent one. */
+export interface AuthFlowView {
+  id: string;
+  label: string;
+  command: string | null;
+  probe_target: string;
+  /** the machine's own loopback port forwarded while the sign-in runs */
+  callback_port: number | null;
+  note: string;
+}
+
+export interface AuthSessionView {
+  id: string;
+  machine_id: string;
+  machine_name: string;
+  flow: string;
+  flow_label: string;
+  state: "running" | "completed" | "failed" | "cancelled";
+  /** scrubbed transcript, capped ring */
+  lines: string[];
+  dropped: number;
+  /** the link the operator has to open, lifted out of the transcript */
+  url: string | null;
+  /** a device / pairing code, when the flow prints one */
+  code: string | null;
+  /** the command is sitting at a prompt: something can be pasted back */
+  needs_input: boolean;
+  forward: string | null;
+  forward_reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  /** the RE-PROBE's answer - the only thing that can make a row say signed in */
+  signed_in: boolean | null;
+  signed_in_detail: string | null;
+  error: string | null;
+}
+
+export interface AuthSessionResponse {
+  flows: AuthFlowView[];
+  session: AuthSessionView | null;
+  reason: string | null;
+}
+
+export interface AuthProbeResponse {
+  machine_id: string;
+  machine_name: string;
+  flow: string;
+  /** null when the machine could not be asked - never a false "not signed in" */
+  signed_in: boolean | null;
+  detail: string;
+  checked_at: string;
+}
+
 export interface MachineRow {
   id: string;
   name: string;

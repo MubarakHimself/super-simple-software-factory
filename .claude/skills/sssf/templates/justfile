@@ -166,6 +166,17 @@ procs ADW_ID:
 
 # ── observability UI ────────────────────────────────────────────────────────
 
+# WHERE THE SKILL ACTUALLY IS. `install.py` stamps this justfile into your
+# project but never stamps the SKILL itself, so in a stamped repo the visualizer
+# normally lives only under ~/.claude/skills/sssf — while the factory's own
+# checkout (and any project that vendored the skill) carries a repo-local copy.
+# This recipe used to hardcode the repo-local path, so `just obs` — the trace-UI
+# step the install banner points at — failed with a missing directory in every
+# stamped project. Resolved project-then-user, the same order the app's
+# `init.ts` uses for the identical directory; a `just --evaluate` prints the one
+# that was picked.
+visualizer := if path_exists(justfile_directory() / ".claude/skills/sssf/apps/visualizer") == "true" { justfile_directory() / ".claude/skills/sssf/apps/visualizer" } else { home_directory() / ".claude/skills/sssf/apps/visualizer" }
+
 # Needs bun. The db path is passed explicitly because the server runs from the
 # app dir and would otherwise look for a trace db sitting next to itself.
 # The API server backgrounds so `bunx vite` can run in the foreground after it
@@ -179,8 +190,8 @@ procs ADW_ID:
 # boot the trace UI, http://localhost:4601 (api on :4600)
 [windows]
 obs:
-    cd .claude/skills/sssf/apps/visualizer && bun install && start /B cmd /c "set SSSF_DB={{justfile_directory()}}/{{db}}&& bun run server/index.ts" && bunx vite
+    cd /d "{{visualizer}}" && bun install && start /B cmd /c "set SSSF_DB={{justfile_directory()}}/{{db}}&& bun run server/index.ts" && bunx vite
 
 [unix]
 obs:
-    cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+    cd "{{visualizer}}" && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite

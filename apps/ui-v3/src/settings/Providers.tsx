@@ -57,7 +57,7 @@
  * fires `?refresh=1` at it; without that the operator would add a provider and
  * find Roster still blind to it until a restart.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShell } from "../App.tsx";
 import { apiGet, apiPost } from "../lib/api.ts";
@@ -153,6 +153,58 @@ interface ProvidersV3Response {
   catalog_note: string;
 }
 
+/* ── sign in ON a machine (server/app/auth-sessions.ts) ─────────────────────
+   The operator's ruling: copying an auth file or a token to the server does not
+   work for Claude Code or Codex. The login command runs ON the machine, prints
+   a link, and the sign-in completes in that machine's own credential store. */
+
+interface AuthFlowView {
+  id: string;
+  label: string;
+  /** null = no non-interactive command exists for that lane (pi's own `/login`) */
+  command: string | null;
+  probe_target: string;
+  callback_port: number | null;
+  note: string;
+}
+
+interface AuthSessionView {
+  id: string;
+  machine_id: string;
+  machine_name: string;
+  flow: string;
+  flow_label: string;
+  state: "running" | "completed" | "failed" | "cancelled";
+  lines: string[];
+  dropped: number;
+  url: string | null;
+  code: string | null;
+  needs_input: boolean;
+  forward: string | null;
+  forward_reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  signed_in: boolean | null;
+  signed_in_detail: string | null;
+  error: string | null;
+}
+
+interface AuthSessionResponse {
+  flows: AuthFlowView[];
+  session: AuthSessionView | null;
+  reason: string | null;
+}
+
+interface AuthProbeResponse {
+  machine_id: string;
+  machine_name: string;
+  flow: string;
+  signed_in: boolean | null;
+  detail: string;
+  checked_at: string;
+}
+
 /** Only what this pane needs off the machine registry: a name to sync to, and
  * whether anything has ever landed there — a box with nothing on it is the one
  * most likely to be the box the operator meant to pick. */
@@ -219,6 +271,49 @@ function Triple({ color, word, sentence }: { color: string; word: string; senten
       <strong style={{ color: "var(--t1)", fontWeight: 600 }}>{word}</strong>
     </div>
   );
+}
+
+/** The sign-in strip's four end states, in one word each. `completed` is the
+ * RE-PROBE's answer, never "the command exited 0" - the server decides it. */
+const SIGNIN_COLOR: Record<AuthSessionView["state"], string> = {
+  running: "var(--accent)",
+  completed: "var(--ok)",
+  failed: "var(--fail)",
+  cancelled: "var(--t3)",
+};
+
+const SIGNIN_WORD: Record<AuthSessionView["state"], string> = {
+  running: "signing in…",
+  completed: "signed in",
+  failed: "failed",
+  cancelled: "cancelled",
+};
+
+/**
+ * pi's own lanes, in the order the server's flow table carries them.
+ *
+ * `id` is the flow id, `lane` is pi's own name for the lane (the string that
+ * goes after `/login`), and `aside` is the one thing worth saying in the narrow
+ * middle column — always the fact that catches people out, never a restatement
+ * of the row's title. Everything else on these rows is read from the server's
+ * flow: the probe target and the sentence naming what to type both come from
+ * there, so this list never has to be kept in sync with a command.
+ */
+const AUTH_LANE_ROWS: { id: string; lane: string; aside: string }[] = [
+  { id: "pi-xai", lane: "xai", aside: "the grok CLI and this lane are two stores" },
+  { id: "pi-codex", lane: "openai-codex", aside: "the codex login and this lane are two stores" },
+  { id: "opencode-go", lane: "opencode-go", aside: "key is minted in a browser at opencode.ai/auth" },
+  { id: "ollama-cloud", lane: "ollama-cloud", aside: "key comes from OpenCode's own auth, via a script" },
+];
+
+/** What a remote check answered. `null` is its own word: the machine could not
+ * be asked, which is not the same as "not signed in". */
+function checkWord(signedIn: boolean | null): string {
+  return signedIn === true ? "signed in there" : signedIn === false ? "not signed in there" : "could not tell";
+}
+
+function checkColor(signedIn: boolean | null): string {
+  return signedIn === true ? "var(--ok)" : signedIn === false ? "var(--warn)" : "var(--t3)";
 }
 
 /** What the row prints; the full list is the tooltip. */
@@ -554,6 +649,147 @@ export function Providers({
   const servers = useMemo(() => (machines.data?.machines ?? []).filter((row) => row.kind === "server"), [machines.data]);
   const chosen = servers.find((row) => row.id === machineId) ?? servers[0] ?? null;
 
+  /* ── sign in on that machine ─────────────────────────────────────────────
+     A login command runs on the machine over the SSH connection Machines
+     already made. Polled at 1s ONLY while one is running: the route is an
+     in-memory read, and a pane that polls a machine nobody asked about is the
+     thing this app keeps promising not to be. */
+  const [watching, setWatching] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [authBusy, setAuthBusy] = useState<string | null>(null);
+  const [checks, setChecks] = useState<Record<string, AuthProbeResponse>>({});
+
+  // Read even with no machine chosen: the flow table is what the rows below are
+  // drawn from, and a pane with no server registered still has to say what
+  // signing in would run and where it would land.
+  const auth = useResource<AuthSessionResponse>(
+    `auth-session-${chosen?.id ?? "none"}`,
+    chosen ? `/api/app/auth-session?machine_id=${encodeURIComponent(chosen.id)}` : "/api/app/auth-session",
+    watching ? 1000 : undefined,
+  );
+  const { refresh: refreshAuth } = auth;
+  const session = auth.data?.session ?? null;
+  const signingIn = session !== null && session.state === "running";
+  const flows = auth.data?.flows ?? [];
+  const flowFor = (id: string): AuthFlowView | null => flows.find((flow) => flow.id === id) ?? null;
+
+  // The poll follows the session, in both directions: it starts itself again
+  // if the pane is opened while a sign-in from an earlier visit is still live,
+  // and it stops the moment that session is no longer running.
+  useEffect(() => {
+    setWatching(auth.data?.session?.state === "running");
+  }, [auth.data]);
+
+  const startSignIn = useCallback(
+    async (flowId: string) => {
+      if (!chosen) return;
+      setAuthBusy(flowId);
+      setWriteError(null);
+      setNotice(null);
+      try {
+        await apiPost<AuthSessionView>("/api/app/auth-session/start", { machine_id: chosen.id, flow: flowId });
+        setWatching(true);
+        refreshAuth();
+      } catch (caught) {
+        setWriteError(errorText(caught));
+      } finally {
+        setAuthBusy(null);
+      }
+    },
+    [chosen, refreshAuth],
+  );
+
+  const sendPaste = useCallback(async () => {
+    if (!chosen) return;
+    const text = pasted;
+    setPasted("");
+    try {
+      await apiPost<AuthSessionView>("/api/app/auth-session/input", { machine_id: chosen.id, text });
+      refreshAuth();
+    } catch (caught) {
+      setWriteError(errorText(caught));
+    }
+  }, [chosen, pasted, refreshAuth]);
+
+  const cancelSignIn = useCallback(async () => {
+    if (!chosen) return;
+    try {
+      await apiPost<AuthSessionView>("/api/app/auth-session/cancel", { machine_id: chosen.id });
+      refreshAuth();
+    } catch (caught) {
+      setWriteError(errorText(caught));
+    }
+  }, [chosen, refreshAuth]);
+
+  /** The read-only probe, on the machine. The pi-lane row's whole button, and
+   * how the two CLI rows say what is true THERE rather than here. */
+  const checkThere = useCallback(
+    async (flowId: string) => {
+      if (!chosen) return;
+      setAuthBusy(flowId);
+      setWriteError(null);
+      try {
+        const response = await apiPost<AuthProbeResponse>("/api/app/auth-session/check", {
+          machine_id: chosen.id,
+          flow: flowId,
+        });
+        setChecks((previous) => ({ ...previous, [flowId]: response }));
+      } catch (caught) {
+        setWriteError(errorText(caught));
+      } finally {
+        setAuthBusy(null);
+      }
+    },
+    [chosen],
+  );
+
+  /** The tag a row wears once the machine has been asked about it. */
+  const checkTag = (flowId: string) => {
+    const check = checks[flowId];
+    if (!check) return null;
+    return (
+      <span
+        className="pr-tag"
+        style={{ color: checkColor(check.signed_in), background: "transparent" }}
+        title={`${check.detail} — checked on ${check.machine_name} at ${new Date(check.checked_at).toLocaleString()}`}
+      >
+        {checkWord(check.signed_in)} · {check.machine_name}
+      </span>
+    );
+  };
+
+  /** The two buttons every signed-in row carries: the login that runs on the
+   * machine, and the read that says whether it worked. */
+  const signInActions = (flowId: string) => {
+    const flow = flowFor(flowId);
+    return (
+      <>
+        <button
+          type="button"
+          className="pr-btn"
+          disabled={!chosen || authBusy !== null || signingIn || flow?.command === null}
+          onClick={() => void startSignIn(flowId)}
+          title={
+            flow
+              ? `${flow.note} Nothing is copied from this laptop; the credential is written on the machine itself.`
+              : "runs the login command on the machine you picked below"
+          }
+        >
+          {authBusy === flowId ? "…" : chosen ? `Sign in on ${chosen.name}` : "Sign in on a machine"}
+        </button>
+        <button
+          type="button"
+          className="pr-btn"
+          disabled={!chosen || authBusy !== null}
+          onClick={() => void checkThere(flowId)}
+          title={flow ? `reads ${flow.probe_target} - read-only, nothing is written` : "asks the machine what it has"}
+        >
+          Check there
+        </button>
+      </>
+    );
+  };
+
   /** The catalog is what Roster reads. An apply that does not refresh it leaves
    * the operator staring at a dropdown that has not noticed. */
   const refreshCatalog = useCallback(async () => {
@@ -752,7 +988,49 @@ export function Providers({
           <span>
             Signed in <span className="section-plain">— subscription logins, no key to type</span>
           </span>
+          <span
+            className="section-plain"
+            title="The login command runs on that machine over SSH and prints a link you open here; the credential is written on the machine, never carried from this laptop."
+          >
+            {chosen ? `signs in on ${chosen.name}` : "pick a machine below"}
+          </span>
         </div>
+
+        {/* GROK FIRST, because it is first in the operator's morning: the xAI
+            lane is the workhorse. This row is drawn from the flow table rather
+            than from this laptop's own artifacts, because the sign-in it offers
+            happens ON the machine and this laptop's ~/.grok is not the subject.
+            `--device-auth` is xAI's own headless flag, so there is no port to
+            forward and no browser needed on the far end - a link and a short
+            code come back here, and the credential is written over there. */}
+        {(() => {
+          const flow = flowFor("grok");
+          if (!flow) return null;
+          const check = checks["grok"];
+          return (
+            <div className="provider-row">
+              <div className="pr-icon">X</div>
+              <div className="pr-body">
+                <div className="pr-name">
+                  {flow.label} <span className="pr-tag">grok CLI</span>
+                  {checkTag("grok")}
+                </div>
+                <div className="pr-auth" title={flow.note}>
+                  {flow.probe_target}
+                </div>
+              </div>
+              <div className="pr-models" title={flow.note}>
+                device code — no port to forward
+              </div>
+              <Triple
+                color={check ? checkColor(check.signed_in) : "var(--t3)"}
+                word={check ? checkWord(check.signed_in) : "not checked"}
+                sentence={check ? check.detail : `Nothing has asked ${chosen?.name ?? "a machine"} about this yet. ${flow.note}`}
+              />
+              <div className="pr-actions">{signInActions("grok")}</div>
+            </div>
+          );
+        })()}
 
         {(data?.signed_in ?? []).map((row) => {
           const last = lastFor(row.id);
@@ -767,6 +1045,7 @@ export function Providers({
                       {SYNC_WORD[last.state]} · {shown.machine_name}
                     </span>
                   ) : null}
+                  {checkTag(row.id)}
                 </div>
                 <div
                   className="pr-auth"
@@ -777,7 +1056,7 @@ export function Providers({
                 </div>
                 {row.detected ? null : (
                   <div className="form-hint" title={row.how_to_sign_in}>
-                    Sign in with <code>{row.how_to_sign_in}</code>
+                    Not signed in on this laptop — signing in on a machine is the button on the right.
                   </div>
                 )}
                 {row.id === "claude" && !row.token_available ? (
@@ -792,11 +1071,13 @@ export function Providers({
                       placeholder="paste it here, then sync"
                       onChange={(event) => setClaudeToken(event.target.value)}
                     />
-                    {/* One command mints it, and this app cannot run that
-                        command for you: `claude setup-token` opens a browser
-                        and waits for a human. The box is write-only — the
-                        token is sent with the next sync, never read back by
-                        any route, and the field clears itself afterwards. */}
+                    {/* The laptop-side path, kept: mint a token wherever you
+                        have a browser, paste it, and the next sync carries it.
+                        The machine-side path is the button above, which runs
+                        the same command ON the server and keeps what it prints
+                        there. The box is write-only either way — the token is
+                        sent with the next sync, never read back by any route,
+                        and the field clears itself afterwards. */}
                     <span
                       className="field-hint"
                       title="Mint it with one command on a machine that has a browser: `claude setup-token` (run `claude` once first if you have never logged in). Paste what it prints here. It is sent with the next sync and written on THAT machine only, into its own ~/.sdl-factory/secrets.env (0600) - one paste per machine. This laptop never stores it, no route ever reads it back, and the box clears itself once the sync has run."
@@ -815,25 +1096,182 @@ export function Providers({
                 sentence={row.detail}
               />
               <div className="pr-actions">
+                {signInActions(row.id)}
                 <button
                   type="button"
                   className="pr-btn"
                   onClick={() => refresh()}
-                  title="re-read this machine's auth artifacts - signing in happens in a terminal, so this is how the row catches up"
+                  title="re-read THIS laptop's own auth artifacts - the machine's are read by Check there"
                 >
-                  Re-check
+                  Re-check here
                 </button>
               </div>
             </div>
           );
         })}
 
+        {/* pi's OWN lanes - a separate store from every CLI above it, and the
+            distinction is invisible until something asks. A machine can have
+            the codex CLI signed in and pi's openai-codex lane empty; it can
+            have the grok CLI signed in and pi's xai lane empty. These rows ask,
+            and only ask.
+
+            They are check-only for a measured reason, not a shrug: `pi auth
+            --help` lists print-api-key, print-bearer-token and check, and no
+            `login` at all, and pi's own docs say the login is `/login` "in
+            interactive mode". Driving a TUI down an exec channel would be a
+            fake, so instead each row's sentence carries the exact line the
+            operator types in a terminal - which is `flow.note`, printed here
+            rather than hidden in a tooltip, because a step nobody can see is a
+            step nobody takes. */}
+        {AUTH_LANE_ROWS.map(({ id, lane, aside }) => {
+          const flow = flowFor(id);
+          if (!flow) return null;
+          const check = checks[id];
+          return (
+            <div className="provider-row" key={id}>
+              <div className="pr-icon">π</div>
+              <div className="pr-body">
+                <div className="pr-name">
+                  pi lane <span className="pr-tag">{lane}</span>
+                  {checkTag(id)}
+                </div>
+                <div className="pr-auth" title={flow.probe_target}>
+                  {flow.probe_target}
+                </div>
+                <div className="form-hint" title={flow.note}>
+                  {flow.note}
+                </div>
+              </div>
+              <div className="pr-models" title={flow.note}>
+                {aside}
+              </div>
+              <Triple
+                color={check ? checkColor(check.signed_in) : "var(--t3)"}
+                word={check ? checkWord(check.signed_in) : "not checked"}
+                sentence={check ? check.detail : `Nothing has asked ${chosen?.name ?? "a machine"} about this lane yet.`}
+              />
+              <div className="pr-actions">
+                <button
+                  type="button"
+                  className="pr-btn"
+                  disabled={!chosen || authBusy !== null}
+                  onClick={() => void checkThere(id)}
+                  title={`reads ${flow.probe_target} - read-only, nothing is written`}
+                >
+                  {authBusy === id ? "…" : chosen ? `Check on ${chosen.name}` : "Check on a machine"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* The live sign-in: the link as one obvious button, the code large if
+            there is one, the machine's own last lines, and an end state that is
+            the server's re-probe rather than an exit code. */}
+        {session ? (
+          <div className="signin-strip">
+            <div className="ss-head">
+              <span className="step-dot" style={{ background: SIGNIN_COLOR[session.state] }} />
+              <strong>
+                {session.flow_label} · {session.machine_name}
+              </strong>
+              <span className="ss-state">{SIGNIN_WORD[session.state]}</span>
+              {session.state === "running" ? (
+                <button type="button" className="pr-btn danger" onClick={() => void cancelSignIn()} title="kills the command on the machine">
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+
+            {session.url ? (
+              <div className="signin-link">
+                <a className="signin-open" href={session.url} target="_blank" rel="noreferrer noopener">
+                  Open this in your browser
+                </a>
+                <button
+                  type="button"
+                  className="pr-btn"
+                  onClick={() => void navigator.clipboard?.writeText(session.url ?? "")}
+                  title="if the button does nothing, paste this into a browser yourself"
+                >
+                  Copy link
+                </button>
+                <span className="ss-url">{session.url}</span>
+              </div>
+            ) : null}
+
+            {session.code ? (
+              <div className="signin-code" title="the code the page will ask you for">
+                {session.code}
+              </div>
+            ) : null}
+
+            {session.needs_input ? (
+              <div className="signin-paste">
+                <input
+                  value={pasted}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="paste what the browser gave you"
+                  onChange={(event) => setPasted(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void sendPaste();
+                  }}
+                />
+                <button type="button" className="pr-btn" onClick={() => void sendPaste()} title="typed straight into the command on the machine">
+                  Send
+                </button>
+              </div>
+            ) : null}
+
+            {session.forward_reason ? <Alert kind="warn">{session.forward_reason}</Alert> : null}
+
+            <div className="signin-log">
+              {session.lines.slice(-10).map((line, index) => (
+                <div key={`${index}-${line.slice(0, 24)}`}>{line}</div>
+              ))}
+            </div>
+
+            <div className="signin-end">
+              {session.state === "completed"
+                ? `${session.machine_name} is signed in — ${session.signed_in_detail ?? "checked on the machine"}`
+                : session.state === "running"
+                  ? session.forward ?? `running on ${session.machine_name}`
+                  : (session.error ?? `finished with exit ${session.exit_code}`)}
+            </div>
+
+            {/* WHICH STORE, said at the moment it reads green. "Signed in" is
+                true and is not the whole truth: the grok CLI's credential is
+                not pi's xai lane, and the codex CLI's is not pi's openai-codex
+                lane, so a roster that reaches those models through pi is not
+                live because this strip went green. The flow's own note is where
+                that is written; this puts it in front of the operator instead
+                of leaving it in a tooltip. */}
+            {session.state === "completed" && flowFor(session.flow)?.note ? (
+              <div className="form-hint">{flowFor(session.flow)?.note}</div>
+            ) : null}
+          </div>
+        ) : null}
+
         <HowThisWorks label="What signed in means here">
           <p>
-            Claude and Codex are subscription logins, not keys. This pane reads whether their auth file exists on this
-            machine and when it last changed — never its contents — and carries what a server needs when you sync.
-            Signing in itself opens a browser, so it stays yours; <strong>Re-check</strong> is how a row catches up after
-            you have done it in a terminal.
+            Claude and Codex are subscription logins, not keys. Copying their auth file to a server does not work, so
+            nothing here tries: <strong>Sign in on &lt;machine&gt;</strong> runs the login command <em>on that machine</em>{" "}
+            over the SSH connection Machines already made, hands you the link it prints, and the sign-in completes in
+            that machine&apos;s own store. A row says signed in only when a read-only check on the machine finds the
+            credential afterwards — the exit code alone is never enough.
+          </p>
+          <p>
+            <code>{flowFor("claude")?.command ?? "claude setup-token"}</code> saves nothing of its own — it prints a
+            token — so this app writes that token straight into the machine&apos;s own{" "}
+            <code>~/.sdl-factory/secrets.env</code> (0600), which the installer reads and which the engine itself now
+            loads into every run it starts (<code>adws/adw_modules/utils.py</code>), so the claude-bridge lanes actually
+            see it. It never comes back here. <code>{flowFor("codex")?.command ?? "codex login"}</code> writes{" "}
+            <code>~/.codex/auth.json</code> itself
+            and serves its callback on the machine&apos;s own 127.0.0.1:{flowFor("codex")?.callback_port ?? 1455}, which
+            this app forwards from your laptop for exactly as long as the sign-in runs. pi&apos;s lane store is a third
+            file with a separate login (<code>/login</code> inside pi), so that row checks rather than pretends.
           </p>
         </HowThisWorks>
       </div>

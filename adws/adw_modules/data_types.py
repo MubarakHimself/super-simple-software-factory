@@ -403,15 +403,68 @@ class WorktreesConfig(BaseModel):
     # moves only by the operator's squash merge. Kept as a literal rather than
     # imported from `git_helper.FACTORY_TRUNK_DEFAULT` so this stays a pure data
     # module with no subprocess dependency - git_helper is still the one place
-    # the name is DECIDED, and `$SSSF_INTEGRATION_BRANCH` still overrides both.
+    # the name is DECIDED, and `$SSSF_INTEGRATION_BRANCH` still overrides both:
+    # `agents._apply_trunk_env` writes an explicitly set value over this field
+    # while the roster is being loaded, so every reader of a loaded config sees
+    # the same working line the engine and the worktrees CLI resolved.
     trunk: str = "integration"
     stale_after_minutes: int = 30      # a 'running' session silent this long is stale (4.5)
+
+
+class QualityConfig(BaseModel):
+    """`quality:` config block — WHAT THE TWO GATES ACTUALLY RUN.
+
+    THE DEFECT THIS EXISTS FOR. `adw_modules/quality.py` and
+    `engine.quality_commands` both hardcoded three commands aimed at the
+    FACTORY'S OWN scaffolding — `ruff check .`, `mypy adws`,
+    `pytest -q adws/tests`. In the repo that is the factory that is correct and
+    this block's defaults reproduce it byte for byte. In a repo the factory was
+    STAMPED INTO it is a lie by omission: the project's own tests never ran at
+    either gate (only `adws/tests/test_stamp.py` did), the project's own code
+    was never typechecked, and a non-Python project got no deterministic
+    verification at all while every card still read green. There was no way to
+    say otherwise, because there was no configuration to say it in. Now there
+    is, and it lives beside the roster the same run already reads.
+
+    ONE STRING PER CHECK, split with `shlex` and expanded token by token, so a
+    project says what it runs in the words it would type:
+
+        quality:
+          lint:      "{dev} ruff check ."
+          typecheck: "{dev} mypy adws"
+          test:      "{dev} pytest -q adws/tests"
+
+    `{dev}` and `{scan}` expand to `uv run --project <tree> --group dev|scan` —
+    the pinned-toolchain prefix, resolved against the TREE BEING JUDGED (a
+    worktree during a run, the rebased tree at the merge gate), which is why it
+    is a placeholder and not something a config file could write out. Any
+    command that does not need them simply does not use them:
+
+        quality:
+          lint:      "npm run lint"
+          typecheck: "npx tsc --noEmit"
+          test:      "npm test"
+
+    An EMPTY string disables that check — a written decision, visible in the
+    roster, rather than a gate that silently passes. `quality_commands` skips
+    it and `run_quality` records nothing for it.
+    """
+
+    lint: str = "{dev} ruff check ."
+    typecheck: str = "{dev} mypy adws"
+    test: str = "{dev} pytest -q adws/tests"
+    # The AI-defect scan keeps its own shape: it is diff-scoped at run time
+    # (`--diff <merge-base>`), fail-closed-incomplete where its toolchain will
+    # not provision, and is deliberately NOT part of the merge gate. Named here
+    # so a project can point it somewhere else or turn it off, same rules.
+    scan: str = "{scan} skylos . --ai-defects --format concise"
 
 
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     worktrees: WorktreesConfig = Field(default_factory=WorktreesConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 

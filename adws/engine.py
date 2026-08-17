@@ -30,9 +30,13 @@ commits to, or pushes `main`.
 
 One cycle (~60s), in order:
 
-    0. Can git name a committer here? A checkout with no identity fails every
-       `git commit` (fresh container, service user with no `~/.gitconfig`), so
-       the cycle stops before it can grind on that once a minute forever.
+    0. Re-read the roster's scheduling blocks (`lanes:`, `router.builder_pool`)
+       when its bytes changed - the app edits that file and git delivers it
+       mid-service. Then: can git name a committer here? A checkout with no
+       identity fails every `git commit` (fresh container, service user with no
+       `~/.gitconfig`), so the cycle stops before it can grind on that once a
+       minute forever. And can this box launch `pi` at all? If not, the cycle
+       holds rather than turning every ready card into a blocked one.
     1. Be on `integration`. Create it (from `main`, published with `push -u`)
        if this checkout has never seen it; plain checkout if it exists but is
        not current. Everything below writes to that branch and no other, so a
@@ -115,7 +119,9 @@ from pathlib import Path
 
 import dispatch
 import yaml
-from adw_modules import git_helper, worktrees
+from adw_modules import agent_pi, git_helper, worktrees
+from adw_modules.data_types import QualityConfig
+from adw_modules.quality import resolve_command
 from adw_modules.utils import now_iso, operator_env
 
 # The hub (MAP.md's two-box model): one remote. Not configurable - a second
@@ -132,6 +138,19 @@ INTEGRATION_BRANCH = git_helper.FACTORY_TRUNK_DEFAULT
 HUMAN_TRUNK = "main"
 
 DEFAULT_INTERVAL = 60.0
+
+# Total parallelism, and `$SSSF_CAP` is its knob on a server. The systemd unit
+# both converge paths render is byte-compared by the installer
+# (`installer/steps.py`'s `detect_engine_service`) and overwritten by the deploy
+# script, so a hand-edited `ExecStart=... --cap 4` is parked on the next
+# converge - which left the always-on server pinned at this number with no
+# supported way to change it, whatever lanes or pool the operator configured.
+# The environment is the way in, exactly as it already is for the roster
+# (`SSSF_CONFIG`) and the lanes (`SSSF_LANES`): the checkout's `.env` reaches
+# this process through `adw_modules.utils`'s `load_dotenv()` at import - the
+# same channel the ADWs get their provider keys on - and a `Environment=` line
+# in a systemd drop-in (`sdl-engine.service.d/*.conf`, which neither writer
+# touches) is the other. `--cap` on the command line still beats both.
 DEFAULT_CAP = 2
 
 # Slots per lane when nothing overrides it (operator-ratified 2026-08-15).
@@ -288,12 +307,17 @@ class Engine:
     # namespaced (`needs:<card>`, `lane:<card>`, `trunk`).
     waiting: dict[str, str] = field(default_factory=dict)
     # `--lanes` / $SSSF_LANES, per-lane slot overrides; the resolved map every
-    # lane the roster uses -> its slot count; and whether the roster has been
-    # read yet (once, on the first cycle).
+    # lane the roster uses -> its slot count; and whether the roster has ever
+    # resolved (the first cycle's read, or any later one after an edit).
     lane_overrides: dict[str, int] = field(default_factory=dict)
     lane_slots: dict[str, int] = field(default_factory=dict)
     lanes: tuple[str, ...] = ()
     lanes_resolved: bool = False
+    # The exact bytes of the roster the lane/pool state above was resolved
+    # from. `resolve_lanes` runs EVERY cycle and compares against this, so an
+    # edit the app pushed (or the operator made on the box) takes effect on the
+    # next turn - and an unchanged file costs one small read and no log line.
+    roster_seen: str | None = None
     # The roster's `router.builder_pool`, in the operator's own order, already
     # validated - empty means no routing at all and the engine behaves exactly
     # as it did before the router existed.
@@ -417,8 +441,9 @@ def report_stranded(engine: Engine) -> None:
 def parse_lanes(value: str) -> dict[str, int]:
     """`"xai=2,opencode-go=1"` -> `{"xai": 2, "opencode-go": 1}`.
 
-    Raises ValueError on anything else, so a typo in a systemd
-    `Environment=SSSF_LANES=` line fails loudly at startup instead of silently
+    Raises ValueError on anything else, so a typo in an `SSSF_LANES=` line -
+    in the checkout's `.env` or a systemd drop-in, the two channels
+    specs/engine.md 10 names - fails loudly at startup instead of silently
     running a lane at its default while the operator believes otherwise.
     """
     slots: dict[str, int] = {}
@@ -535,8 +560,9 @@ def config_lanes(config: str | Path) -> dict[str, int]:
     This is the roster UI's way of writing down what `--lanes` says on a command
     line, so it REPLACES the default slot count for the lanes it names, and
     `--lanes` / `$SSSF_LANES` still override it on top (ops keeps the last
-    word - a systemd `Environment=` line must be able to narrow a lane without
-    editing a file the laptop owns).
+    word - the server must be able to narrow a lane without editing a file the
+    laptop owns, which is what `$SSSF_LANES` in its `.env` or a systemd drop-in
+    is for; specs/engine.md 10).
 
     A malformed entry is named in one line and skipped, and that lane keeps its
     default: a service must not die of one bad line in a roster, and a lane
@@ -595,8 +621,9 @@ def worktrees_enabled(config: str | Path) -> bool:
 
 
 def resolve_lanes(engine: Engine) -> None:
-    """Read the roster once and turn it into `lane -> slots`, plus the builder
-    pool the router will schedule against.
+    """Turn the roster into `lane -> slots`, plus the builder pool the router
+    will schedule against. Called EVERY cycle; it re-resolves only when the
+    roster's bytes actually changed.
 
     Default `DEFAULT_LANE_SLOTS` for every lane the roster uses (its own models
     plus every lane its builder pool names); the roster's own `lanes:` block
@@ -608,9 +635,43 @@ def resolve_lanes(engine: Engine) -> None:
     so: dispatch refuses such a card anyway (it validates the config per card),
     so failing closed here would only turn one visible refusal into a silent
     stall.
+
+    RE-READ, NOT READ ONCE. This used to run exactly once, on the first cycle,
+    so `lanes:{slots}` and `router.builder_pool` froze for the life of the
+    service - while `derive_config` re-read the same file per dispatch, so the
+    agent/model half of an edit applied immediately and the scheduling half did
+    not. That is a half-applied roster, and it is the normal case, not an exotic
+    one: the roster UI (`apps/ui/server/app/roster.ts`) writes exactly those two
+    blocks expecting effect, and the designed transport - the laptop pushes, the
+    engine pulls - delivers the edited file mid-service with nothing restarting
+    anything (`bootstrap.sh` only try-restarts when the unit FILE changed). An
+    operator who added a model to the pool from the app watched the holds keep
+    logging the old counts until a redeploy that happened to rewrite the unit.
+
+    The re-read is one `read_text` of a file measured in kilobytes, and the
+    engine already re-reads the QUEUE off disk every cycle for the same reason.
+    Comparing the bytes is what keeps it silent: an unchanged roster resolves
+    nothing and logs nothing, so the shape line, the router line and every
+    "skipping a malformed entry" line appear exactly when something really
+    changed - which is also the operator's confirmation that their edit landed.
+    A roster that stops parsing keeps the LAST GOOD lanes rather than dropping
+    to unenforced: the previous answer is the better one to hold, and the reason
+    is logged once.
     """
-    if engine.lanes_resolved:
+    try:
+        text = Path(engine.config).read_text(encoding="utf-8")
+    except OSError as error:
+        engine.roster_seen = None
+        _say_once(engine, "roster",
+                  f"lane slots not enforced: cannot read the roster {engine.config} "
+                  f"({_one_line(str(error))}). The cap still bounds parallelism.")
         return
+    if engine.lanes_resolved and text == engine.roster_seen:
+        return
+    if engine.lanes_resolved:
+        log(f"the roster {engine.config} changed on disk - re-reading its lanes and "
+            f"builder pool")
+    engine.roster_seen = text
     engine.lanes_resolved = True
     try:
         lanes = roster_lanes(engine.config)
@@ -618,9 +679,11 @@ def resolve_lanes(engine: Engine) -> None:
         block = config_lanes(engine.config)
         has_builder = _builder_agent(_roster_yaml(engine.config)) is not None
     except (OSError, yaml.YAMLError, ValueError) as error:
-        log(f"lane slots not enforced: cannot read the roster {engine.config} "
-            f"({_one_line(str(error))}). The cap still bounds parallelism.")
+        _say_once(engine, "roster",
+                  f"lane slots not enforced: cannot read the roster {engine.config} "
+                  f"({_one_line(str(error))}). The cap still bounds parallelism.")
         return
+    engine.waiting.pop("roster", None)
     if pool and not has_builder:
         log(f"router: {engine.config} has a builder_pool but no agent named "
             f"{BUILDER_AGENT!r} to route - the pool is ignored and every run uses the roster "
@@ -827,6 +890,42 @@ def committer_identity_ok(engine: Engine) -> bool:
               f"git -C {engine.main_root} config user.name \"{COMMITTER_NAME}\" ; "
               f"git -C {engine.main_root} config user.email \"{COMMITTER_EMAIL}\"")
     return False
+
+
+def pi_launchable(engine: Engine) -> bool:
+    """Can this box launch the coding agent at all? False = do nothing this
+    cycle.
+
+    Every run this engine starts ends in `pi`, so a `PI_PATH` that is unset,
+    unparseable, or names a file a pi upgrade moved means every card dispatched
+    this cycle comes straight back `blocked`. Holding is the cheaper failure by
+    a mile: a held card is still on the Board, ready, waiting for one line of
+    `.env` to be right, while a blocked one needs a human to repair it - and
+    there would be one per card, once a minute, all night.
+
+    Asked once per CYCLE and never at import (see `agent_pi.pi_cmd`), so an
+    operator who fixes the path is picked up on the next turn with no restart,
+    and announced once per reason, so a box left unfixed costs one line and not
+    1440 a day - the same shape as the committer-identity preflight above, for
+    the same reason.
+
+    `pi_cmd()` raises `RuntimeError` with the repair instructions in it;
+    `ValueError` is `shlex.split` refusing an unbalanced quote in the value, and
+    `OSError` is a path the filesystem itself will not answer for. All three are
+    "this box cannot launch pi", and none of them is worth a traceback.
+    """
+    try:
+        agent_pi.pi_cmd()
+    except (RuntimeError, ValueError, OSError) as error:
+        _say_once(engine, "pi",
+                  f"PI IS NOT LAUNCHABLE: {_one_line(str(error), 400)} Nothing else runs "
+                  f"until it resolves - every run this engine dispatches spawns pi, so "
+                  f"dispatching now would only blocked-out one card per cycle. The engine "
+                  f"itself never spawns pi and never dies of this; it holds and re-checks "
+                  f"every cycle.")
+        return False
+    engine.waiting.pop("pi", None)
+    return True
 
 
 def ensure_trunk(engine: Engine) -> bool:
@@ -1119,22 +1218,52 @@ def quality_commands(engine: Engine, tree: Path) -> list[list[str]]:
     stand-in, exactly as they do with `dispatch_command`, so the suite never
     shells out to `uv` to test the gate's own logic.
 
-    These mirror `adw_modules/quality.py`'s lint / typecheck / test blocks
-    verbatim, including the `--project <tree> --group dev` prefix that pins the
-    toolchain to the tree being judged (bare-name `uv`, no machine path). What
-    is deliberately NOT here is the AI-defect scan: Skylos judges the change in
-    isolation and already ran inside the run's own chain (MAP.md's check
-    placement), it is fail-closed-incomplete wherever its toolchain is missing,
-    and re-running it would answer a question this gate is not asking. The gate
-    asks exactly one thing: does this branch still work on top of integration
-    as integration is NOW.
+    THESE ARE THE ROSTER'S OWN COMMANDS, read from the same
+    `adws/adw_sssf_config/sssf.config.yaml` this engine already dispatches on
+    (`quality:` block - see `adw_modules/data_types.QualityConfig`). They were
+    three hardcoded literals aimed at the FACTORY'S scaffolding - `ruff check
+    .`, `mypy adws`, `pytest -q adws/tests` - which is right in the repo that
+    is the factory and hollow in a repo it was stamped into: the middle rung of
+    the ratified ladder, "re-run the suite against the rebased tree", re-ran
+    somebody else's suite. The defaults are unchanged, byte for byte, so a
+    roster that says nothing behaves exactly as it did.
+
+    Still resolved against THE TREE BEING JUDGED (`--project <tree> --group
+    dev`, bare-name `uv`, no machine path). Still deliberately WITHOUT the
+    AI-defect scan: Skylos judges the change in isolation and already ran inside
+    the run's own chain (MAP.md's check placement), it is
+    fail-closed-incomplete wherever its toolchain is missing, and re-running it
+    would answer a question this gate is not asking. The gate asks exactly one
+    thing: does this branch still work on top of integration as integration is
+    NOW.
+
+    An unreadable roster falls back to the defaults rather than merging with no
+    gate at all - fail-closed is this gate's whole character, and "I could not
+    read the config" must never become "so I checked nothing".
     """
-    dev = ["uv", "run", "--project", str(tree), "--group", "dev"]
-    return [
-        [*dev, "ruff", "check", "."],
-        [*dev, "mypy", "adws"],
-        [*dev, "pytest", "-q", "adws/tests"],
-    ]
+    config = QualityConfig()
+    try:
+        block = _roster_yaml(engine.config).get("quality")
+        if isinstance(block, dict):
+            config = QualityConfig(**block)
+    except Exception as error:      # noqa: BLE001 - see below
+        # DELIBERATELY BROAD, and it is the fail-closed choice rather than the
+        # lazy one. Everything from `read_text` (OSError, UnicodeDecodeError)
+        # through `yaml.safe_load` (YAMLError) to pydantic's ValidationError (a
+        # roster that wrote `lint: 5`) lands here, and the alternative is an
+        # exception escaping into `integrate` - which would take down the cycle
+        # that was about to merge, not just this gate. The defaults are the
+        # factory's own suite, so a roster nobody can read is still GATED; it is
+        # simply gated by the commands the engine shipped with, and the reason
+        # is logged rather than swallowed.
+        log(f"gate: could not read `quality:` from {engine.config} "
+            f"({_one_line(str(error))}) - using the factory's default suite")
+    commands = [resolve_command(template, tree)
+                for template in (config.lint, config.typecheck, config.test)]
+    # An empty template is a project's written decision to run nothing for that
+    # check; it drops out here rather than becoming an empty argv `subprocess`
+    # would raise on.
+    return [argv for argv in commands if argv]
 
 
 def quality_is_green(engine: Engine, tree: Path) -> tuple[bool, str]:
@@ -1205,6 +1334,17 @@ def park_card(engine: Engine, card: Path) -> bool:
     the event that lets a wave roll on to its next card without anyone
     clicking anything. It happens only after the branch is really in
     integration, which is the whole reason the edge is honest.
+
+    THE CARD IS STAGED FIRST, and that is a fix, not a flourish. `git mv`
+    refuses a path that is not in the index - *"fatal: not under version
+    control"* - and a card can perfectly well reach `done` having never been
+    added: a hand-written card dispatched with `just work` is a documented
+    first-class flow, and dispatch does no git at all, so that card exists only
+    on disk. The old park failed on it every single cycle, forever, on work the
+    engine had ALREADY merged - and it could never recover by itself, because
+    the adopt sweep is blind to untracked files (`git diff HEAD -- queue`) and
+    nothing else ever ran `git add` on a card at `done`. Every card naming it in
+    `Needs:` then waited on a park that could not happen.
     """
     rel = _repo_path(engine, card)
     done_dir = card.parent / "done"
@@ -1214,13 +1354,29 @@ def park_card(engine: Engine, card: Path) -> bool:
         log(f"{card.name} is outside {engine.main_root} - not parked in queue/done/")
         return False
     done_dir.mkdir(parents=True, exist_ok=True)
+    staged = git_helper.run("add", "--", rel, tree=engine.main_root)
+    if staged.returncode != 0:
+        log(f"could not stage {card.name} for parking: "
+            f"{_one_line(staged.stderr or staged.stdout)}")
+        return False
+    # Asked BEFORE the move, while the answer still means something: does HEAD
+    # carry this card at its old path? A path-scoped commit only accepts a
+    # pathspec git already knows, and after the move the old path is gone from
+    # both the index and the worktree - so naming it for a card HEAD never had
+    # fails the whole commit with "pathspec ... did not match any file(s) known
+    # to git". Named when HEAD does have it, because that is what records the
+    # DELETION beside the addition; left out otherwise, when there is no
+    # deletion to record in the first place.
+    in_head = git_helper.run("cat-file", "-e", f"HEAD:{rel}",
+                             tree=engine.main_root).returncode == 0
     moved = git_helper.run("mv", rel, dest_rel, tree=engine.main_root)
     if moved.returncode != 0:
         log(f"could not park {card.name} in queue/done/: "
             f"{_one_line(moved.stderr or moved.stdout)}")
         return False
     message = f"factory: {card.name} integrated"
-    committed = git_helper.run("commit", "-m", message, "--", rel, dest_rel,
+    paths = [rel, dest_rel] if in_head else [dest_rel]
+    committed = git_helper.run("commit", "-m", message, "--", *paths,
                                tree=engine.main_root)
     if committed.returncode != 0:
         log(f"parked {card.name} on disk but the commit failed: "
@@ -1550,13 +1706,18 @@ def reap(engine: Engine) -> None:
 # ── the cycle ────────────────────────────────────────────────────────────────
 
 def run_cycle(engine: Engine) -> None:
-    """One turn: name a committer, be on the working line, reap, adopt,
-    publish, pull, integrate, scan, route and dispatch within cap and lane
-    slots, publish.
+    """One turn: re-read the roster, name a committer, check pi is launchable,
+    be on the working line, reap, adopt, publish, pull, integrate, scan, route
+    and dispatch within cap and lane slots, publish.
 
-    The order is the whole failure design. The identity preflight comes first,
+    The order is the whole failure design. The roster re-read comes first and
+    costs nothing when nothing changed, so the lane slots and builder pool the
+    rest of the cycle schedules against are the ones on disk right now rather
+    than the ones this process started with. The identity preflight comes next,
     because every record this engine keeps is a commit and a checkout that
-    cannot commit can only grind. The branch guard comes next, because every
+    cannot commit can only grind; the pi preflight after it, because a cycle
+    that dispatches into an unlaunchable coding agent turns every ready card
+    into a blocked one. The branch guard comes next, because every
     write below belongs on that branch and nowhere else. Everything that CLEARS
     local state runs after that - reap, adopt, push - because that state (an
     uncommitted card, an unpushed commit) is exactly what a pull refuses to run
@@ -1568,12 +1729,19 @@ def run_cycle(engine: Engine) -> None:
     Every step that can fail logs one line and lets the next cycle try again.
     A cycle doing nothing is the normal state of a factory with no work.
     """
+    # Every cycle, not once: the roster is a file the app edits and git
+    # delivers while the service runs, so its lanes and its builder pool are
+    # re-read here rather than frozen at startup (`resolve_lanes` is silent
+    # when the bytes have not changed).
+    resolve_lanes(engine)
     if not engine.opened:
         engine.opened = True
-        resolve_lanes(engine)
         report_stranded(engine)
 
     if not committer_identity_ok(engine):
+        return
+
+    if not pi_launchable(engine):
         return
 
     if not ensure_trunk(engine):
@@ -1611,8 +1779,9 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL,
                         help=f"seconds between cycles (default: {DEFAULT_INTERVAL:g})")
-    parser.add_argument("--cap", type=int, default=DEFAULT_CAP,
-                        help=f"how many ADWs may run at once (default: {DEFAULT_CAP})")
+    parser.add_argument("--cap", type=int, default=os.environ.get("SSSF_CAP") or DEFAULT_CAP,
+                        help=f"how many ADWs may run at once (default: $SSSF_CAP, else "
+                             f"{DEFAULT_CAP})")
     parser.add_argument("--lanes", default=os.environ.get("SSSF_LANES") or "",
                         help=f"per-lane slot overrides, e.g. \"xai=2,opencode-go=1\" "
                              f"(default: {DEFAULT_LANE_SLOTS} slots for every lane the roster "

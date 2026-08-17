@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from . import agent_pi, permissions, prompts
+from . import agent_pi, git_helper, permissions, prompts
 from .data_types import (
     AgentCall,
     AgentConfig,
@@ -41,6 +41,7 @@ class GateFailure(RuntimeError):
 
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    _apply_trunk_env(raw)
     defaults = raw.get("defaults", {}) or {}
     default_harness = expand_harness_paths(defaults.get("harness_engineering", []) or [])
     for agent in raw.get("agents", []) or []:
@@ -57,6 +58,38 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
         agent["harness_engineering"] = merge_unique(
             default_harness, expand_harness_paths(agent.get("harness_engineering", []) or []))
     return SSSFConfig(**raw)
+
+
+def _apply_trunk_env(raw: dict) -> None:
+    """`$SSSF_INTEGRATION_BRANCH` over `worktrees.trunk`, in place.
+
+    THE ONE VARIABLE THAT NAMES THE FACTORY'S WORKING LINE (specs/engine.md 2:
+    "the worktree and dispatch side read the same variable"). It did not reach
+    this side. `engine.py`, `adws/worktrees.py`'s default and
+    `quality.ai_defects` all resolve the trunk through
+    `git_helper.factory_trunk()`, which is env-aware - while everything loaded
+    from here read `worktrees.trunk` literally off the roster. Set the variable
+    and the factory split down the middle: the engine merged into the branch it
+    named, and `ensure_run_worktree` kept cutting runs from `integration` while
+    `push_run_branch` kept measuring "ahead" against it. Inert at the defaults,
+    and a quiet bifurcation the day the documented configuration was used.
+
+    Applied to the RAW mapping before `SSSFConfig` validates it, so there is one
+    answer for every reader of the loaded config and no second code path.
+
+    Only an explicitly set, non-empty value overrides. `factory_trunk()` answers
+    `"integration"` for both unset and empty, and using that answer here would
+    quietly overwrite a roster that deliberately names some other line - the
+    file has to keep the last word whenever the environment says nothing.
+    """
+    trunk = (os.environ.get(git_helper.FACTORY_TRUNK_ENV) or "").strip()
+    if not trunk:
+        return
+    block = raw.get("worktrees")
+    if not isinstance(block, dict):
+        block = {}
+        raw["worktrees"] = block
+    block["trunk"] = trunk
 
 
 def expand_harness_paths(entries: list[str]) -> list[str]:

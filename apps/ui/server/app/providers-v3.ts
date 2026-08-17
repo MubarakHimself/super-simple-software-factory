@@ -392,6 +392,34 @@ async function writeJson600(path: string, value: unknown): Promise<void> {
  * path as one typed by hand; `source` records which preset the shape came from
  * so a row can say where its base URL came from, and that is the whole of it.
  *
+ * ── THESE NINE BLOCKS WERE RUN THROUGH A REAL PI (2026-08-17) ───────────────
+ * Not reasoned about — executed. All nine were rendered through `providerBlock`
+ * below into a sandbox `models.json`, and a real `pi` was pointed at that
+ * sandbox and asked to list what it found:
+ *
+ *     USERPROFILE=<sandbox> pi -ne -ns -np --offline --list-models
+ *
+ * (On Windows pi follows USERPROFILE, NOT HOME — measured both ways; setting
+ * only HOME left pi reading the operator's real profile. That is the seam any
+ * future sandbox test must use.)
+ *
+ * RESULT: all nine providers registered, every preset model id was listed, and
+ * stderr was EMPTY — pi prints a `Warning: errors loading models.json` banner
+ * and drops the provider when a block is wrong, and printed none.
+ *
+ * The check discriminates, which is why the result means something. Deliberately
+ * broken blocks were run through the same path and pi rejected each by name:
+ *   - invalid JSON        -> "Failed to parse models.json"
+ *   - no `api`            -> 'no "api" specified. Set at provider or model level.'
+ *   - no `baseUrl`        -> '"baseUrl" is required when defining custom models.'
+ *
+ * WHAT IT DOES NOT PROVE, stated because the gap is real: pi accepted a block
+ * whose `api` was the nonsense string `not-a-real-api` at list time, and no
+ * endpoint was ever called. So this proves SHAPE — pi parses these blocks and
+ * registers these providers and models — and it does not prove that any base
+ * URL answers or that any key is good. Only a real call proves that.
+ * `docs/research/provider-auth-map-2026-08-18.md` §4 carries the transcript.
+ *
  * ── WHERE EACH FIELD COMES FROM ─────────────────────────────────────────────
  * `base_url` and `key_env` are copied verbatim from the research doc's §5
  * table, which took each from a primary source: models.dev's live `api.json`
@@ -436,7 +464,8 @@ export const PRESETS: ProviderPreset[] = [
     key_env: null,
     key_placeholder: "your Ollama Cloud key",
     models_note: "This repo's own seed names kimi-k2.7-code; add whatever else your account serves.",
-    source_note: "Verified: byte-for-byte this repo's own running seed, installer/assets/pi/ollama-cloud.provider.json.",
+    source_note:
+      "Verified: byte-for-byte this repo's own running seed, installer/assets/pi/ollama-cloud.provider.json. THE KEY: this lane's key is not typed here at all in the installer's own wiring - installer/assets/pi/scripts/ollama-cloud-key.py reads it out of OpenCode's auth.json, and models.json calls that script via pi's `!` escape. Sign into OpenCode (`opencode auth login`, then ollama-cloud) and the script finds it; paste a key here only if you would rather this app hold it.",
   },
   {
     id: "opencode-go",
@@ -450,7 +479,7 @@ export const PRESETS: ProviderPreset[] = [
     key_placeholder: "your OpenCode key",
     models_note: "No fixed list is on record here - name the models your plan serves.",
     source_note:
-      "Endpoint and provider prefix from docs/research/provider-limits-and-models.md section 1.4, quoting opencode.ai/docs/go. The key itself is minted by a browser sign-in at opencode.ai/auth - this app cannot fetch one, you paste it.",
+      "Endpoint and provider prefix from docs/research/provider-limits-and-models.md section 1.4, quoting opencode.ai/docs/go. THE KEY: mint it by signing in at https://opencode.ai/auth in a browser, or run `opencode auth login` and pick opencode-go, which writes it to OpenCode's own auth.json. No command on any machine can fetch one for you - you paste it here, and the sign-in rows below can then check that pi resolves it.",
   },
   {
     id: "openrouter",
@@ -521,7 +550,7 @@ export const PRESETS: ProviderPreset[] = [
     key_placeholder: "your Mistral key",
     models_note: MODELS_AGE,
     source_note:
-      "Same shape as Groq: models.dev has no api field for @ai-sdk/mistral, so this base URL is from docs.mistral.ai/api's own curl example. Mistral's chat-completions surface is OpenAI-shaped.",
+      "Same shape as Groq: models.dev has no api field for @ai-sdk/mistral, so this base URL is from docs.mistral.ai/api's own curl example. Mistral's chat-completions surface is OpenAI-shaped. ONE CAVEAT, from pi's own shipped docs/custom-provider.md: \"Mistral moved from openai-completions to mistral-conversations\", and that doc adds that routing Mistral through openai-completions anyway is supported but wants compat flags set explicitly. pi accepted this block as written (it registered and listed every model id), so it is left as-is rather than changed blind - but if Mistral calls misbehave, that api value is the first thing to try.",
   },
   {
     id: "togetherai",
@@ -700,7 +729,7 @@ async function claudeRow(): Promise<ProviderSignedInRow> {
     token_available: token !== null,
     token_source: source,
     how_to_sign_in:
-      "Run `claude` once to log in in a browser, then `claude setup-token` and paste the token it prints into the box on this row. This app cannot mint one for you - setup-token opens a browser and waits for a human.",
+      "Sign in on <machine> runs `claude setup-token` on the server itself and keeps the token it prints there (see auth-sessions.ts). This box is the other path: run `claude setup-token` on a machine with a browser and paste what it prints, and the next sync carries it.",
     sync_note:
       "Syncing writes CLAUDE_CODE_OAUTH_TOKEN into the machine's ~/.sdl-factory/secrets.env (0600) - the file the installer already reads. Nothing is written into this repo.",
   };
@@ -729,7 +758,7 @@ async function codexRow(): Promise<ProviderSignedInRow> {
     token_available: present,
     token_source: present ? artifact : null,
     how_to_sign_in:
-      "Run `codex login`. It opens a browser; on a headless box, forward the callback port with ssh -L. This app cannot do that step for you.",
+      "Sign in on <machine> runs `codex login` on the server and forwards its 127.0.0.1:1455 callback from this laptop while it runs - which is the `ssh -L` recipe, done for you. Locally, run `codex login` yourself.",
     sync_note:
       "Syncing copies this machine's ~/.codex/auth.json to the machine's own ~/.codex/auth.json (0600), verbatim. If it is not here, the row says so instead of pretending.",
   };

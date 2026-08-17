@@ -131,7 +131,7 @@ async function waitForHealth(deadlineMs: number, url: string = HEALTH_URL): Prom
  * clone and is one of the things Setup itself produces). Bounded to 8
  * levels so a wrong start dir fails fast instead of walking to the
  * filesystem root. */
-function findRepoRoot(startDir: string): string {
+function findRepoRootFrom(startDir: string): string | null {
   let dir = startDir;
   for (let i = 0; i < 8; i++) {
     if (existsSync(join(dir, "justfile")) && existsSync(join(dir, "installer", "install.py"))) {
@@ -141,10 +141,54 @@ function findRepoRoot(startDir: string): string {
     if (parent === dir) break;
     dir = parent;
   }
+  return null;
+}
+
+/** The directories worth starting that walk from, best guess first.
+ *
+ * `dirname(process.execPath)` is the obvious answer and it is WRONG for the
+ * target we actually ship. electron-builder's `portable` target does not run
+ * the .exe where it sits: the stub extracts the app into %TEMP%\<random>\ and
+ * launches from there, so process.execPath is a temp path that no amount of
+ * walking up can turn into the repo (verified - the walk climbs Temp -> Local
+ * -> AppData -> Users -> C:\ and throws). Left alone, the portable .exe fails
+ * from EVERY location, including its own release/ folder inside the repo.
+ *
+ * PORTABLE_EXECUTABLE_DIR is the portable target's own answer to this: the
+ * folder holding the .exe the operator actually double-clicked. That is the
+ * location the repo walk was always meant to start from.
+ *
+ * process.cwd() comes next so a shortcut whose "Start in" points into the repo
+ * works even when the .exe itself lives outside it (the Desktop .lnk case).
+ * Unpacked builds (release/win-unpacked/) genuinely do sit in the repo, so
+ * execPath stays as the final fallback and dev runs keep using getAppPath(). */
+function repoRootCandidates(): string[] {
+  if (!app.isPackaged) return [app.getAppPath()];
+  const candidates: string[] = [];
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  if (portableDir) candidates.push(portableDir);
+  candidates.push(process.cwd());
+  candidates.push(dirname(process.execPath));
+  return candidates;
+}
+
+/** Walk up from each candidate looking for the sdl-factory repo root,
+ * identified by `justfile` + `installer/install.py` (spec 4.3.2 - loosened
+ * from also requiring the tracer db, which does not exist yet on a genuinely
+ * fresh clone and is one of the things Setup itself produces). Each walk is
+ * bounded to 8 levels so a wrong start dir fails fast instead of walking to
+ * the filesystem root. */
+function findRepoRoot(startDirs: string | string[]): string {
+  const candidates = Array.isArray(startDirs) ? startDirs : [startDirs];
+  for (const candidate of candidates) {
+    const found = findRepoRootFrom(candidate);
+    if (found) return found;
+  }
   throw new Error(
     `could not find the sdl-factory repo (a directory with both "justfile" and ` +
-      `"installer/install.py") walking up from ${startDir}. Run the ADE from inside ` +
-      `the repo, or place the packaged .exe inside it.`,
+      `"installer/install.py") walking up from any of: ${candidates.join(", ")}. ` +
+      `Run the ADE from inside the repo, place the packaged .exe inside it, or ` +
+      `point the shortcut's "Start in" at the repo.`,
   );
 }
 
@@ -703,7 +747,7 @@ async function runNotFoundReplayCheck(): Promise<boolean> {
  * converge - proving the pty-embedding wiring works without installing or
  * changing anything on this box. Headless, no window. */
 async function runSetupSmoke(): Promise<void> {
-  const startDir = app.isPackaged ? dirname(process.execPath) : app.getAppPath();
+  const startDir = repoRootCandidates();
   let repoRoot: string;
   try {
     repoRoot = findRepoRoot(startDir);
@@ -905,7 +949,7 @@ async function boot(): Promise<void> {
   // created.
   nativeTheme.themeSource = "dark";
 
-  const startDir = app.isPackaged ? dirname(process.execPath) : app.getAppPath();
+  const startDir = repoRootCandidates();
   const repoRoot = findRepoRoot(startDir);
   terminalCwd = repoRoot;
   currentRepoRoot = repoRoot;

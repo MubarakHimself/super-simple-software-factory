@@ -474,5 +474,25 @@
 .modal-field textarea:focus{outline:none;border-color:var(--accent);}
 .modal-field textarea:disabled{color:var(--t3);cursor:default;}
 
+/* v3 settings addition: SIGN IN ON <MACHINE>. The login runs on the server and
+   prints a link; the operator's job is to open that link, so the link is the
+   biggest thing on the strip and everything else is small beside it. The log is
+   the machine's own last lines, scrollable, never the whole transcript. */
+.signin-strip{margin-top:16px;padding:14px 16px;border:1px solid var(--hairline-2);border-left:2px solid var(--accent-dim);border-radius:0 var(--r-control) var(--r-control) 0;background:var(--raised);}
+.signin-strip .ss-head{display:flex;align-items:center;gap:8px;font-size:var(--text-body);color:var(--t1);}
+.signin-strip .ss-head .step-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.signin-strip .ss-head .ss-state{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+.signin-strip .ss-head .pr-btn{margin-left:auto;}
+.signin-link{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;}
+.signin-open{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 22px;border-radius:var(--r-control);background:var(--accent);color:var(--canvas);font-size:var(--text-body);font-weight:600;text-decoration:none;transition:opacity .15s;}
+.signin-open:hover{opacity:0.88;}
+.signin-link .ss-url{flex-basis:100%;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);word-break:break-all;}
+.signin-code{margin-top:12px;font-family:var(--font-mono);font-size:26px;letter-spacing:2px;color:var(--t1);}
+.signin-paste{display:flex;align-items:center;gap:8px;margin-top:12px;}
+.signin-paste input{flex:1;max-width:320px;height:34px;padding:0 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-family:var(--font-mono);font-size:var(--text-body);}
+.signin-paste input:focus{outline:none;border-color:var(--accent);}
+.signin-log{margin-top:12px;max-height:150px;overflow:auto;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);line-height:1.6;white-space:pre-wrap;word-break:break-word;}
+.signin-end{margin-top:10px;font-size:var(--text-meta);color:var(--t2);line-height:1.5;}
+
 @media(max-width:1100px){.scope-pane{width:180px;}}
 @media(max-width:920px){.scope-pane{width:160px;}}

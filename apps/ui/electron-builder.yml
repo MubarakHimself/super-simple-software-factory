@@ -34,6 +34,29 @@ asar: true
 asarUnpack:
   - "**/node_modules/@lydell/node-pty-*/**"
 
+# There is nothing in this tree for @electron/rebuild to compile, and letting
+# it try breaks the build outright on a box without Visual Studio.
+#
+# The only native code we ship is @lydell/node-pty's, and that arrives as
+# PREBUILT .node files in the per-platform package (@lydell/node-pty-win32-x64/
+# prebuilds/) - the whole reason the @lydell fork exists. The wrapper package
+# has no binding.gyp, so the rebuild pass has no work to do for it.
+#
+# What the rebuild pass DOES find is `cpu-features`, an OPTIONAL dependency of
+# `ssh2` (the deploy/machines lane's SSH client). node-gyp then dies with
+# "Could not find any Visual Studio installation to use". That module is
+# doubly irrelevant here: ssh2 is optional about it by design (pure-JS
+# fallback - it is an AES-NI detection helper, not a requirement), and ssh2 is
+# imported only by server/app/*.ts, never by electron/. The packaged app ships
+# just dist-electron/ + package.json and spawns the repo's own
+# `bun run server/index.ts`, so ssh2 and cpu-features resolve from the REPO's
+# node_modules at runtime and never enter the asar at all.
+#
+# So: skip a compile step that can only fail, for a module we neither need nor
+# ship. Revisit only if a genuinely source-built native dep is ever added to
+# the ELECTRON side of this app.
+npmRebuild: false
+
 # --- Windows: buildable now, this is the UI phase's actual target ----------
 # Portable = single .exe, no installer, no admin rights, no code signing.
 # Verified with: bunx electron-builder --win portable   (see `just ade-build`)

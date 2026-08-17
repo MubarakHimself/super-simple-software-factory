@@ -494,8 +494,24 @@ fi
 # and nothing else: a server that is AHEAD of origin is reported as ahead and
 # left alone.
 
+# THE REMEDY HAS TO BE TRUE. This step used to say "the laptop creates and
+# pushes it when the project is initialized", and nothing does: `Initialize
+# factory` runs `git init` plus the sssf stamp and neither commits, branches nor
+# pushes. The one component that CREATES `integration` is the engine itself
+# (adws/engine.py's cycle cuts it from main and `push -u`s it) - which this
+# deploy refuses to install until the branch exists. Following the old message
+# (re-run Initialize, push, redeploy) failed identically, forever, on every
+# fresh repo. So the message now names the three commands that actually break
+# the loop, and prints what the remote DOES have so the operator can see
+# whether he is one `push -u` away or looking at an empty hub.
 if ! git -C "$DIR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
-  fail checkout "branch '$BRANCH' does not exist on the remote - the laptop creates and pushes it when the project is initialized"
+  # `grep -vx HEAD` rather than an anchored end-of-line pattern: a dollar sign
+  # immediately followed by a single quote is an ANSI-C quote, a bashism this
+  # file's own dash-compatibility guard rejects by name. `-x` is the POSIX way
+  # to say "match the whole line" and spells none of it.
+  REMOTE_HEADS=$(git -C "$DIR" for-each-ref --format='%(refname:strip=3)' refs/remotes/origin 2>/dev/null | grep -vx HEAD | tr '\n' ' ')
+  [ -n "$REMOTE_HEADS" ] || REMOTE_HEADS="(none - the remote has no branches at all yet)"
+  fail checkout "branch '$BRANCH' does not exist on the remote. origin has: $REMOTE_HEADS. Nothing on the laptop creates this branch for you - the engine does, and this deploy will not install the engine before the branch exists. Break the loop on the LAPTOP, in the project checkout: 1) git add -A && git commit -m 'stamp the factory'  2) git push -u origin main  3) git switch -c $BRANCH  4) git push -u origin $BRANCH  - then deploy again"
 fi
 
 if git -C "$DIR" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null 2>&1; then
@@ -559,8 +575,15 @@ fi
 if [ ! -f "$DIR/pyproject.toml" ]; then
   fail stamp "$DIR/pyproject.toml is missing - adws/engine.py's merge gate runs 'uv run --project . --group dev ruff/mypy/pytest' and is fail-closed, so without it every card this box finishes is blocked, forever - re-run Initialize factory on the laptop (it stamps one), push, and redeploy"
 fi
+# THE REMEDIATION HAS TO BE COMPLETE. This line used to name four packages -
+# ruff, pytest, mypy, types-PyYAML - and a checkout that followed it verbatim
+# STILL red the gate, on `ModuleNotFoundError: No module named 'yaml'`:
+# adws/tests imports adw_modules, which imports pydantic, yaml, dotenv and rich,
+# and a project that arrived with its own pyproject.toml has none of them in a
+# `[project] dependencies` the stamp is not allowed to edit. So the list named
+# here is the self-sufficient one the skill's own template now carries.
 if ! tr -d ' \t' <"$DIR/pyproject.toml" | grep -q '^dev='; then
-  fail stamp "$DIR/pyproject.toml declares no 'dev' dependency group - the merge gate resolves ruff, mypy and pytest through it and is fail-closed, so every card this box finishes would be blocked - add a [dependency-groups] dev = [\"ruff\", \"pytest\", \"mypy\", \"types-PyYAML\"] block, push, and redeploy"
+  fail stamp "$DIR/pyproject.toml declares no 'dev' dependency group - the merge gate resolves ruff, mypy and pytest through it and is fail-closed, so every card this box finishes would be blocked - add [dependency-groups] with dev = [\"ruff\", \"pytest\", \"mypy\", \"types-PyYAML\", \"pydantic\", \"python-dotenv\", \"pyyaml\", \"rich\"] (the last four are what adws/tests needs importable - a dev group with only the tools reds the gate on ModuleNotFoundError: yaml), push, and redeploy"
 fi
 if [ -z "$(ls "$DIR"/adws/tests/test_*.py 2>/dev/null)" ]; then
   fail stamp "$DIR/adws/tests holds no test_*.py - the merge gate runs 'pytest -q adws/tests', pytest exits 5 on a directory with nothing to collect, and the gate reads 5 as RED - re-run Initialize factory on the laptop (it stamps a starter suite), push, and redeploy"
@@ -897,6 +920,33 @@ if [ "$USED_INSTALLER" = no ]; then
       ok codex-cli "NOT installed: npm install -g @openai/codex failed ($(tail_of "$out")) - the codex lane cannot run until it is"
     fi
   fi
+fi
+
+# ── 14a. the Grok (xAI) CLI: reported, never invented ────────────────────────
+# The app's Providers pane puts the Grok row FIRST, "because it is first in the
+# operator's morning" - and on a bare Ubuntu box that click ends in exit 127,
+# because nothing installs the grok CLI. Steps 13 and 14 can install theirs
+# (`claude` and `codex` are npm packages this script already knows by name);
+# the xAI CLI is not one. It is a self-updating NATIVE binary that lives in
+# `~/.grok/bin/grok` (`installer = "internal"` in its own config.toml), and
+# this script will not guess at an install URL it has never verified - an
+# invented `curl | sh` is exactly the kind of unverified command that ends a
+# deploy in a way nobody can debug.
+#
+# So this step does the honest half: it says whether the machine has the CLI,
+# whether it is on the PATH a non-login `ssh <host> '<cmd>'` actually sees, and
+# what that means for the app's first click. It never fails the deploy - a box
+# with no grok CLI is still a working factory for every other lane.
+#
+# NOT SKIPPED on the installer path: installer/steps.py does not install this
+# CLI either, so the question is the same on both kinds of box.
+
+if have grok; then
+  ok grok-cli "already present: $(command -v grok) ($(grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
+elif [ -x "$HOME/.grok/bin/grok" ]; then
+  ok grok-cli "NEEDS YOU: $HOME/.grok/bin/grok exists but is not on this box's PATH. A non-login 'ssh <host> <command>' sources no .profile, so the app runs its logins with $HOME/.grok/bin, $HOME/.local/bin and /usr/local/bin prepended - that covers the app's own Grok row. Anything else you run over ssh needs $HOME/.grok/bin on PATH itself"
+else
+  ok grok-cli "NEEDS YOU: no grok CLI on this box, so the app's Grok sign-in row exits 127 here ('command not found'). This deploy installs the claude and codex CLIs (npm) and does not install this one - it is a self-updating native binary and this script will not guess its install command. Install it on the box yourself (it lands in $HOME/.grok/bin), then click the Grok row again. Note also that the roster's xai/grok-4.5 lane runs through pi, whose own xai credential is filled by 'pi' -> '/login xai' on the box, not by the grok CLI"
 fi
 
 # ── 14b. what this path does NOT converge, said out loud ─────────────────────

@@ -10,7 +10,68 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# The repo's own .env first: a project's checked-out configuration outranks
+# anything machine-wide, and `override=False` (the default) means whatever the
+# operator already exported in their shell outranks both.
 load_dotenv()
+
+
+def machine_secrets_path() -> Path:
+    """`~/.sdl-factory/secrets.env` — the MACHINE's own credential file.
+
+    `SDL_FACTORY_HOME` redirects it, the same variable the app plane's
+    `machines.ts` honours, so a test never reads the operator's real one.
+    """
+    home = os.environ.get("SDL_FACTORY_HOME", "").strip()
+    return (Path(home) if home else Path.home()) / ".sdl-factory" / "secrets.env"
+
+
+def load_machine_secrets() -> bool:
+    """Load `~/.sdl-factory/secrets.env` into this process's environment.
+
+    THE GAP THIS CLOSES. Three separate paths write CLAUDE_CODE_OAUTH_TOKEN
+    into that file — the app's "Sign in on <machine>" capture
+    (`apps/ui/server/app/auth-sessions.ts:writeCaptured`), the Providers sync
+    (`providers-v3.ts`), and `installer/steps.py:apply_oauth_token` — and until
+    this function existed NOTHING on a running factory read it back. The
+    sdl-engine systemd unit names no `EnvironmentFile`, and `apply_oauth_token`
+    deliberately writes only a COMMENT into the repo's `.env` ("source with:
+    set -a; . ~/.sdl-factory/secrets.env"), which no process ever sources. So a
+    Claude sign-in the app reported `completed`, and a Claude sync the app
+    reported `applied`, left the planner/reviewer claude-bridge lanes
+    unauthenticated: `pi-claude-bridge` authenticates from
+    `~/.claude/.credentials.json` or `$CLAUDE_CODE_OAUTH_TOKEN`, `claude
+    setup-token` saves no credentials file, and the variable never reached the
+    engine's children.
+
+    It is loaded HERE, at module import, because `adw_modules.utils` is
+    imported by every ADW, by `engine.py` and by `dispatch.py`, and
+    `operator_env()` below copies `os.environ` into every child process — so
+    one load reaches the whole tree, on BOTH deploy paths (the installer's unit
+    and the inline bootstrap's), without either unit writer having to change.
+
+    `override=False`: a value already in the environment, or in the repo's own
+    `.env`, wins. Returns whether a file was found, for the caller that wants
+    to say so.
+    """
+    try:
+        path = machine_secrets_path()
+        if not path.is_file():
+            return False
+        load_dotenv(path, override=False)
+        return True
+    except OSError:
+        # This runs at IMPORT time, in every ADW, in dispatch and in the
+        # always-on engine. A secrets.env with the wrong owner or mode - the
+        # exact state a file written by another user leaves behind - would
+        # otherwise raise here and take down every run in the factory at the
+        # import line, before anything could report why. A credential that
+        # cannot be read is a lane that is not signed in, which the auth probes
+        # already say out loud; it is not a reason to stop the engine.
+        return False
+
+
+load_machine_secrets()
 
 
 def operator_env() -> dict[str, str]:

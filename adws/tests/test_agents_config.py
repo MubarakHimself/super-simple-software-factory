@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from adw_modules import agent_pi
+from adw_modules import agent_pi, git_helper
 from adw_modules import agents as agents_mod
 
 MINIMAL_AGENT = """\
@@ -467,3 +467,64 @@ agents:
         agent_pi._pi_catalog.cache_clear()
 
     assert raised
+
+
+# ── $SSSF_INTEGRATION_BRANCH reaches the RUN side ───────────────────────────
+# specs/engine.md 2: "the worktree and dispatch side read the same variable".
+# They did not. `engine.py`, `adws/worktrees.py` and `quality.ai_defects` all
+# resolve the trunk through the env-aware `git_helper.factory_trunk()`, while
+# everything loaded from `load_config` read `worktrees.trunk` literally off the
+# roster - so setting the variable split the factory in two: runs cut from (and
+# measured against) a stale `integration` while the engine merged into the
+# branch the variable named. Inert at the defaults, and a quiet bifurcation the
+# day the documented configuration was used.
+
+TRUNK_CONFIG = """\
+defaults:
+  model: ollama-cloud/kimi-k2.7-code
+worktrees:
+  trunk: integration
+agents:
+  - name: builder
+""" + MINIMAL_AGENT
+
+NO_WORKTREES_CONFIG = """\
+defaults:
+  model: ollama-cloud/kimi-k2.7-code
+agents:
+  - name: builder
+""" + MINIMAL_AGENT
+
+
+def test_load_config_applies_the_integration_branch_env_over_the_roster(tmp_path, monkeypatch):
+    monkeypatch.setenv(git_helper.FACTORY_TRUNK_ENV, "night-line")
+
+    cfg = agents_mod.load_config(_write_config(tmp_path, TRUNK_CONFIG))
+
+    assert cfg.worktrees.trunk == "night-line"
+    assert cfg.worktrees.trunk == git_helper.factory_trunk()   # one answer, not two
+
+
+def test_load_config_adds_a_worktrees_block_when_the_roster_has_none(tmp_path, monkeypatch):
+    monkeypatch.setenv(git_helper.FACTORY_TRUNK_ENV, "night-line")
+
+    cfg = agents_mod.load_config(_write_config(tmp_path, NO_WORKTREES_CONFIG))
+
+    assert cfg.worktrees.trunk == "night-line"
+
+
+def test_load_config_leaves_the_rosters_own_trunk_alone_when_the_env_says_nothing(
+        tmp_path, monkeypatch):
+    """Unset and EMPTY both mean "the file has the last word" - not
+    `factory_trunk()`'s default, which would quietly overwrite a roster that
+    deliberately names another line."""
+    for value in (None, "", "   "):
+        if value is None:
+            monkeypatch.delenv(git_helper.FACTORY_TRUNK_ENV, raising=False)
+        else:
+            monkeypatch.setenv(git_helper.FACTORY_TRUNK_ENV, value)
+
+        cfg = agents_mod.load_config(_write_config(
+            tmp_path, TRUNK_CONFIG.replace("trunk: integration", "trunk: house-line")))
+
+        assert cfg.worktrees.trunk == "house-line"

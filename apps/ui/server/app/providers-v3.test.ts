@@ -485,6 +485,51 @@ describe("a preset produces a valid pi provider block", () => {
     }
   });
 
+  /**
+   * The three shapes a REAL pi was measured rejecting (2026-08-17, sandbox
+   * USERPROFILE, `pi -ne -ns -np --offline --list-models`). Each one made pi
+   * print `Warning: errors loading models.json` and drop the provider entirely:
+   *
+   *   invalid JSON   -> "Failed to parse models.json"
+   *   no `api`       -> 'no "api" specified. Set at provider or model level.'
+   *   no `baseUrl`   -> '"baseUrl" is required when defining custom models.'
+   *
+   * All nine presets passed that same run with empty stderr. This test is the
+   * guard that keeps them passing it: it asserts the two fields whose absence
+   * pi was OBSERVED to reject, plus JSON round-trippability, on every block the
+   * catalog can produce. It is a regression test for a measurement, not a
+   * guess at pi's schema — the transcript is in
+   * docs/research/provider-auth-map-2026-08-18.md section 4.
+   */
+  test("no preset can produce a block in a shape pi was measured rejecting", () => {
+    for (const preset of PRESETS) {
+      const block = providerBlock({
+        api: preset.api,
+        base_url: preset.base_url,
+        auth_header: preset.auth_header,
+        compat: preset.compat,
+        models: preset.models.map((model) => ({ id: model, name: null })),
+      }) as Record<string, unknown>;
+
+      // pi: 'no "api" specified' - the block is dropped, provider and all.
+      expect(typeof block["api"]).toBe("string");
+      expect((block["api"] as string).trim()).not.toBe("");
+      // pi: '"baseUrl" is required when defining custom models.'
+      expect(typeof block["baseUrl"]).toBe("string");
+      expect((block["baseUrl"] as string).trim()).not.toBe("");
+      // pi: "Failed to parse models.json" - anything unserialisable, or a
+      // key that JSON cannot carry, takes the whole file down with it and
+      // costs the operator every OTHER provider in it too.
+      const roundTripped = JSON.parse(JSON.stringify(block)) as Record<string, unknown>;
+      expect(roundTripped).toEqual(block);
+      // Every model entry pi lists needs an id it can print.
+      for (const model of (block["models"] as { id: string }[] | undefined) ?? []) {
+        expect(typeof model.id).toBe("string");
+        expect(model.id.trim()).not.toBe("");
+      }
+    }
+  });
+
   test("a preset block merges into models.json under its own id and touches nothing else", () => {
     const existing = { providers: { xai: { api: "keep" } } };
     let models: Record<string, unknown> = existing;

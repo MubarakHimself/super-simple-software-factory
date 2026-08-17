@@ -171,6 +171,21 @@ def _git(*args: str, cwd: Path) -> str:
     return result.stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def _pi_path(monkeypatch):
+    """A `PI_PATH` that resolves, for every test here.
+
+    The engine now preflights that the coding agent is LAUNCHABLE before it does
+    anything in a cycle (`engine.pi_launchable`) - a `PI_PATH` that is unset or
+    points at a file a pi upgrade moved used to kill the process at import.
+    Nothing in this suite ever spawns pi (the dispatch seam is a stand-in), so
+    this points the probe at a file that is certainly on disk and keeps the
+    suite hermetic: it must not pass or fail on whatever the operator's own
+    `.env` happens to say. Forward slashes because `_resolve_pi_cmd` splits with
+    `shlex` in posix mode, where a backslash is an escape character."""
+    monkeypatch.setenv("PI_PATH", Path(sys.executable).as_posix())
+
+
 @pytest.fixture
 def factory(tmp_path):
     """A main checkout with a queue, wired to a LOCAL bare origin — the two-box
@@ -779,6 +794,89 @@ def test_a_done_card_whose_branch_holds_nothing_new_is_parked(factory, eng, caps
     assert "factory: 007-noop.md integrated" in _origin_log(factory)
 
 
+def test_a_card_that_was_never_git_added_is_still_merged_and_parked(
+        factory, eng, monkeypatch, capsys):
+    """The `just work` flow, all the way through. A hand-written card dispatched
+    by hand reaches `Status: done` having NEVER been git-added - dispatch does no
+    git at all - and `git mv` refuses a path that is not in the index ("fatal:
+    not under version control"). So the engine merged the branch and then failed
+    to park the card, every cycle, forever, on work that was already on the
+    line; the adopt sweep could not rescue it either (`git diff HEAD -- queue` is
+    blind to untracked files), and every card naming it in `Needs:` waited on a
+    park that could not happen. Staging it first is what makes the move legal."""
+    _use_gate(monkeypatch, factory)
+    tree = factory.root.parent / "wt" / "008_byhand"
+    _git("worktree", "add", "-q", "-b", "adw/008_byhand", tree.as_posix(), "integration",
+         cwd=factory.root)
+    (tree / "byhand.txt").write_text("one\n", encoding="utf-8")
+    _git("add", "-A", cwd=tree)
+    _git("commit", "-q", "-m", "run 008: byhand", cwd=tree)
+
+    card = factory.queue / "008-byhand.md"           # written, and never `git add`ed
+    card.write_text(_card(status=dispatch.DONE).replace("Adw-Id:", "Adw-Id: 008"),
+                    encoding="utf-8")
+
+    engine.run_cycle(eng)
+
+    assert (factory.queue / "done" / "008-byhand.md").is_file()
+    assert not card.exists()
+    assert _origin_file(factory, "byhand.txt") == "one"
+    assert "factory: 008-byhand.md integrated" in _origin_log(factory)
+    assert _git("status", "--porcelain", cwd=factory.root) == ""   # nothing left dirty
+
+    engine.run_cycle(eng)                            # and it never comes back round
+    assert "could not park" not in capsys.readouterr().out
+
+
+def test_the_roster_is_re_read_when_it_changes_under_a_running_service(factory, eng, capsys):
+    """The roster UI writes `lanes:` and `router.builder_pool` while the service
+    runs, and git delivers the edit on the engine's own pull - nothing restarts
+    it. Read once, those two blocks froze for the life of the process while
+    `derive_config` re-read the same file per dispatch: a half-applied roster,
+    with the holds still logging the old counts."""
+    engine.resolve_lanes(eng)
+    assert eng.lane_slots == {"ollama-cloud": 2, "xai": 2}
+    capsys.readouterr()
+
+    engine.resolve_lanes(eng)                        # unchanged: no re-parse, no log line
+    assert capsys.readouterr().out == ""
+
+    _use_roster(factory, POOL_ROSTER)                # the operator adds a pool from the app
+    engine.resolve_lanes(eng)
+
+    assert eng.builder_pool == ("xai/grok-4.5", "openrouter/glm-5.2")
+    assert eng.lane_slots == {"ollama-cloud": 6, "openrouter": 2, "xai": 2}
+    out = capsys.readouterr().out
+    assert "changed on disk" in out and "builder pool" in out
+
+
+def test_a_pi_that_cannot_be_launched_holds_the_cycle_instead_of_killing_the_service(
+        factory, eng, monkeypatch, capsys):
+    """`agent_pi` resolved `PI_PATH` at IMPORT and `engine.py` imports it
+    transitively, so a pi upgrade that moved `dist/cli.js` - or a lost `.env` -
+    killed even `uv run adws/engine.py --help` with a raw traceback, which under
+    the unit's `Restart=always` is a ten-second crash loop for a process that
+    never spawns pi itself. It is one named line and a held cycle now, re-asked
+    every cycle so a repair needs no restart, and no card is burned to `blocked`
+    on the way."""
+    _use_fake(monkeypatch, factory, mode="hold")
+    _publish(factory, "001-first.md", _card())
+    monkeypatch.setenv("PI_PATH", "")
+
+    engine.run_cycle(eng)
+
+    assert _names(eng) == []
+    assert "PI IS NOT LAUNCHABLE" in capsys.readouterr().out
+
+    engine.run_cycle(eng)                            # said once, not once a minute
+    assert "PI IS NOT LAUNCHABLE" not in capsys.readouterr().out
+
+    monkeypatch.setenv("PI_PATH", Path(sys.executable).as_posix())
+    engine.run_cycle(eng)                            # repaired, with no restart
+
+    assert _names(eng) == ["001-first.md"]
+
+
 def test_a_failed_run_is_reaped_as_blocked_and_never_integrated(
         factory, eng, monkeypatch, capsys):
     _use_fake(monkeypatch, factory, mode="done", code=1, work="feature.txt:one")
@@ -1003,7 +1101,11 @@ def test_an_integrated_branch_is_left_unrewritten_and_still_reads_as_merged(
 def test_the_gate_runs_the_factorys_own_toolchain_pinned_to_the_tree(tmp_path):
     """The seam's real value (what the stand-in stands in FOR): quality.py's
     lint / typecheck / test blocks, pinned to the tree being judged, and no
-    agent anywhere near it."""
+    agent anywhere near it.
+
+    `config="cfg.yaml"` does not exist, which is also the assertion that an
+    unreadable roster falls back to the factory's defaults rather than merging
+    with no gate at all."""
     instance = engine.Engine(main_root=tmp_path, queue_dir=tmp_path, config="cfg.yaml")
     commands = engine.quality_commands(instance, tmp_path / "wt")
 
@@ -1011,6 +1113,65 @@ def test_the_gate_runs_the_factorys_own_toolchain_pinned_to_the_tree(tmp_path):
     assert tools == ["ruff", "mypy", "pytest"]
     for argv in commands:
         assert argv[:4] == ["uv", "run", "--project", str(tmp_path / "wt")]
+
+
+def test_the_gate_runs_THIS_PROJECTS_commands_when_its_roster_names_them(tmp_path):
+    """The gate verifies the repo it is merging into, not the factory's own
+    scaffolding.
+
+    Hardcoded, this gate re-ran `ruff check .`, `mypy adws` and `pytest -q
+    adws/tests` in every repo the factory was ever stamped into - so a stamped
+    project's own tests never ran at the merge gate, its code was never
+    typechecked, and a non-Python project got no deterministic verification at
+    all while every card still read green. The roster's `quality:` block is
+    where a project says otherwise, and this is the gate reading it.
+    """
+    config = tmp_path / "roster.yaml"
+    config.write_text(yaml.safe_dump({
+        "quality": {
+            "lint": "npm run lint",
+            "typecheck": "npx tsc --noEmit",
+            "test": "{dev} pytest -q tests",
+        },
+    }), encoding="utf-8")
+    instance = engine.Engine(main_root=tmp_path, queue_dir=tmp_path, config=str(config))
+
+    commands = engine.quality_commands(instance, tmp_path / "wt")
+    assert commands[0] == ["npm", "run", "lint"]
+    assert commands[1] == ["npx", "tsc", "--noEmit"]
+    # `{dev}` still expands to the pinned toolchain, resolved against the tree
+    # being judged - a project keeps that seam by naming the placeholder.
+    assert commands[2] == ["uv", "run", "--project", str(tmp_path / "wt"),
+                           "--group", "dev", "pytest", "-q", "tests"]
+
+
+def test_a_roster_the_gate_cannot_read_still_gates(tmp_path, capsys):
+    """FAIL-CLOSED all the way down. A `quality:` block that is malformed (or a
+    roster that will not parse at all) must not throw out of `quality_commands`
+    into `integrate` - that would take down the cycle that was about to merge -
+    and must not leave the gate with nothing to run either. It falls back to the
+    factory's own suite and says why."""
+    config = tmp_path / "roster.yaml"
+    config.write_text("quality:\n  lint: 5\n  typecheck: [not, a, string]\n", encoding="utf-8")
+    instance = engine.Engine(main_root=tmp_path, queue_dir=tmp_path, config=str(config))
+
+    commands = engine.quality_commands(instance, tmp_path / "wt")
+    assert [argv[argv.index("dev") + 1] for argv in commands] == ["ruff", "mypy", "pytest"]
+    assert "could not read `quality:`" in capsys.readouterr().out
+
+
+def test_a_check_a_project_emptied_is_dropped_not_run_as_an_empty_argv(tmp_path):
+    """An empty template is a written decision to run nothing for that check.
+    It must not reach `subprocess` as `[]`."""
+    config = tmp_path / "roster.yaml"
+    config.write_text(yaml.safe_dump({
+        "quality": {"lint": "", "typecheck": "", "test": "{dev} pytest -q tests"},
+    }), encoding="utf-8")
+    instance = engine.Engine(main_root=tmp_path, queue_dir=tmp_path, config=str(config))
+
+    commands = engine.quality_commands(instance, tmp_path / "wt")
+    assert len(commands) == 1
+    assert commands[0][-3:] == ["pytest", "-q", "tests"]
 
 
 # ── failure semantics ───────────────────────────────────────────────────────
@@ -1390,6 +1551,29 @@ def test_a_cap_below_one_is_refused(factory, monkeypatch):
     monkeypatch.chdir(factory.root)
     with pytest.raises(SystemExit):
         engine.main(["--once", "--cap", "0"])
+
+
+def test_the_cap_can_be_set_from_the_environment_and_the_flag_still_wins(
+        factory, monkeypatch, capsys):
+    """`ExecStart` is fixed at `uv run adws/engine.py` and both converge paths
+    byte-compare the unit they render, so an edit to it is parked on the next
+    converge - which left total parallelism pinned at the default on every
+    server with no supported knob at all. `$SSSF_CAP` is that knob, reaching the
+    service the same two ways `SSSF_CONFIG` and `SSSF_LANES` do (specs/engine.md
+    10); a flag on the command line still beats it."""
+    monkeypatch.chdir(factory.root)
+    monkeypatch.setenv("SSSF_CAP", "4")
+    monkeypatch.setattr(engine, "run_cycle", lambda instance: None)
+
+    assert engine.main(["--once", "--config", str(factory.roster)]) == 0
+    assert "cap=4" in capsys.readouterr().out
+
+    assert engine.main(["--once", "--config", str(factory.roster), "--cap", "3"]) == 0
+    assert "cap=3" in capsys.readouterr().out
+
+    monkeypatch.setenv("SSSF_CAP", "not-a-number")
+    with pytest.raises(SystemExit):
+        engine.main(["--once", "--config", str(factory.roster)])
 
 
 def test_a_malformed_lanes_value_is_refused_at_startup(factory, monkeypatch):

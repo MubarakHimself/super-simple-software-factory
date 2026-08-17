@@ -38,7 +38,17 @@ dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
 [dependency-groups]
 # Everything the gate's lint / typecheck / test commands need. Installs clean
 # on Windows and Linux with no external toolchain.
-dev = ["ruff", "pytest", "mypy", "types-PyYAML"]
+#
+# SELF-SUFFICIENT ON PURPOSE. The last four repeat `[project] dependencies`
+# above, and the repetition is the point: this group has to work in a project
+# that already had its own pyproject.toml, where the stamp never wrote that
+# `[project]` block at all. `adws/tests/` imports `adw_modules`, which imports
+# pydantic, yaml, dotenv and rich - so a `dev` group holding only the three
+# tools reds the merge gate on `ModuleNotFoundError: No module named 'yaml'`,
+# which looks exactly like a broken project and is not one. Adding the `dev`
+# group alone is the remediation the deploy used to print; it was incomplete,
+# and this is the list that makes it complete.
+dev = ["ruff", "pytest", "mypy", "types-PyYAML", "pydantic", "python-dotenv", "pyyaml", "rich"]
 
 # skylos is SEPARATE from `dev`, and not because it is optional - because it
 # does not install everywhere. It depends on tree-sitter-dart-orchard, which

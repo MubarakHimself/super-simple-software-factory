@@ -598,6 +598,23 @@ async function cachedProbe(record: MachineRecord, refresh: boolean): Promise<Mac
 
 const MAX_LINES = 800;
 
+/**
+ * A deploy nobody can finish must not hold this machine forever.
+ *
+ * `startDeploy` returns the RUNNING job for a machine that already has one, so
+ * a job wedged on the far end used to mean "Deploy again" silently no-opped for
+ * that machine until the app server was restarted - and `DeployPanel` polled a
+ * `running` state that would never change. bootstrap.sh's own guards make a
+ * true hang unlikely (stdin </dev/null, a 600s apt lock timeout, `timeout 600`
+ * on the engine warm) but not impossible: `uv sync` and `git fetch` on a
+ * stalled network path have no ceiling of their own.
+ *
+ * Forty minutes is past any honest run: the two bounded waits above are ten
+ * minutes each, and a cold apt+node+uv+just+clone+sync on a small VPS lands
+ * inside fifteen. This is the backstop, not the schedule.
+ */
+const DEPLOY_TIMEOUT_MS = 40 * 60_000;
+
 export interface DeployJob {
   id: string;
   machine_id: string;
@@ -612,6 +629,11 @@ export interface DeployJob {
   repo_url: string;
   branch: string;
   dir: string;
+  // ── never in a view ──
+  /** the live connection, so a cancel (or the timeout) can actually stop it */
+  client: Client | null;
+  cancelled: boolean;
+  cancel_reason: string | null;
 }
 
 const deployJobs = new Map<string, DeployJob>();
@@ -686,6 +708,9 @@ export function startDeploy(record: MachineRecord, input: DeployInput): DeployJo
     repo_url: input.repoUrl,
     branch: input.branch,
     dir: input.dir,
+    client: null,
+    cancelled: false,
+    cancel_reason: null,
   };
   deployJobs.set(job.id, job);
   latestDeploy.set(record.id, job.id);
@@ -702,6 +727,9 @@ export function startDeploy(record: MachineRecord, input: DeployInput): DeployJo
 
   void (async () => {
     let client: Client | null = null;
+    const timer = setTimeout(() => {
+      cancelDeploy(record.id, `nothing finished this deploy within ${Math.round(DEPLOY_TIMEOUT_MS / 60_000)} minutes, so it was stopped`);
+    }, DEPLOY_TIMEOUT_MS);
     try {
       const privateKey = await readFile(record.key_path, "utf-8");
       append(`connecting to ${record.user}@${record.host}:${record.port}`);
@@ -717,6 +745,14 @@ export function startDeploy(record: MachineRecord, input: DeployInput): DeployJo
           seen.fingerprint = fingerprint;
         },
       });
+      job.client = client;
+      // Cancelled while the connect was still in flight: there was no
+      // connection to drop when the button was pressed, so the stop happens
+      // here instead and nothing is ever uploaded or run.
+      if (job.cancelled) {
+        append("cancelled before the bootstrap was uploaded");
+        throw new Error(job.cancel_reason ?? "this deploy was cancelled");
+      }
       if (seen.fingerprint) {
         await pinHostKey(record, seen.fingerprint);
         append(`host key ${seen.fingerprint} - the one pinned for this machine`);
@@ -736,20 +772,44 @@ export function startDeploy(record: MachineRecord, input: DeployInput): DeployJo
       job.state = code === 0 && complete ? "done" : "failed";
       if (job.state === "failed" && job.error === null) {
         const failed = job.steps.find((step) => step.state === "fail");
-        job.error = failed
-          ? `step ${failed.name} failed: ${failed.detail}`
-          : `the bootstrap exited ${code} without printing DEPLOY COMPLETE`;
+        job.error = job.cancelled
+          ? (job.cancel_reason ?? "this deploy was cancelled")
+          : failed
+            ? `step ${failed.name} failed: ${failed.detail}`
+            : `the bootstrap exited ${code} without printing DEPLOY COMPLETE`;
       }
     } catch (error) {
       job.state = "failed";
-      job.error = (error as Error).message;
-      append(`error: ${(error as Error).message}`);
+      job.error = job.cancelled ? (job.cancel_reason ?? (error as Error).message) : (error as Error).message;
+      append(`error: ${job.error}`);
     } finally {
+      clearTimeout(timer);
       client?.end();
+      job.client = null;
       job.finished_at = new Date().toISOString();
     }
   })();
 
+  return job;
+}
+
+/**
+ * Stop a running deploy: drop the SSH connection, which kills the remote `sh`
+ * with it, and let the job settle as `failed` with the reason said out loud.
+ *
+ * Dropping the connection is the stop that always works - `sshd` may refuse a
+ * signal on an exec channel, and a bootstrap that ignored one would leave this
+ * machine locked out of "Deploy again" for the life of the process. Nothing on
+ * the far end is rolled back: every bootstrap step is idempotent by
+ * construction, so the next deploy converges from wherever this one stopped.
+ */
+export function cancelDeploy(machineId: string, reason?: string): DeployJob | null {
+  const job = getDeploy(machineId);
+  if (!job) return null;
+  if (job.state !== "running") return job;
+  job.cancelled = true;
+  job.cancel_reason = reason ?? "you cancelled this deploy";
+  job.client?.end();
   return job;
 }
 
@@ -1128,6 +1188,50 @@ export async function originUrl(root: string): Promise<string | null> {
   return url === "" ? null : url;
 }
 
+/**
+ * Does the project's own origin carry `branch`, asked from the laptop?
+ *
+ * WHY IT IS ASKED HERE. `bootstrap.sh` step 7 stops when the remote has no
+ * `integration` branch, and it is right to - creating one on the operator's hub
+ * is not a deploy's business. But that stop happens SIX STEPS and several
+ * minutes into a run, on the far end, after apt, uv, node and just have already
+ * been installed; and the only component that ever creates `integration` is the
+ * engine, which this deploy refuses to install until the branch exists. On
+ * every fresh project the operator therefore paid for a full provisioning run
+ * to be told, in a status line, about a chicken-and-egg he has to break on the
+ * laptop. Asking first costs one `git ls-remote` and turns that into a refusal
+ * he can act on before anything is touched.
+ *
+ * THREE ANSWERS, not two. `true`/`false` are only returned when git actually
+ * answered; `null` means the question could not be asked (offline, a private
+ * remote with no credentials on this laptop, no git). A `null` NEVER blocks the
+ * deploy - a pre-flight that guesses "missing" on a flaky network would refuse
+ * a deploy that would have worked, and bootstrap.sh still asks the same
+ * question authoritatively on the machine itself.
+ *
+ * `GIT_TERMINAL_PROMPT=0` for the same reason bootstrap.sh exports it: an
+ * unauthenticated remote must fail immediately, never sit on a credential
+ * prompt inside a request handler.
+ */
+export async function remoteHasBranch(root: string, branch: string): Promise<boolean | null> {
+  try {
+    const proc = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+    });
+    const timer = setTimeout(() => proc.kill(), 15_000);
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    clearTimeout(timer);
+    if (code !== 0) return null; // could not ask - not the same as "not there"
+    return stdout.split("\n").some((line) => line.trim().endsWith(`refs/heads/${branch}`));
+  } catch {
+    return null;
+  }
+}
+
 /** `https://host/owner/repo.git` -> `repo`; used for the remote checkout dir so
  * two projects on one box do not collide. */
 export function repoDirName(url: string): string {
@@ -1174,6 +1278,21 @@ async function postDeploy(req: Request): Promise<Response> {
   const script = await readFile(scriptPath, "utf-8");
 
   const branch = (body.branch ?? "").trim() || "integration";
+
+  // The pre-flight: refuse the chicken-and-egg here, on the laptop, where the
+  // operator can fix it - rather than after a full provisioning run dies at
+  // bootstrap.sh step 7 with the same news. `null` (could not ask) never
+  // blocks; only a definite "the remote does not have it" does.
+  if ((await remoteHasBranch(project.root, branch)) === false) {
+    return appError(
+      `${repoUrl} has no '${branch}' branch, so there is nothing for the server to check out. ` +
+        `Nothing on this laptop creates it for you - the engine does, and the deploy will not install the engine ` +
+        `before the branch exists. Break that loop here, in ${project.root}: ` +
+        `1) git add -A && git commit -m "stamp the factory"  2) git push -u origin main  ` +
+        `3) git switch -c ${branch}  4) git push -u origin ${branch}  - then deploy again.`,
+      409,
+    );
+  }
   // An explicitly requested directory wins. The default is derived from the
   // user because root's home is `/root`, not `/home/root` - and a deploy that
   // cloned into a directory nobody owns would fail on the first write.
@@ -1190,6 +1309,13 @@ async function postDeploy(req: Request): Promise<Response> {
   }
 
   return appJson(deployView(job), 202);
+}
+
+async function postDeployCancel(req: Request): Promise<Response> {
+  const id = param(req, "machine_id");
+  const job = cancelDeploy(id);
+  if (!job) return appError(`no deploy has been started for machine ${id} from this app`, 404);
+  return appJson(deployView(job));
 }
 
 async function getDeployStatus(req: Request): Promise<Response> {
@@ -1225,6 +1351,9 @@ export function machinesRoutes(token: string, selfOrigins: ReadonlySet<string>) 
     },
     "/api/app/machines/:machine_id/deploy/status": {
       GET: appSafely(getDeployStatus),
+    },
+    "/api/app/machines/:machine_id/deploy/cancel": {
+      POST: csrfGuard(token, selfOrigins, postDeployCancel),
     },
     "/api/app/p/:id/machine": {
       POST: csrfGuard(token, selfOrigins, postBinding),

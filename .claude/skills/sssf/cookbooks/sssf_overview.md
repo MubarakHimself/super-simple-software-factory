@@ -37,7 +37,7 @@ adws/
     └── sssf.db                  gitignored SQLite trace db the visualizer polls
 ```
 
-**v1 runs Pi only.** `coding_agent: pi`, default model `gemini-3.6-flash`, thinking `medium`. `claude_code` is specced in the config and stubbed in the interface — it lands in v2.
+**v1 runs Pi only.** `coding_agent: pi`, default model `ollama-cloud/kimi-k2.7-code` (the starter roster's one lane, inherited by every agent), thinking `medium`. `claude_code` is specced in the config and stubbed in the interface — it lands in v2.
 
 ## The phase model
 

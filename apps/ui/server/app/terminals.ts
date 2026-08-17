@@ -35,7 +35,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { APP_TOKEN, SELF_ORIGINS, appError, appJson, appSafely, csrfGuard } from "./guard.ts";
+import { APP_TOKEN, SELF_ORIGINS, appError, appJson, appSafely, csrfGuard, isLoopbackRequest } from "./guard.ts";
 import { findProject } from "./manifest.ts";
 import { WIN32, which } from "./sessions/which.ts";
 
@@ -316,6 +316,10 @@ function safeStreamRoute(
 ): (req: Request, server: { timeout(req: Request, seconds: number): void }) => Response {
   return (req, server) => {
     try {
+      // The same loopback-host check `appSafely` applies to every other
+      // `/api/app/*` route. It matters MOST here: this route streams a live
+      // shell's entire ring buffer, with no token, to whoever asks.
+      if (!isLoopbackRequest(req)) return appError("this server answers on loopback only", 403);
       return handler(req, server);
     } catch (error) {
       console.error(`[ui] app ${req.method} ${new URL(req.url).pathname}:`, error);

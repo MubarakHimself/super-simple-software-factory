@@ -1,8 +1,27 @@
 # sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
+#
+# ONE LANE, ONE KEY, ON PURPOSE. Every agent below inherits a single
+# `defaults.model`, and there is not one per-agent `model:` override in the file.
+# That is the shape a stamped project can actually RUN on the minute it is
+# stamped: `just demo` — the next step install.py prints — spends a few cents on
+# one already-verified lane instead of failing five different ways.
+#
+# It replaces a four-provider starter roster (google/gemini-3.6-flash,
+# fireworks/…/kimi-k3, openai/gpt-5.6-terra, openai/gpt-5.6-luna) that shipped
+# here and did not resolve: `fireworks` is not a pi provider at all, `openai` in
+# pi's catalog is really `openai-codex`, and a google-keyed Gemini lane is a paid
+# per-token API — which the factory's own standing rules refuse. An un-edited
+# deploy of that roster burned one dispatch per card onto unresolvable lanes and
+# left every card visibly blocked. A roster you have to fix before the first run
+# is not a default.
+#
+# CHANGE THIS LINE FIRST if `ollama-cloud/kimi-k2.7-code` is not a lane you have.
+# `pi --list-models` prints every provider/id this box can actually resolve; the
+# leading segment must be one of those providers (see references/config.md).
 defaults:
   coding_agent: pi
-  model: google/gemini-3.6-flash   # provider/id — a bare pattern is ambiguous across providers
+  model: ollama-cloud/kimi-k2.7-code   # provider/id — a bare pattern is ambiguous across providers
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []          # pi extensions loaded into the harness (-e)
   # Roster-wide allowlist; any agent may override with its own list.
@@ -68,10 +87,37 @@ worktrees:
 #     - model: "ollama-cloud/kimi-k2.7-code"
 #     - model: "xai/grok-4.5"
 
+# ── quality: THE COMMANDS BOTH GATES RUN ─────────────────────────────────────
+# Read by adw_modules/quality.py (the in-run checks) AND by adws/engine.py's
+# merge gate (the suite re-run against the rebased tree before anything is
+# merged). The defaults below are the FACTORY'S OWN - they verify the factory
+# scaffolding that was just stamped into this repo, and nothing else.
+#
+# ⚠ POINT THESE AT YOUR PROJECT. Left as they are, your own tests never run at
+# either gate, your own code is never typechecked, and a non-Python project
+# gets no deterministic verification at all while every card still reads green.
+# The starter suite (adws/tests/test_stamp.py) only checks that the stamp is
+# intact.
+#
+# `{dev}` and `{scan}` expand to `uv run --project <tree> --group dev|scan` -
+# the pinned toolchain, resolved against the tree being judged. A command that
+# does not need them just does not use one. An empty string turns a check off,
+# and it is recorded as NOT VERIFIED (never as a pass).
+quality:
+  lint: "{dev} ruff check ."
+  typecheck: "{dev} mypy adws"
+  test: "{dev} pytest -q adws/tests"
+  scan: "{scan} skylos . --ai-defects --format concise"
+  # A JavaScript/TypeScript project, for example, would say:
+  #   lint: "npm run lint"
+  #   typecheck: "npx tsc --noEmit"
+  #   test: "npm test"
+  # A Python project with its own suite beside the factory's:
+  #   test: "{dev} pytest -q tests adws/tests"
+
 agents:
   - name: planner
-    model: fireworks/accounts/fireworks/models/kimi-k3
-    thinking: high
+    thinking: high                 # model: inherits defaults.model (one lane, one key)
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.
     prompt_engineering:
@@ -136,8 +182,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openai/gpt-5.6-terra
-    thinking: high
+    thinking: high                 # model: inherits defaults.model (one lane, one key)
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
     prompt_engineering:
@@ -154,8 +199,7 @@ agents:
       - write
 
   - name: documenter
-    model: openai/gpt-5.6-luna
-    color: "#e879f9"
+    color: "#e879f9"                # model: inherits defaults.model (one lane, one key)
     purpose: Write up the change that was just made, from the diff; document only.
     prompt_engineering:
       system: adws/adw_data/prompt_engineering/documenter/system.md

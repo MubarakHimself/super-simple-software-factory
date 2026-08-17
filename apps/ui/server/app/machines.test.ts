@@ -68,6 +68,7 @@ const {
   readProviderSyncLog,
   readRegistry,
   registryPath,
+  remoteHasBranch,
   repoDirName,
   shq,
   startDeploy,
@@ -241,9 +242,14 @@ async function box(options: { password?: string } = {}): Promise<FakeBox> {
   return created;
 }
 
+/** Throwaway directories a test made (the git fixtures below), removed with
+ * everything else when the file is done. */
+const tempDirs: string[] = [];
+
 afterAll(async () => {
   for (const created of boxes) await created.close().catch(() => {});
   await rm(home, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
 });
 
 beforeAll(async () => {
@@ -660,6 +666,53 @@ describe("the host key", () => {
     },
     20_000,
   );
+});
+
+/* ── the deploy's pre-flight: is the branch even there? ────────────────────
+   bootstrap.sh stops at step 7 when the remote has no `integration`, six steps
+   and several minutes into a run, on the far end - and the only thing that ever
+   CREATES that branch is the engine, which the deploy refuses to install until
+   the branch exists. On every fresh project the operator paid for a full
+   provisioning run to be told about a chicken-and-egg he has to break on the
+   laptop. `postDeploy` asks first, so the refusal names the commands. */
+describe("the deploy pre-flight", () => {
+  async function git(cwd: string, argv: string[]): Promise<void> {
+    const proc = Bun.spawn(["git", ...argv], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    if (code !== 0) throw new Error(`git ${argv.join(" ")} exited ${code}: ${stderr}`);
+  }
+
+  test("answers true, false and 'could not ask' - and never confuses the last two", async () => {
+    const origin = await mkdtemp(join(tmpdir(), "sdl-origin-"));
+    const work = await mkdtemp(join(tmpdir(), "sdl-work-"));
+    tempDirs.push(origin, work);
+
+    await git(origin, ["init", "--bare", "-b", "main"]);
+    await git(work, ["init", "-b", "main"]);
+    await git(work, ["config", "user.email", "test@example.com"]);
+    await git(work, ["config", "user.name", "test"]);
+    await writeFile(join(work, "README.md"), "fixture\n", "utf-8");
+    await git(work, ["add", "-A"]);
+    await git(work, ["commit", "-m", "first"]);
+    await git(work, ["remote", "add", "origin", origin]);
+    await git(work, ["push", "-u", "origin", "main"]);
+
+    // The exact state a freshly stamped project is in: pushed, but no
+    // `integration` anywhere. This is what the pre-flight has to catch.
+    expect(await remoteHasBranch(work, "integration")).toBe(false);
+    expect(await remoteHasBranch(work, "main")).toBe(true);
+
+    await git(work, ["switch", "-c", "integration"]);
+    await git(work, ["push", "-u", "origin", "integration"]);
+    expect(await remoteHasBranch(work, "integration")).toBe(true);
+
+    // A directory that is not a repository cannot answer - and "could not ask"
+    // is NOT "not there". A pre-flight that guessed would refuse deploys that
+    // would have worked; only a definite `false` may block one.
+    const notARepo = await mkdtemp(join(tmpdir(), "sdl-norepo-"));
+    tempDirs.push(notARepo);
+    expect(await remoteHasBranch(notARepo, "integration")).toBeNull();
+  }, 60_000);
 });
 
 describe("the one-click deploy", () => {

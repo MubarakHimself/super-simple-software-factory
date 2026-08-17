@@ -73,17 +73,30 @@ per card, visibly); only an explicit `enabled: false` stops the service coming u
   ("what comes on `main` is never split work"). No code path in `engine.py` writes to it - the only
   time the name appears at all is as the *base* the working line is cut from the first time (4), and
   as a refusal: `SSSF_INTEGRATION_BRANCH=main` is rejected at startup rather than silently obeyed.
-- **`SSSF_INTEGRATION_BRANCH`** names the working line for the rest of the factory too (the worktree
-  and dispatch side read the same variable); unset, it is `integration`. Read once at startup - a
-  branch that changed under a running service would be a different factory.
+- **`SSSF_INTEGRATION_BRANCH`** names the working line for the rest of the factory too; unset, it is
+  `integration`. Read once at startup - a branch that changed under a running service would be a
+  different factory. The engine, `adws/worktrees.py` and `quality.ai_defects` resolve it through
+  `git_helper.factory_trunk()`; the **run** side reads it off the loaded roster, because
+  `agents.load_config` writes an explicitly set value over `worktrees.trunk` as the file is loaded
+  (`agents._apply_trunk_env`). That is one answer, not two: without it `ensure_run_worktree` cut runs
+  from the literal `integration` in the roster and `push_run_branch` measured "ahead" against it,
+  while the engine merged into the branch the variable named - a factory split down the middle by a
+  documented configuration. An unset or empty variable changes nothing, so a roster that deliberately
+  names another line keeps the last word.
 
 ## 3. The cycle
 
 Every `--interval` seconds, in this order:
 
-0. **Can git name a committer here?** `git var GIT_COMMITTER_IDENT` in the main checkout. Every
-   record this engine keeps is a commit, and a checkout with no identity fails every one of them, so
-   a cycle that cannot answer does **nothing at all** and says which two commands fix it (7).
+0. **Re-read the roster, then two preflights.** `resolve_lanes` compares the roster's bytes against
+   the ones the current lane/pool state came from and re-derives only when they changed (5.3) - the
+   app edits that file and git delivers it mid-service. Then: **can git name a committer here?**
+   `git var GIT_COMMITTER_IDENT` in the main checkout. Every record this engine keeps is a commit,
+   and a checkout with no identity fails every one of them, so a cycle that cannot answer does
+   **nothing at all** and says which two commands fix it (7). And **can this box launch `pi`?**
+   `PI_PATH` is resolved (not spawned - the engine never runs a coding agent itself); when it is
+   unset, unparseable or names a file a pi upgrade moved, the cycle holds with one named line rather
+   than turning every ready card into a blocked one (7).
 1. **Be on the working line** (4). One `rev-parse` in the normal case; a cycle that cannot get onto
    `integration` does **nothing else at all**, because every commit below belongs on that branch and
    nowhere else.
@@ -216,9 +229,21 @@ For each such card, in order, in the loop thread:
    exit from the gate, green or red - because a repair dispatch for a blocked card rejoins that same
    worktree and both `worktrees.ensure_run_worktree` and step 1's own guard refuse a detached tree. A
    checkout that will not go back is named loudly with the one command that fixes it; nothing here
-   ever forces it. Then the card moves to `queue/done/` (`git mv`, then a path-scoped commit
-   `factory: <card> integrated`). Parking is not bookkeeping: `dispatch.needs_satisfied` is a
-   `queue/done/` existence check, so this is the event that lets the next card in a wave start.
+   ever forces it. Then the card is **staged** (`git add -- <card>`) and moved to `queue/done/`
+   (`git mv`, then a path-scoped commit `factory: <card> integrated`). Parking is not bookkeeping:
+   `dispatch.needs_satisfied` is a `queue/done/` existence check, so this is the event that lets the
+   next card in a wave start.
+
+   **The `git add` is the fix, not a flourish.** `git mv` refuses a path that is not in the index -
+   *"fatal: not under version control"* - and a card reaches `done` untracked whenever it got there
+   without the engine's own claim commit: a hand-written card dispatched with `just work` is a
+   documented first-class flow, and dispatch does no git at all. The park then failed **every cycle,
+   forever**, on work that was already merged; the adopt sweep could not rescue it either, because
+   `git diff HEAD -- queue` is blind to untracked files, so the card sat at `done` in `queue/` and
+   every card naming it in `Needs:` waited on a park that could not happen. The commit's pathspec
+   follows from the same fact: the card's OLD path is named only when `HEAD` actually carries it
+   (that is what records the deletion), because a path-scoped commit refuses a pathspec git has never
+   seen.
 
 **One at a time.** Two sibling branches cut from the same commit both fast-forward - the second
 after being replayed on top of the first. That is exactly the case that used to make the second
@@ -242,7 +267,9 @@ merge because there is nothing left to merge.
 
 (A card whose park itself failed is retried the same way: it is still at `done` on disk, so the next
 cycle picks it up, rebases a fresh copy - git drops the commits it already applied - re-runs the
-suite, fast-forwards to the same tip and parks it. Slower than it needs to be, and correct.)
+suite, fast-forwards to the same tip and parks it. Slower than it needs to be, and correct - which
+it only became once the park stopped refusing untracked cards outright, above. A retry that cannot
+converge is not a retry.)
 
 ### 5.1 Where the checks live (the ladder)
 
@@ -331,7 +358,7 @@ Slot counts come from three places, each one overriding the one before it:
 |---|---|
 | the default | `2` for every lane the roster uses - its own `provider/model` strings, plus every lane its builder pool names (5.4) |
 | the roster's own `lanes:` block | `lanes: { xai: { slots: 2 } }` - an optional top-level block the roster UI writes; **replaces** the default for the lanes it names |
-| `--lanes` / `$SSSF_LANES` | replaces both. Ops keeps the last word: a systemd `Environment=` line must be able to narrow a lane without editing a file the laptop owns |
+| `--lanes` / `$SSSF_LANES` | replaces both. Ops keeps the last word: the server must be able to narrow a lane without editing a file the laptop owns, which is what `$SSSF_LANES` in its `.env` or a systemd drop-in is for (10) |
 
 An entry naming a lane nothing in the roster uses is logged and ignored, from *either* source. A
 malformed `lanes:` entry (not `<lane>: {slots: N}`, or `N < 1`) is named in one line and skipped, and
@@ -339,6 +366,28 @@ that lane keeps its default - a service must not die of one bad line in a roster
 what keeps a lane from silently running at a count the operator did not write. `--lanes` is stricter
 and still refuses its own malformed value **at startup** (it is one invocation's argument, not a file
 the factory has to keep running on).
+
+**The roster is re-read every cycle, and no restart is required.** `lanes:` and
+`router.builder_pool` (5.4) used to be read once, on the first cycle, and then frozen for the life of
+the service - while `derive_config` re-read the same file per dispatch, so an agent or model edit
+applied at once and a slots or pool edit did not. Half a roster is worse than either half. The roster
+UI (`apps/ui/server/app/roster.ts`, `POST /config/router` and `/config/lanes`) writes exactly those
+two blocks expecting effect, and the designed transport - the laptop pushes, the engine's own pull
+delivers - hands the service an edited file mid-run with nothing restarting anything (`bootstrap.sh`
+only `try-restart`s when the unit FILE changed). So `resolve_lanes` runs at the top of every cycle
+and compares the roster's bytes against the ones the current state was resolved from:
+
+- **unchanged** - nothing is re-parsed and nothing is logged. This is the normal case and it costs
+  one small read.
+- **changed** - the lanes, the slots and the pool are all re-derived, and the shape line, the router
+  line and any "skipping a malformed entry" line are logged again. That log is also the operator's
+  confirmation that the edit they made in the app reached the server.
+- **unreadable** - one line, said once, and the LAST GOOD lanes are kept rather than dropping to
+  unenforced. A roster that stops parsing is not a reason to widen every lane.
+
+`--lanes` / `$SSSF_LANES` are re-applied on top of each re-read, so ops still keeps the last word.
+Which cards are already running is untouched by any of it: a live child keeps occupying the lanes
+its own roster drew on until it is reaped.
 
 ### 5.4 The router: which model a run's builder gets
 
@@ -418,9 +467,11 @@ factory today - means the card is dispatched with the operator's own roster path
 roster's own lanes, with no derived file and no extra log line: byte-for-byte the behaviour the
 engine had before the router existed.
 
-Both blocks are read **directly** from the yaml, like the lanes above and for the same reason. They
-are also optional and unknown to `agents.load_config`, which ignores unknown top-level keys - verified
-before this landed - so the same file is a valid roster for dispatch, the ADWs and the roster UI.
+Both blocks are read **directly** from the yaml, like the lanes above and for the same reason, and
+both are re-read on every cycle whose roster bytes changed (5.3) - a pool the operator adds a model
+to from the app routes the next card, with no redeploy and no restart. They are also optional and
+unknown to `agents.load_config`, which ignores unknown top-level keys - verified before this landed -
+so the same file is a valid roster for dispatch, the ADWs and the roster UI.
 
 ## 6. The status / commit protocol
 
@@ -462,6 +513,7 @@ Nothing here is fatal. The engine's contract is that a bad cycle costs one cycle
 | Situation | What happens |
 |---|---|
 | **git cannot name a committer** (a fresh container/VPS: no `~/.gitconfig` for the service user, no repo-local identity) | One **loud** line naming the exact two `git config` commands that fix it, said once until it changes; the cycle does nothing else. Asked with `git var GIT_COMMITTER_IDENT` - git's own resolution, the same one `git commit` does - once per **cycle**, not once at startup, so an operator who fixes it is picked up on the next turn with no restart. Without this the engine logged `commit failed, will retry next cycle` once a minute forever while `systemctl is-active` reported `active`. The installer writes that identity itself when it converges the service (10). |
+| **`PI_PATH` does not resolve** (never set, an unbalanced quote, or a pi upgrade that moved `dist/cli.js`) | One line naming it - `PI IS NOT LAUNCHABLE: ...` with the repair instructions in it - said once until it changes; the cycle does nothing else and re-checks on the next one, so a fix needs no restart. Every run this engine starts ends in `pi`, so dispatching now would only turn one ready card per cycle into a blocked one a human has to repair. **It is never fatal and never an import error.** `agent_pi` used to resolve `PI_PATH` at module import, and `engine.py` imports it transitively, so a moved binary killed `uv run adws/engine.py` before `argparse` ran - a raw traceback every ten seconds under `Restart=always`, for a process that never spawns pi itself. `agent_pi.pi_cmd()` resolves at the call now. |
 | **Cannot get onto `integration`** | One line, said once until the reason changes; the cycle does nothing else. Every commit the engine makes belongs on that branch. |
 | **Pull fails** (no network, hub down) | One line naming git's own reason; the cycle stops before integrating or dispatching - but only after the reap, the adopt and the push have already run, so the state that would keep it failing is cleared first. |
 | **Pull cannot fast-forward** (both boxes moved the working line) | Not a standoff, and not rare: integration is the LIVING line, so the engine commits to it on every card transition and one failed push plus one `queue-publish` produces it with no conflicting edit anywhere. The engine replays its own unpushed card commits on top of `origin/integration` (`git pull --rebase`) and carries on. **Never `--force`.** |
@@ -488,14 +540,15 @@ definition, and a single non-ASCII glyph reaching a cp1252 stdout takes the whol
 | Flag | Default | What |
 |---|---|---|
 | `--interval` | `60` | seconds between cycles |
-| `--cap` | `2` | how many ADWs may run at once. Must be >= 1. |
+| `--cap` | `$SSSF_CAP`, else `2` | how many ADWs may run at once. Must be >= 1. The environment is how a server sets it: `ExecStart` is fixed at `uv run adws/engine.py` and both converge paths would park an edit to it (10). |
 | `--lanes` | `$SSSF_LANES`, else 2 slots per roster lane | per-lane slot overrides, `"xai=2,opencode-go=1"` (5.3) |
 | `--once` | off | run exactly one cycle, then exit - for tests, and for looking before leaving it running. Does **not** wait for the runs it starts; they integrate on the next invocation, off the queue on disk (1). |
 | `--config` | `$SSSF_CONFIG`, else `adws/adw_sssf_config/sssf.config.yaml` | passed through to every dispatch (or, with a builder pool, that run's derived copy of it - 5.4), the roster whose lanes and slots are enforced, and the roster whose `worktrees.enabled` must be true (1). The fallback is the **test lane** - the `up:` line logs whichever one is in force. |
 | `--queue-dir` | `<repo root>/queue` | test override, mirroring `dispatch.py`. `Needs:` resolution always uses `<repo root>/queue` (dispatch's own contract). |
 
 `$SSSF_INTEGRATION_BRANCH` (2) is read from the environment only - there is no flag, because it is a
-property of the factory, not of one invocation. `main` is refused outright.
+property of the factory, not of one invocation. `main` is refused outright. Section 10 names the two
+supported ways any of these variables reaches the service on a server.
 
 ## 9. What it deliberately does not do
 
@@ -577,8 +630,25 @@ Requirements the installer must satisfy for that unit to work:
   it. Hand-editing `ExecStart` is not supported: `detect_engine_service` compares the unit against
   `render_engine_unit` byte for byte and would park the edit. The engine also logs the roster it
   got on its `up:` line, so `journalctl` always names what the server is shipping on.
-  `SSSF_LANES` and `SSSF_INTEGRATION_BRANCH` ride the same way, as further `Environment=` lines,
-  when the operator wants something other than the defaults.
+- **`SSSF_CONFIG` is the only `Environment=` line the unit carries, and hand-adding another does
+  not survive.** Both converge paths render the unit above byte for byte -
+  `installer/steps.py`'s `render_engine_unit`, and `bootstrap.sh`, which overwrites any unit whose
+  bytes differ on every deploy - so an `Environment=SSSF_LANES=...` typed into
+  `/etc/systemd/system/sdl-engine.service` is erased by the next converge, exactly as a hand-edited
+  `ExecStart` is. The engine's other three environment inputs reach it two supported ways instead:
+
+  | Channel | What it is | When to use it |
+  |---|---|---|
+  | the checkout's `.env` | `adw_modules/utils` calls `load_dotenv()` at import, so `engine.py` reads `.env` from `WorkingDirectory` exactly as every ADW does - the same channel the provider keys already arrive on. `override=False`, so a real environment variable still wins. | the normal one: it is a file in the repo the operator already edits, and it needs no root |
+  | a systemd drop-in | `/etc/systemd/system/sdl-engine.service.d/*.conf` with an `[Service]` + `Environment=` line. Neither writer reads or writes the `.d/` directory, so a drop-in is not drift and is not parked. | ops-owned settings that must not live in the checkout |
+
+  | Variable | What it sets | Default |
+  |---|---|---|
+  | `SSSF_LANES` | per-lane slot overrides, `"xai=2,opencode-go=1"` (5.3) | 2 slots per roster lane |
+  | `SSSF_CAP` | total parallelism - the `--cap` flag's default, and the only knob for it on a server, since `ExecStart` is fixed at `uv run adws/engine.py` | `2` |
+  | `SSSF_INTEGRATION_BRANCH` | the factory's working line (2) | `integration` |
+
+  A flag on the command line still beats all of them; that is what `just engine --cap 4` is.
 - `.env` reaches the ADWs through `uv run`/`dotenv` exactly as it does under `just`; the unit does
   not need to duplicate provider keys.
 - `Restart=always` is the whole crash policy. The engine already survives its own bad cycles (7), so
@@ -649,3 +719,15 @@ derived file at all. On the installer side (`installer/tests/test_steps.py`):
 a host with no identity getting a repo-local one, an existing identity never being overwritten, a
 failed write being named rather than swallowed, and the dry run probing read-only and writing
 nothing.
+
+Added with the second defect pass: a card that was **never git-added** being merged and parked
+anyway (the `just work` flow, with the checkout left clean and the card never coming back round);
+the roster being **re-read when its bytes change** under a running engine - silent when they have
+not, the new pool and slots in force when they have (5.3); a **`PI_PATH` that does not resolve**
+holding the cycle with one named line said once, and the very next cycle dispatching normally once
+it is repaired, with no restart; and **`$SSSF_CAP`** setting the cap with the flag still beating it
+and a non-numeric value refused at startup. The suite also pins `PI_PATH` itself now (an autouse
+fixture), so it is hermetic against the operator's own `.env` rather than passing because of it. On
+the run side (`adws/tests/test_agents_config.py`): `$SSSF_INTEGRATION_BRANCH` reaching
+`worktrees.trunk` through `agents.load_config`, including a roster with no `worktrees:` block at
+all, and an unset or empty variable leaving the roster's own trunk alone.

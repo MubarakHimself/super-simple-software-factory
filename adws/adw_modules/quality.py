@@ -29,8 +29,11 @@ from pathlib import Path
 from . import git_helper
 from .data_types import (
     EventRecord,
+    QualityArea,
     QualityCheckResult,
     QualityCheckSpec,
+    QualityConfig,
+    QualityOperation,
     QualityResult,
     QualityStatus,
     VerifyOutput,
@@ -54,6 +57,11 @@ TAIL_CHARS = 4_000
 # operator's shell or the `uv run` that launched the ADW could otherwise
 # silently redirect. Both are made fully explicit — nothing ambient, nothing
 # inferred (spec section 6).
+#
+# These two are what `{dev}` and `{scan}` expand to in a `quality:` template
+# (see `resolve_command`, which is now what every block below goes through).
+# Kept as named helpers because they are the definition of the prefix and
+# because callers outside this module read them.
 def _dev(run) -> list[str]:
     return ["uv", "run", "--project", str(run.repo_root), "--group", "dev"]
 
@@ -64,6 +72,65 @@ def _dev(run) -> list[str]:
 # down with it on every `uv sync`.
 def _scan(run) -> list[str]:
     return ["uv", "run", "--project", str(run.repo_root), "--group", "scan"]
+
+
+def resolve_command(template: str, repo_root: Path | str) -> list[str]:
+    """A `quality:` template string -> the argv to run in `repo_root`.
+
+    Split with `shlex` FIRST, then expanded token by token, so `{dev}` and
+    `{scan}` become several arguments each and no path a placeholder expands
+    to is ever re-parsed as shell text (a Windows tree path is full of
+    backslashes; string-substituting it before splitting would eat them).
+
+    An empty (or whitespace-only) template returns `[]` — "this project has
+    decided not to run this check", which every caller treats as skip-and-say-
+    so rather than as a command that passed.
+    """
+    dev = ["uv", "run", "--project", str(repo_root), "--group", "dev"]
+    scan = ["uv", "run", "--project", str(repo_root), "--group", "scan"]
+    argv: list[str] = []
+    for token in shlex.split(template.strip(), posix=True):
+        if token == "{dev}":
+            argv.extend(dev)
+        elif token == "{scan}":
+            argv.extend(scan)
+        else:
+            argv.append(token)
+    return argv
+
+
+def quality_config(run) -> QualityConfig:
+    """This run's `quality:` block, with the factory's own defaults when the
+    roster names none — which is every roster written before the block existed,
+    so nothing that worked yesterday changes shape today."""
+    return getattr(getattr(run, "cfg", None), "quality", None) or QualityConfig()
+
+
+def _configured(run, name: str) -> list[str]:
+    return resolve_command(getattr(quality_config(run), name), run.repo_root)
+
+
+def _skipped(name: str, area: QualityArea, operation: QualityOperation) -> QualityCheckResult:
+    """The record left when a project has emptied a check out of its roster.
+
+    `status="incomplete"`, never `pass`: nothing was verified, and the run must
+    not be able to call itself green on the strength of a check nobody ran.
+    `incomplete` is already the state that stays out of the builder's repair
+    spec (there is no code defect here) while still keeping `QualityResult.passed`
+    False — exactly the honest shape this needs.
+    """
+    return QualityCheckResult(
+        name=name,
+        area=area,
+        operation=operation,
+        command="(none - this project's roster sets quality." + name + " to an empty string)",
+        returncode=0,
+        status="incomplete",
+        passed=False,
+        duration_seconds=0.0,
+        output_artifact="",
+        output_tail=f"quality.{name} is empty in this project's sssf.config.yaml, so nothing was run for it.",
+    )
 
 
 def _check_dir(run, name: str) -> Path:
@@ -228,34 +295,50 @@ def _run(spec: QualityCheckSpec, run,
 # ── Blocks ────────────────────────────────────────────────────────────────────
 
 def test(run) -> QualityCheckResult:
-    """Run the suite. The highest-value block — and the reason adws/tests/ has
-    to have real tests in it: pytest exits 5 when it collects nothing, which
-    `_run` reads as a failure forever, so a wired test block pointed at an
-    empty directory is worse than no block at all."""
+    """Run the suite — WHICHEVER suite this project's roster names.
+
+    The default is the factory's own (`{dev} pytest -q adws/tests`), which is
+    correct in the repo that IS the factory and wrong in a repo the factory was
+    stamped into: there, the project's own tests are the ones that matter and
+    `quality.test` in its sssf.config.yaml is where it says so.
+
+    The reason a test block still has to point at something real: pytest exits
+    5 when it collects nothing, which `_run` reads as a failure forever, so a
+    wired test block aimed at an empty directory is worse than no block at all.
+    """
+    argv = _configured(run, "test")
+    if not argv:
+        return _skipped("test", "repo", "test")
     return _run(QualityCheckSpec(
         name="test",
         area="repo",
         operation="test",
-        argv=[*_dev(run), "pytest", "-q", "adws/tests"],
+        argv=argv,
         timeout_seconds=600,
     ), run)
 
 
 def lint(run) -> QualityCheckResult:
+    argv = _configured(run, "lint")
+    if not argv:
+        return _skipped("lint", "repo", "lint")
     return _run(QualityCheckSpec(
         name="lint",
         area="repo",
         operation="lint",
-        argv=[*_dev(run), "ruff", "check", "."],
+        argv=argv,
     ), run)
 
 
 def typecheck(run) -> QualityCheckResult:
+    argv = _configured(run, "typecheck")
+    if not argv:
+        return _skipped("typecheck", "repo", "typecheck")
     return _run(QualityCheckSpec(
         name="typecheck",
         area="repo",
         operation="typecheck",
-        argv=[*_dev(run), "mypy", "adws"],
+        argv=argv,
     ), run)
 
 
@@ -290,7 +373,9 @@ def ai_defects(run, trunk: str | None = None) -> QualityCheckResult:
     excluded from `run_quality`'s builder-facing `failures` (see there for
     why: a missing MSVC toolchain is not something a repair loop can fix).
     """
-    argv = [*_scan(run), "skylos", ".", "--ai-defects", "--format", "concise"]
+    argv = _configured(run, "scan")
+    if not argv:
+        return _skipped("ai_defects", "repo", "scan")
     try:
         base = git_helper.merge_base(trunk or git_helper.factory_trunk(), tree=run.repo_root)
     except (RuntimeError, OSError):
@@ -315,11 +400,18 @@ def run_tests(run) -> QualityResult:
     still reaches the builder through `as_envelope` below.
     """
     check = test(run)
-    failures = ([] if check.passed else
-                [f"{check.name}: `{check.command}` exited {check.returncode}\n"
-                 f"{check.output_tail}".rstrip()])
+    # Keyed on STATUS, not on `passed`, for the same reason `run_quality` is: a
+    # check that never ran (a project that emptied `quality.test` in its roster,
+    # a tool that would not provision) is not a code defect, and handing the
+    # builder "fix every failure below" against one burns a repair round on
+    # nothing. It still keeps `passed` False, so no caller can merge on it.
+    failures = ([f"{check.name}: `{check.command}` exited {check.returncode}\n"
+                 f"{check.output_tail}".rstrip()] if check.status == "fail" else [])
+    incomplete = ([f"{check.name}: `{check.command}` - not evaluated\n"
+                   f"{check.output_tail}".rstrip()] if check.status == "incomplete" else [])
     return QualityResult(passed=check.passed, checks=[check], failures=failures,
-                         artifacts=[check.output_artifact])
+                         incomplete=incomplete,
+                         artifacts=[check.output_artifact] if check.output_artifact else [])
 
 
 def as_envelope(result: QualityResult, what: str) -> VerifyOutput:
@@ -411,5 +503,7 @@ def run_quality(run) -> QualityResult:
         checks=checks,
         failures=failures,
         incomplete=incomplete,
-        artifacts=[check.output_artifact for check in checks],
+        # A skipped check leaves no artifact; an empty path in this list would
+        # travel to an agent as a file it could try to open.
+        artifacts=[check.output_artifact for check in checks if check.output_artifact],
     )
