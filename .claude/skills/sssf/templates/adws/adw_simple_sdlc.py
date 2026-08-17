@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> planner -> git(commit_plan)
+Phases: engineer(request) -> git(worktree) -> planner -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
@@ -38,16 +38,23 @@ and the unfinished code stays where the engineer can see it.
 
 The documenter measures against the commit this run STARTED from, not against
 `main`, because by then the run has moved `main` itself. That baseline is
-pinned before the first commit phase and printed in the request phase.
+pinned right after the worktree phase — `tree=run.repo_root`, so it is the
+run's own starting commit, not the main checkout's — and logged there.
 """
 
 import argparse
 import sys
 
 from adw_modules import agents, changes, gates, git_helper, quality, session, utils
-from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
-                                    DocumentOutput, PhaseParams, PlanOutput,
-                                    ReviewOutput)
+from adw_modules.data_types import (
+    AgentCall,
+    BuildOutput,
+    ChangeCapture,
+    DocumentOutput,
+    PhaseParams,
+    PlanOutput,
+    ReviewOutput,
+)
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
@@ -62,12 +69,11 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev("HEAD")     # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words."""
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        ph.log(sha=git_helper.commit_all(message, tree=run.repo_root), message=message)
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -77,7 +83,16 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
-        ph.log(input=prompt, baseline=git_helper.short_sha(baseline))
+        ph.log(input=prompt)
+
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
+        # Pinned here, not before any phase: this is the run's OWN starting
+        # commit (tree=run.repo_root, the worktree once one is cut), not the
+        # main checkout's HEAD — the documenter measures against it later.
+        baseline = git_helper.rev("HEAD", tree=run.repo_root)
+        ph.log(baseline=git_helper.short_sha(baseline, tree=run.repo_root))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
@@ -96,7 +111,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs "
+                                   description="Run the suite - a known command, so code runs "
                                                "it and no agent has to rediscover it")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
@@ -132,7 +147,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     # stale. Re-run it rather than commit on a result that predates the change.
     if revised and review is not None and review.approved:
         with run.phase(PhaseParams(name="retest", kind="code", owner="quality",
-                                   description="Re-run the suite — the revision changed code "
+                                   description="Re-run the suite - the revision changed code "
                                                "after the last green result")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
@@ -158,12 +173,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             if changeset.empty:
                 raise RuntimeError(
                     f"nothing changed since {changeset.base.label} "
-                    f"({changeset.base.reason}) — there is nothing to document.")
+                    f"({changeset.base.reason}) - there is nothing to document.")
 
         with run.phase(PhaseParams(name="document", kind="agent", owner="documenter", retries=1,
                                    description="Write up the completed change")) as ph:
             document = ph.call(AgentCall(output_type=DocumentOutput, prompt=prompt,
-                                         previous=changes.as_envelope(changeset, DOCUMENT_NOTES),
+                                         previous=changes.as_envelope(changeset, DOCUMENT_NOTES, tree=run.repo_root),
                                          gates=[gates.artifacts_exist, gates.files_non_empty]))
 
         with run.phase(PhaseParams(name="commit_docs", kind="code", owner="git",

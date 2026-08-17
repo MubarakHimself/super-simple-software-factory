@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_plan_build_test_quality.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> planner -> builder -> [code(verify) -> code(test) -> builder(fix)] bounded -> git(commit)
+Phases: engineer(request) -> git(worktree) -> planner -> builder -> [code(verify) -> code(test) -> builder(fix)] bounded -> git(commit)
 
 Verify and test are CODE, not agents. Their commands are known, so running them
 needs no judgement — only repairing them does. A failing block does not fail its
@@ -35,6 +35,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
+
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
         plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
@@ -54,7 +58,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     quality_result = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"verify_{i}", kind="code", owner="quality",
-                                   description="Lint, typecheck, and build before testing")) as ph:
+                                   description="Lint, typecheck, scan, and test before commit")) as ph:
             quality_result = quality.run_quality(run)
             record(ph, quality_result)
 
@@ -62,19 +66,23 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         # in their own phase can split them out the way this comment does.
         test_result = quality_result
 
-        if quality_result.passed and test_result.passed:
+        # Stop as soon as nothing GENUINE remains to fix. `.failures` excludes
+        # tool-unavailable blocks (e.g. skylos with no MSVC on Windows) on
+        # purpose — see quality.run_quality — so an incomplete-only result
+        # also breaks here rather than burning a builder turn it cannot use.
+        # `verified` below still gates the commit on the strict `.passed`, so
+        # an incomplete run is never accepted; it just is not looped forever.
+        if not quality_result.failures:
             break
         if i == MAX_FIX_LOOPS:
             break
 
-        # Whichever block failed becomes the builder's spec — verbatim command
+        # The failing block becomes the builder's spec — verbatim command
         # output, no parser standing between the failure and the fix.
-        broken = quality_result if not quality_result.passed else test_result
-        what = "verification" if not quality_result.passed else "tests"
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
-                                   description=f"Resolve the reported {what} failures")) as ph:
+                                   description="Resolve the reported verification failures")) as ph:
             previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                         previous=quality.as_envelope(broken, what),
+                                         previous=quality.as_envelope(quality_result, "verification"),
                                          gates=[gates.diff_matches_claims]))
 
     verified = (quality_result is not None and quality_result.passed
@@ -83,7 +91,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Commit the tested and quality-verified working tree")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"
-            ph.log(sha=git_helper.commit_all(message), message=message)
+            ph.log(sha=git_helper.commit_all(message, tree=run.repo_root), message=message)
 
     return run.finish(accepted=verified,
                       reason=f"verify/test never came back clean after {MAX_FIX_LOOPS} fix attempt(s)")

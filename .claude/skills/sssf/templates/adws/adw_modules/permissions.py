@@ -35,7 +35,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .data_types import AgentConfig, SSSFConfig
+from .data_types import AgentConfig, EventRecord, SSSFConfig
 
 
 class PermissionBreach(RuntimeError):
@@ -43,12 +43,13 @@ class PermissionBreach(RuntimeError):
 
 
 def _git(args: list[str], cwd) -> str:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                            encoding="utf-8")
     return result.stdout if result.returncode == 0 else ""
 
 
-def snapshot(run) -> dict[str, str]:
-    """Fingerprint every path the working tree currently differs on.
+def _snapshot_tree(cwd) -> dict[str, str]:
+    """Fingerprint every path `cwd`'s working tree currently differs on.
 
     Tracked files carry their numstat counts, so an edit to an already-dirty
     file still registers as a change. Untracked files are listed by name.
@@ -56,16 +57,28 @@ def snapshot(run) -> dict[str, str]:
     `data_dir` — where handoff files legitimately land — needs no special case.
     """
     fingerprints: dict[str, str] = {}
-    for line in _git(["diff", "HEAD", "--numstat"], run.repo_root).splitlines():
+    for line in _git(["diff", "HEAD", "--numstat"], cwd).splitlines():
         fields = line.split("\t")
         if len(fields) >= 3:
             path = fields[-1].strip()
             fingerprints[path] = f"{fields[0]},{fields[1]}"
-    for path in _git(["ls-files", "--others", "--exclude-standard"],
-                     run.repo_root).splitlines():
+    for path in _git(["ls-files", "--others", "--exclude-standard"], cwd).splitlines():
         if path.strip():
             fingerprints[path.strip()] = "untracked"
     return fingerprints
+
+
+def snapshot(run) -> dict[str, str]:
+    """Fingerprint the RUN's own tree — `run.repo_root`, the worktree once
+    one has been entered."""
+    return _snapshot_tree(run.repo_root)
+
+
+def snapshot_main(run) -> dict[str, str]:
+    """Fingerprint the MAIN CHECKOUT — always `run.main_root`, regardless of
+    where the run's own tree has moved to. The other half of the tripwire's
+    diff (5.5)."""
+    return _snapshot_tree(run.main_root)
 
 
 def changed_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
@@ -156,8 +169,53 @@ def _roll_back(run, path: str, before: dict[str, str], after: dict[str, str]) ->
         except OSError as error:
             return f"could not delete ({error})"
     result = subprocess.run(["git", "checkout", "--", path],
-                            cwd=run.repo_root, capture_output=True, text=True)
+                            cwd=run.repo_root, capture_output=True, text=True,
+                            encoding="utf-8")
     return "rolled back" if result.returncode == 0 else "could not roll back"
+
+
+def _check_main_checkout(run) -> list[str]:
+    """The tripwire (5.5): the enforcement window narrows to the run's own
+    tree the moment a worktree exists, so an agent using `bash` with an
+    absolute path into the main checkout would otherwise be invisible to
+    `enforce()` below. The baseline is seeded by `Run.enter_worktree()` —
+    BEFORE any agent runs, not lazily here — so this compares `run.main_root`
+    against a snapshot that predates the first agent phase, not one taken
+    after it. A changed path matching `protected_files` raises the SAME
+    `PermissionBreach` a same-tree breach would (MAP rule 13 — the factory's
+    own machinery must not change under a running ADW); anything else is
+    returned for the caller to log as non-fatal drift — the operator editing
+    `apps/ui` or `docs/` in the main checkout while a run is in flight is
+    normal life on this laptop and must not abort an overnight run.
+
+    No-op when the run has no worktree (`repo_root == main_root`): `enforce`'s
+    own same-tree check already covers that directory in full, and snapshotting
+    it a second time would just re-report the same permitted changes as drift.
+    """
+    if str(run.repo_root) == str(run.main_root):
+        return []
+    before = run._main_checkout_snapshot
+    after = snapshot_main(run)
+    run._main_checkout_snapshot = after
+    if before is None:
+        # Unreachable in normal operation: `enter_worktree()` seeds the
+        # baseline before the first agent phase runs, and the guard above
+        # already returns early for any run that has not entered a worktree
+        # (repo_root == main_root). Kept as a defensive no-op rather than an
+        # AttributeError if a future call path ever reaches here first.
+        return []
+    touched = changed_paths(before, after)
+    if not touched:
+        return []
+    protected = run.cfg.defaults.protected_files
+    breaches = [p for p in touched if any(_matches(p, pattern) for pattern in protected)]
+    if breaches:
+        raise PermissionBreach(
+            f"the main checkout ({run.main_root}) changed during this run and touched "
+            f"protected path(s): {breaches} - the factory's own machinery must not "
+            f"change under a running ADW (MAP rule 13). This did not come through the "
+            f"run's own tree ({run.repo_root}); something wrote there directly.")
+    return touched
 
 
 def enforce(run, phase, agent: AgentConfig, before: dict[str, str]) -> list[str]:
@@ -173,6 +231,14 @@ def enforce(run, phase, agent: AgentConfig, before: dict[str, str]) -> list[str]
     after = snapshot(run)
     touched = changed_paths(before, after)
     breaches = [p for p in touched if not permitted(p, agent, run.cfg)]
+
+    drift = _check_main_checkout(run)               # may itself raise PermissionBreach
+    if drift:
+        run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                     type="log", name="main_checkout_drift",
+                                     payload={"agent": agent.name, "paths": drift,
+                                              "main_root": str(run.main_root)}))
+
     if not breaches:
         return touched
 
@@ -180,6 +246,6 @@ def enforce(run, phase, agent: AgentConfig, before: dict[str, str]) -> list[str]
     scope = ("read-only" if agent.writes == []
              else f"limited to {agent.writes}" if agent.writes
              else f"barred from {run.cfg.defaults.protected_files}")
-    detail = "\n".join(f"  - {p} — {outcome}" for p, outcome in outcomes.items())
+    detail = "\n".join(f"  - {p} - {outcome}" for p, outcome in outcomes.items())
     raise PermissionBreach(
         f"{agent.name} is {scope} but modified {len(breaches)} path(s):\n{detail}")

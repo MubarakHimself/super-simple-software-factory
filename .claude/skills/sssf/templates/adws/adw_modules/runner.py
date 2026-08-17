@@ -13,14 +13,14 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import agents, git_helper
+from . import agents, git_helper, permissions, worktrees
 from .console import Console
-from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
+from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams, RunWorktree
 from .utils import ensure_dir, now_iso
 
 
 class PhaseHandle:
-    def __init__(self, run: "Run", phase: Phase):
+    def __init__(self, run: Run, phase: Phase):
         self.run = run
         self.phase = phase
 
@@ -40,7 +40,8 @@ class PhaseHandle:
 
 
 class Run:
-    def __init__(self, cfg, adw_id: str, tracer, engineer: str):
+    def __init__(self, cfg, adw_id: str, tracer, engineer: str,
+                main_root: Path, data_dir: Path):
         self.cfg = cfg
         self.adw_id = adw_id
         self.tracer = tracer
@@ -50,17 +51,79 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        # main_root is IMMUTABLE — the operator's own checkout, always on trunk
+        # (spec invariant 1). repo_root is where THIS run's agents work: the
+        # main checkout until enter_worktree() rebinds it to the run's own
+        # tree. The four read-only ADWs never call enter_worktree, so for them
+        # repo_root == main_root for the run's entire life — unchanged
+        # behaviour, byte for byte.
+        self.main_root = main_root
+        self.repo_root = main_root
+        self.worktree: RunWorktree | None = None
+        self._main_checkout_snapshot: dict[str, str] | None = None  # permissions tripwire (5.5)
+        self.session_dir = ensure_dir(data_dir / "sessions" / adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
-        self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
+        self.agent_map: dict = (json.loads(self._agent_map_path.read_text(encoding="utf-8"))
                                 if self._agent_map_path.exists() else {})
+
+    # ── worktrees (spec section 4/5) ─────────────────────────────────────────
+    def enter_worktree(self, prompt: str) -> dict:
+        """Cut or join this run's branch AND its own working tree, then rebind
+        `repo_root` to it. The only new call site an ADW needs — the
+        `worktree` phase that replaces today's `branch` phase (4.2).
+
+        `worktrees.enabled: false` keeps the pre-worktree behaviour: a branch
+        cut in the main checkout, repo_root left pointing at main_root.
+
+        Also arms the main-checkout tripwire (5.5): the baseline snapshot is
+        taken HERE, before any agent runs, not lazily on the first call to
+        `permissions.enforce()`. Seeding it there would make the tripwire
+        blind for the first agent phase of every writing ADW (the "before"
+        snapshot would be taken only AFTER that phase had already run) and
+        completely inert for a single-agent-phase ADW like `adw_build` or
+        `adw_document`, where that first call is also the only call.
+        """
+        wcfg = self.cfg.worktrees
+        if not wcfg.enabled:
+            existing = git_helper.find_run_branch(self.adw_id, tree=self.main_root)
+            branch = git_helper.ensure_run_branch(self.adw_id, prompt, tree=self.main_root)
+            rw = RunWorktree(branch=branch, path=str(self.main_root),
+                             reused=existing is not None, base="")
+        else:
+            rw = worktrees.ensure_run_worktree(self.main_root, self.adw_id, prompt, wcfg)
+        self.repo_root = Path(rw.path)
+        self.worktree = rw
+        self._main_checkout_snapshot = permissions.snapshot_main(self)
+        self._log_branch_and_title(rw, prompt)
+        return rw.model_dump()
+
+    def _log_branch_and_title(self, rw: RunWorktree, prompt: str) -> None:
+        """Trace-recording gap fix: the pre-worktree `branch` PHASE used to
+        `ph.log(branch=...)`, which stamped a `type=log, name=branch` event —
+        the morning-brief collector queries exactly that shape (`fetch_branch_event()`
+        in its `collect_runs.py`). Once branching moved inside the "worktree" phase,
+        `ph.log()` alone stamps `name="worktree"` instead (it always uses the
+        ENCLOSING phase's own name), so that query silently stopped matching
+        anything — the branch column read null forever, not because no branch
+        was cut, but because nothing was looking in the right place any more.
+
+        Written directly against the tracer, under the name every reader
+        already expects, regardless of which phase is open when
+        `enter_worktree` runs. The run's human title rides in the same
+        payload (MAP.md's worktree-naming ticket, "extend the same payload")
+        — one place a title is born, every other surface reads it back.
+        """
+        phase_id = self.phases[-1].phase_id if self.phases else ""
+        self.tracer.event(EventRecord(
+            adw_id=self.adw_id, phase_id=phase_id, type="log", name="branch",
+            payload={"branch": rw.branch, "path": rw.path,
+                     "title": git_helper.derive_title(prompt)}))
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:
         self.agent_map[agent] = entry
-        self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
+        self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2), encoding="utf-8")
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:
@@ -139,4 +202,41 @@ class Run:
             self.console.note(f"not accepted: {note}")
         self.tracer.session_finish(self.adw_id, ok=ok)
         self.console.session_finished(ok, self.tokens, self.cost, self.cfg.observability.db)
+        self._push_run_branch()
         return 0 if ok else 1
+
+    def _push_run_branch(self) -> None:
+        """The branch return (MAP.md two-box model): push this run's own
+        branch to origin here, at the one place every writing ADW's `main()`
+        calls exactly once — success or failure of the run itself, as long
+        as the branch actually holds commits (11: a run that leaves
+        artifacts must be visible; silence is the bug). The four read-only
+        ADWs never cut a branch (`self.worktree` stays None their whole
+        life), so this is a no-op for them.
+
+        Never raises: an unexpected error here (bad remote config, a git
+        version quirk) must never take down an otherwise-finished run — the
+        same guarantee `worktrees.push_run_branch` already gives for the
+        ordinary push-failure case, extended to cover the freak one too.
+        """
+        if self.worktree is None:
+            return
+        branch = self.worktree.branch
+        try:
+            status, detail = worktrees.push_run_branch(
+                self.main_root, branch, self.cfg.worktrees.trunk)
+        except (RuntimeError, OSError) as error:   # never crash a finished run over this
+            status, detail = "failed", str(error)
+
+        if status == "pushed":
+            self.console.note(f"pushed {branch} to origin")
+        elif status == "no-remote":
+            print(f"push skipped: no 'origin' remote configured - {branch} stays local")
+        elif status == "failed":
+            phase_id = self.phases[-1].phase_id if self.phases else ""
+            self.tracer.event(EventRecord(
+                adw_id=self.adw_id, phase_id=phase_id, type="error", name="push_branch",
+                payload={"branch": branch, "error": detail}))
+            print(f"PUSH FAILED: could not push {branch} to origin - {detail}")
+        # "no-commits": nothing to make visible - silent, the common case for
+        # a run that never got past its worktree phase.

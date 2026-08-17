@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_build_test.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
+Phases: engineer(request) -> git(worktree) -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
 
 Testing is CODE. The suite's command is written down in adw_modules/quality.py,
 so running it needs no judgement — only repairing it does. Failures reach the
@@ -43,15 +43,19 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
+
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the request")) as ph:
-        previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                     gates=[gates.diff_matches_claims]))
+        ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
+                          gates=[gates.diff_matches_claims]))
 
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(PhaseParams(name=f"test_{i}", kind="code", owner="quality",
-                                   description="Run the suite — a known command, so code runs "
+                                   description="Run the suite - a known command, so code runs "
                                                "it and no agent has to rediscover it")) as ph:
             test = quality.run_tests(run)
             record(ph, test)
@@ -62,9 +66,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
                                    description="Repair what the suite reported, from its "
                                                "verbatim output")) as ph:
-            previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                         previous=quality.as_envelope(test, "tests"),
-                                         gates=[gates.diff_matches_claims]))
+            ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
+                              previous=quality.as_envelope(test, "tests"),
+                              gates=[gates.diff_matches_claims]))
 
     return run.finish(accepted=test is not None and test.passed,
                       reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")

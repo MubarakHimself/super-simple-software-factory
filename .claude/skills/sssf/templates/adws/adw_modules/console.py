@@ -8,6 +8,8 @@ so a CI log reads exactly like a terminal.
 
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.panel import Panel
@@ -18,10 +20,26 @@ from .data_types import EnvelopeBase, EventRecord, Phase
 KIND_COLOR = {"engineer": "cyan", "agent": "magenta", "code": "yellow"}
 MAX_LINE = 160          # dynamic text (summaries, violations, errors) is clipped
 
+# cp1252 (Windows' default console codepage) killed 100% of headless runs the
+# moment a Rich-rendered line carried a glyph outside its charset. Two
+# independent guards, not one: every glyph below is plain ASCII so nothing WE
+# print depends on the console's encoding, and stdout is pinned to UTF-8 (with
+# a lossy fallback, never a crash) so Rich's own box-drawing characters
+# (Panel borders) survive too. Per-site pin — never relies on the justfile's
+# ambient PYTHONUTF8.
+try:
+    # typeshed's `TextIO` protocol does not declare `.reconfigure` even though
+    # every concrete text stream has carried it since Python 3.7 — a known
+    # typeshed gap, not a real type error, hence the narrow ignore rather than
+    # loosening anything else here.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+except (AttributeError, ValueError, OSError):
+    pass    # not a reconfigurable text stream (e.g. captured/piped oddly) — best effort
+
 
 def _clip(text: str, limit: int = MAX_LINE) -> str:
     text = " ".join(str(text).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 1] + "..."
 
 
 class Console:
@@ -55,7 +73,7 @@ class Console:
             return
         self._finished = True
         passed = sum(1 for r in self.results if r == "success")
-        status = "[green]✓ success[/green]" if ok else "[red]✗ fail[/red]"
+        status = "[green]+ success[/green]" if ok else "[red]x fail[/red]"
         rows = [f" [dim]status[/dim]   {status}",
                 f" [dim]phases[/dim]   {passed}/{len(self.results)} passed",
                 f" [dim]tokens[/dim]   {tokens:,}",
@@ -66,8 +84,8 @@ class Console:
         panel = Panel(Text.from_markup("\n".join(rows)),
                       title="[bold]ADW complete[/bold]",
                       border_style="green" if ok else "red", expand=False)
-        plain = (f"session {self.adw_id} {'success' if ok else 'fail'} · "
-                 f"{passed}/{len(self.results)} phases · {tokens:,} tokens · ${cost:.4f}")
+        plain = (f"session {self.adw_id} {'success' if ok else 'fail'} - "
+                 f"{passed}/{len(self.results)} phases - {tokens:,} tokens - ${cost:.4f}")
         self._emit(escape(plain), level="info" if ok else "error", renderable=panel)
 
     # ── phases ──────────────────────────────────────────────────────────────
@@ -75,8 +93,8 @@ class Console:
         self.phase_id, self.phase_name = phase.phase_id, phase.params.name
         p = phase.params
         color = KIND_COLOR.get(p.kind, "white")
-        line = (f"[bold {color}]▶ {phase.seq:02d} {escape(p.name)}[/bold {color}]"
-                f"  [{color}]{p.kind}[/{color}] [dim]· {escape(p.owner)}[/dim]")
+        line = (f"[bold {color}]> {phase.seq:02d} {escape(p.name)}[/bold {color}]"
+                f"  [{color}]{p.kind}[/{color}] [dim]- {escape(p.owner)}[/dim]")
         if p.description:
             line += f"  [dim]{escape(_clip(p.description))}[/dim]"
         self._emit(line)
@@ -84,7 +102,7 @@ class Console:
     def phase_ended(self, phase: Phase, seconds: float) -> None:
         ok = phase.status == "success"
         self.results.append(phase.status)
-        line = (f"  {'[green]✓[/green]' if ok else '[red]✗[/red]'} "
+        line = (f"  {'[green]+[/green]' if ok else '[red]x[/red]'} "
                 f"{escape(phase.params.name)} [dim]{seconds:.1f}s[/dim]")
         if not ok and phase.error:
             line += f"  [red]{escape(_clip(phase.error))}[/red]"
@@ -93,38 +111,38 @@ class Console:
 
     def note(self, message: str) -> None:
         """Free-form detail inside the current phase — what `ph.log()` recorded."""
-        self._emit(f"  [dim]· {escape(_clip(message))}[/dim]")
+        self._emit(f"  [dim]- {escape(_clip(message))}[/dim]")
 
     # ── agents ──────────────────────────────────────────────────────────────
     def agent_started(self, name: str, model: str, session_id: str) -> None:
-        self._emit(f"  [magenta]▸[/magenta] {escape(name)} [dim]{escape(model)}[/dim]"
+        self._emit(f"  [magenta]>[/magenta] {escape(name)} [dim]{escape(model)}[/dim]"
                    f"  [dim]session {escape(session_id)}[/dim]")
 
     def agent_finished(self, name: str, tokens: int, cost: float) -> None:
-        self._emit(f"  [dim]└ {escape(name)} used {tokens:,} tokens · ${cost:.4f}[/dim]")
+        self._emit(f"  [dim]- {escape(name)} used {tokens:,} tokens - ${cost:.4f}[/dim]")
 
     def retry(self, name: str, attempt: int, limit: int, reason: str) -> None:
-        self._emit(f"  [yellow]⟳[/yellow] {escape(name)} retry {attempt}/{limit} "
-                   f"[dim]— same session · {escape(_clip(reason))}[/dim]", level="warn")
+        self._emit(f"  [yellow]~[/yellow] {escape(name)} retry {attempt}/{limit} "
+                   f"[dim]- same session - {escape(_clip(reason))}[/dim]", level="warn")
 
     # ── verification ────────────────────────────────────────────────────────
     def gate_result(self, name: str, report) -> None:
         """A gate reports WHAT it checked, not just whether it passed."""
         ok = report.passed
-        mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        mark = "[green]+[/green]" if ok else "[red]x[/red]"
         summary = (f"{len(report.checks)} checked" if ok
                    else f"[red]{len(report.violations)} of {len(report.checks)} failed[/red]")
         self._emit(f"  {mark} gate [dim]{escape(name)}[/dim] [dim]{summary}[/dim]",
                    level="info" if ok else "error")
         for check in report.checks:
             style = "dim" if check.ok else "dim red"
-            detail = f" — {_clip(check.note)}" if check.note else ""
-            self._emit(f"    [{style}]{'·' if check.ok else '✗'} {escape(_clip(check.item))}"
+            detail = f" - {_clip(check.note)}" if check.note else ""
+            self._emit(f"    [{style}]{'-' if check.ok else 'x'} {escape(_clip(check.item))}"
                        f"{escape(detail)}[/{style}]", level="info" if check.ok else "error")
 
     def envelope_summary(self, envelope: EnvelopeBase) -> None:
         ok = envelope.status == "success"
-        line = (f"  {'[green]✓[/green]' if ok else '[red]✗[/red]'} "
+        line = (f"  {'[green]+[/green]' if ok else '[red]x[/red]'} "
                 f"{type(envelope).__name__} [dim]{escape(_clip(envelope.summary))}[/dim]")
         self._emit(line, level="info" if ok else "error")
         if envelope.artifacts:

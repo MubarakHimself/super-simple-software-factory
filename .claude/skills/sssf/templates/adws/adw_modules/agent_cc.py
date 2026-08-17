@@ -10,6 +10,6 @@ from __future__ import annotations
 
 def run(*args, **kwargs):
     raise NotImplementedError(
-        "coding_agent 'claude_code' is not implemented in v1 — SSSF v1 runs the "
+        "coding_agent 'claude_code' is not implemented in v1 - SSSF v1 runs the "
         "Pi coding agent only. Set coding_agent: pi (or omit it) in sssf.config.yaml."
     )

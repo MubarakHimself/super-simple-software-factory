@@ -36,6 +36,38 @@ observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# One worktree per concurrently running agent, created outside the repo by
+# the `worktree` phase every writing ADW opens with. `false` = pre-worktree
+# behaviour (branch cut in the main checkout) — a written decision for a box
+# that cannot support worktrees or a debugging session, never an accident.
+# This whole block is optional — these are the code defaults (data_types.py's
+# WorktreesConfig), written out so they are visible, not so they are required.
+worktrees:
+  enabled: true
+  root: ""                         # "" = <parent of repo>/<repo-name>-worktrees
+  trunk: integration                # what runs fork from and ff-merge into (main is human-owned)
+  stale_after_minutes: 30           # a 'running' session silent this long is stale on rejoin
+
+# engine.py (the always-on worker that runs the Board — `just engine`) reads
+# two more OPTIONAL top-level blocks straight off this file. Absent, as here,
+# is "no routing" — byte-for-byte the engine's behaviour with neither block.
+#
+# `lanes:` names each provider's concurrency limit — a slot counts one RUN;
+# inner subagents draw on their parent's lane and are not counted. `--lanes`
+# / $SSSF_LANES on the command line still override this on top.
+# lanes:
+#   ollama-cloud: { slots: 2 }
+#   xai: { slots: 2 }
+#
+# `router.builder_pool` lets the BUILDER float across several models — the
+# run goes to whichever listed lane has the most free slots, ties broken in
+# the order written here. Every other agent always runs on its own
+# `model:`/`defaults.model` — only the builder is ever pool-routed.
+# router:
+#   builder_pool:
+#     - model: "ollama-cloud/kimi-k2.7-code"
+#     - model: "xai/grok-4.5"
+
 agents:
   - name: planner
     model: fireworks/accounts/fireworks/models/kimi-k3

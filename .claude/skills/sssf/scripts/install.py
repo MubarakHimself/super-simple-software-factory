@@ -7,9 +7,9 @@
 Usage:
     uv run <skill>/scripts/install.py [--force]
 
-Stamps: adws/ (modules + starter ADWs), adws/adw_data/prompt_engineering/
-(4 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
-.gitignore entries.
+Stamps: adws/ (modules + starter ADWs + adws/tests/), adws/adw_data/
+prompt_engineering/ (4 starter agents), adws/adw_sssf_config/sssf.config.yaml,
+pyproject.toml (the merge gate's toolchain), .env.sample, .gitignore entries.
 Existing files are skipped unless --force.
 """
 
@@ -30,6 +30,12 @@ GITIGNORE_ENTRIES = [
     # first repo that was ever installed into from scratch.
     "__pycache__/",
     "*.pyc",
+    # pyproject.toml (stamped below) makes `uv sync` and the merge gate's
+    # `uv run --project <tree> --group dev ...` materialise a .venv in the
+    # checkout AND in every worktree the engine builds. Chains that end in a
+    # commit phase call `git add -A`, which would otherwise sweep a whole
+    # virtualenv into a card's commit.
+    ".venv/",
 ]
 
 
@@ -74,6 +80,17 @@ def main() -> int:
     stamp(TEMPLATES / "sssf.config.yaml",
           root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
           args.force, stamped, skipped)
+    # The merge gate's toolchain contract. adws/engine.py refuses to merge a
+    # card unless `uv run --project <tree> --group dev {ruff,mypy,pytest}` all
+    # exit 0, and that gate is fail-closed: without a project carrying a `dev`
+    # group uv answers "program not found" and every finished run lands
+    # `Status: blocked` forever while the service reports itself active. The
+    # starter suite under adws/tests/ (stamped with adws/ above) is the other
+    # half - pytest exits 5 on an empty directory and the gate reads 5 as red.
+    # Skipped like any other file when the project already has one, so a repo
+    # with its own toolchain keeps it; see the deploy's stamp step, which says
+    # so out loud when the contract is not there.
+    stamp(TEMPLATES / "pyproject.toml", root / "pyproject.toml", args.force, stamped, skipped)
     stamp(TEMPLATES / "env.sample", root / ".env.sample", args.force, stamped, skipped)
     # The queue is the seam between planning and the factory - a stamped repo
     # without queue/ has a Board pointing at nothing and readiness reporting

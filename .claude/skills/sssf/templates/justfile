@@ -6,7 +6,11 @@
 
 # `.env` reaches every ADW through this, so keys work without exporting them.
 set dotenv-load
-set positional-arguments
+# just has no `sh` on Windows PATH by default (installer-wizard.md 6.3/9);
+# cmd.exe is always there. `just` only applies `windows-shell` when actually
+# running on Windows, so Linux/mac keep the default shell - the server is
+# unaffected.
+set windows-shell := ["cmd.exe", "/c"]
 
 # Every recipe passes this through, so `SSSF_CONFIG=other.yaml just sdlc "..."`
 # swaps the whole roster for one run.
@@ -16,6 +20,15 @@ db     := "adws/adw_data/sssf.db"
 # list every recipe
 default:
     @just --list
+
+# Token-free probe for shell + dotenv + real recipe execution (installer-wizard.md
+# 6.3/9, V6): `just --list` only proves the justfile parses, `just --evaluate`
+# only proves `set dotenv-load` parsed .env - neither one actually runs a
+# recipe body through the configured shell. This does, for zero cost.
+
+# probe: shell + dotenv + recipe execution actually work (no tokens spent)
+doctor:
+    uv run python -c "print('doctor ok')"
 
 # ── first run ───────────────────────────────────────────────────────────────
 
@@ -35,30 +48,102 @@ demo:
 
 # ── run a workflow ──────────────────────────────────────────────────────────
 # Args pass straight through: "<prompt or path/to/prompt.md>" [--adw-id X]
+#
+# PROMPT is its own named parameter (not folded into the variadic ARGS) and
+# is re-quoted in every recipe body below - `"{{PROMPT}}"` - so a multi-word
+# prompt survives as ONE argument. `set positional-arguments` + `"$@"` (the
+# previous shape) relied on a POSIX shell forwarding raw argv; cmd.exe has no
+# such mechanism - it flattens a recipe's trailing args onto the end of the
+# single command line it runs, splitting an unquoted multi-word prompt into
+# several words. Quoting `{{PROMPT}}` ourselves works identically under both
+# cmd.exe and sh, so this shape needs no per-OS branch.
 
 # one agent, one prompt: just prompt "summarize this repo"
-prompt *ARGS:
-    uv run adws/adw_prompt.py --config {{config}} "$@"
+prompt PROMPT *ARGS:
+    uv run adws/adw_prompt.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # read-only recon: just scout "where is auth handled"
-scout *ARGS:
-    uv run adws/adw_scout.py --config {{config}} "$@"
+scout PROMPT *ARGS:
+    uv run adws/adw_scout.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # plan only: just plan "add a /health endpoint"
-plan *ARGS:
-    uv run adws/adw_plan.py --config {{config}} "$@"
+plan PROMPT *ARGS:
+    uv run adws/adw_plan.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # planner, builder, commit: just plan-build "add a /health endpoint"
-plan-build *ARGS:
-    uv run adws/adw_plan_build.py --config {{config}} "$@"
+plan-build PROMPT *ARGS:
+    uv run adws/adw_plan_build.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # plan, build, test, commit: just sdlc "add a /health endpoint"
-sdlc *ARGS:
-    uv run adws/adw_plan_build_test.py --config {{config}} "$@"
+sdlc PROMPT *ARGS:
+    uv run adws/adw_plan_build_test.py --config {{config}} "{{PROMPT}}" {{ARGS}}
 
 # the full chain, plus review and docs: just simple-sdlc "add a /health endpoint"
-simple-sdlc *ARGS:
-    uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
+simple-sdlc PROMPT *ARGS:
+    uv run adws/adw_simple_sdlc.py --config {{config}} "{{PROMPT}}" {{ARGS}}
+
+# ── dispatch ────────────────────────────────────────────────────────────────
+# The seam between the Board and the factory: claims a queue/*.md item,
+# routes it (by its `Adw:` line) to the writing ADW that runs it, and writes
+# Status back as it goes - ready-for-agent -> running -> done|blocked. Never
+# moves the file to queue/done/ - that is the MERGE event and Gate owns it.
+
+# dispatch one queue item: just work queue/001-add-health-endpoint.md
+work FILE *ARGS:
+    uv run adws/dispatch.py {{FILE}} --config {{config}} {{ARGS}}
+
+# dispatch the lowest-numbered ready-for-agent item on the Board
+work-next *ARGS:
+    uv run adws/dispatch.py --next --config {{config}} {{ARGS}}
+
+# ── engine ──────────────────────────────────────────────────────────────────
+# The always-on worker that runs the Board by itself (specs/engine.md). One
+# cycle every ~60s: pull, reap finished runs and push their card status back,
+# then dispatch every ready-for-agent card whose Needs: are satisfied, up to
+# --cap at once. On the server systemd runs this exact command as
+# sdl-engine.service; this recipe is the same process in the foreground -
+# `just engine --once` runs a single cycle and exits, which is the way to see
+# what it would do without leaving it running.
+
+# run the engine loop in the foreground (--once for a single cycle)
+engine *ARGS:
+    uv run adws/engine.py --config {{config}} {{ARGS}}
+
+# ── worktrees ───────────────────────────────────────────────────────────────
+# Reconciled against the sessions table, never guessed. A run either merges or
+# leaves a visible, named artifact explaining why not (MAP rule 11) - this is
+# that visibility. `just worktrees-prune` only ever removes MERGED trees; a
+# worktree holding uncommitted or unmerged work is never force-removed, by any
+# flag, ever (spec invariant 4).
+
+# every run's worktree, reconciled against the sessions table (exit 1 = work is stranded)
+worktrees *ARGS:
+    uv run adws/worktrees.py --config {{config}} {{ARGS}}
+
+# remove ONLY finished-and-merged worktrees; dry run unless you pass --yes
+worktrees-prune *ARGS:
+    uv run adws/worktrees.py --config {{config}} --prune {{ARGS}}
+
+# ── shipping report ──────────────────────────────────────────────────────────
+# MAP.md's shipping report, replacing the morning-brief ritual: a deterministic,
+# code-assembled account of every commit and card sitting on `integration` that
+# `main` does not have yet - what `ship-check` reads before the operator's one
+# squash merge. Pure read-only git: nothing here pushes, merges, or touches main.
+
+# the shipping report for the current chunk (--changelog / --range BASE..TIP)
+ship-report *ARGS:
+    uv run adws/ship_report.py {{ARGS}}
+
+# ── hygiene ─────────────────────────────────────────────────────────────────
+# Regenerable tool caches only (.ruff_cache/.mypy_cache/.pytest_cache/every
+# __pycache__) - never .venv, never adw_data, never a worktree (they live
+# outside the repo entirely). Prints every path it removes. One `uv run`
+# invocation, so it runs the same under cmd.exe (this justfile's
+# windows-shell) and sh - no OS-specific recipe body needed.
+
+# sweep regenerable caches - never .venv/adw_data/worktrees; pass --dry-run to preview
+clean *ARGS:
+    uv run adws/clean.py {{ARGS}}
 
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
@@ -83,7 +168,19 @@ procs ADW_ID:
 
 # Needs bun. The db path is passed explicitly because the server runs from the
 # app dir and would otherwise look for a trace db sitting next to itself.
+# The API server backgrounds so `bunx vite` can run in the foreground after it
+# - `(VAR=val cmd &)` is POSIX subshell/inline-env syntax with no cmd.exe
+# equivalent (cmd's `&` is a sequential separator, not "background", and it
+# has no inline `VAR=val cmd` form at all), so this one recipe needs an
+# OS-specific body. `[windows]`/`[unix]` (just 1.58's own per-OS recipe
+# attributes) pick the matching body automatically - `just --list`/`just obs`
+# still show/run one `obs`, same as before.
 
 # boot the trace UI, http://localhost:4601 (api on :4600)
+[windows]
+obs:
+    cd .claude/skills/sssf/apps/visualizer && bun install && start /B cmd /c "set SSSF_DB={{justfile_directory()}}/{{db}}&& bun run server/index.ts" && bunx vite
+
+[unix]
 obs:
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite

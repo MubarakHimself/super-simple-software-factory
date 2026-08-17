@@ -10,16 +10,65 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional
 
 from .data_types import PiRequest, PiResult
 from .utils import now_iso, operator_env
 
-PI_PATH = os.environ.get("PI_PATH", "pi")
+
+def _resolve_pi_cmd() -> list[str]:
+    """The argv prefix that launches pi, resolved ONCE from PI_PATH.
+
+    PI_PATH is a full command, not a bare path — on Windows it must be
+    `node <path>/cli.js`. `pi` alone raises FileNotFoundError (CreateProcess
+    ignores PATHEXT); `pi.cmd` launches but is a batch shim that forwards its
+    arguments as `%*`, and cmd.exe truncates any argument at its first
+    newline — silently gutting every agent's multi-line --system-prompt and
+    turning the call into an empty, errored turn. Never invoke `pi` by name.
+
+    shlex.split() in posix mode needs forward slashes to survive a Windows
+    path: it treats backslash as an escape character, so `C:\\Users\\...`
+    comes out mangled while `C:/Users/...` passes through untouched.
+    """
+    raw = os.environ.get("PI_PATH", "").strip()
+    if not raw:
+        raise RuntimeError(
+            "PI_PATH is not set. adws must never invoke `pi` by name - set it "
+            "in .env to the real launch command, e.g.\n"
+            "  PI_PATH=node C:/path/to/@earendil-works/pi-coding-agent/dist/cli.js\n"
+            "Use forward slashes - shlex.split() needs them to survive Windows "
+            "paths. Re-derive it after a pi reinstall with: "
+            'type "$(where pi.cmd)"'
+        )
+    cmd = shlex.split(raw, posix=True)
+    if not cmd:
+        raise RuntimeError(f"PI_PATH is set but parsed to no tokens: {raw!r}")
+    target = cmd[-1]
+    if "/" in target or "\\" in target:
+        if not Path(target).is_file():
+            raise RuntimeError(
+                f"PI_PATH={raw!r} resolves to {target!r}, which does not exist "
+                'on disk. Re-derive it after a pi reinstall with: '
+                'type "$(where pi.cmd)"'
+            )
+    elif shutil.which(target) is None:
+        raise RuntimeError(
+            f"PI_PATH={raw!r} resolves to bare command {target!r}, which is "
+            "not found on PATH."
+        )
+    return cmd
+
+
+PI_CMD = _resolve_pi_cmd()
+# Unattended runs must never discover ambient extensions that could prompt and
+# hang — explicit `-e <path>` per request.extensions still works (rule 12).
+NO_EXTENSION_DISCOVERY = ["-ne"]
 MODELS_JSON = os.environ.get("PI_MODELS_PATH",
                              str(Path.home() / ".pi" / "agent" / "models.json"))
 
@@ -40,12 +89,29 @@ def _count(value: str) -> int:
     return int(value)
 
 
-@lru_cache(maxsize=1)
-def _pi_catalog() -> list[tuple[str, str, int]]:
-    """Read pi's merged catalog, including built-in providers and custom models."""
+@lru_cache(maxsize=32)
+def _pi_catalog(extensions: tuple[str, ...] = ()) -> list[tuple[str, str, int]]:
+    """Read pi's merged catalog for one exact extension set, including
+    built-in providers, custom models, AND anything an extension registers
+    (e.g. claude-bridge/* models, which only exist once pi-claude-bridge is
+    loaded).
+
+    `-ne` still disables AMBIENT discovery (rule 12) - but `extensions` are
+    passed straight back in as explicit `-e <path>` flags, same as a real
+    agent turn's own extension list, so a bridge-only model is not
+    structurally invisible to a cost-free `--list-models` probe. Cached per
+    exact extension tuple with `lru_cache`, so `agents.validate()` calling
+    this once per agent in a roster shells `pi` at most once per DISTINCT
+    extension set, not once per agent - most agents in one roster share the
+    same set (roster-wide `defaults.harness_engineering`), so this is
+    normally one subprocess call for the whole validate() pass, not five.
+    """
     try:
         result = subprocess.run(
-            [PI_PATH, "--list-models"], capture_output=True, text=True,
+            [*PI_CMD, *NO_EXTENSION_DISCOVERY,
+             *[flag for ext in extensions for flag in ("-e", ext)],
+             "--list-models"],
+            capture_output=True, text=True, encoding="utf-8",
             timeout=30, env=operator_env(), check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -64,14 +130,21 @@ def _pi_catalog() -> list[tuple[str, str, int]]:
     return rows
 
 
-def resolve_model(pattern: str) -> tuple[str, str]:
+def resolve_model(pattern: str, extensions: tuple[str, ...] = ()) -> tuple[str, str]:
     """Resolve a model pattern to an explicit ``(provider, model_id)`` pair.
 
     Pi's catalog merges built-in models with ``~/.pi/agent/models.json``. Using
     that same merged view lets SSSF target direct providers such as
     ``openai/gpt-5.6-terra`` without re-registering built-in models locally.
+
+    ``extensions`` is the caller's own merged ``harness_engineering`` list (a
+    tuple - hashable, so it doubles as the catalog cache key). Pass the same
+    extensions an agent actually runs with; a bridge model (``claude-bridge/*``)
+    resolves only when the bridge extension that registers it is named here,
+    exactly like a real pi invocation. The default of ``()`` reproduces the
+    old no-extensions probe unchanged.
     """
-    catalog = [(provider, model_id) for provider, model_id, _ in _pi_catalog()]
+    catalog = [(provider, model_id) for provider, model_id, _ in _pi_catalog(extensions)]
     if "/" in pattern:
         provider, model_id = pattern.split("/", 1)
         if (provider, model_id) in catalog:
@@ -85,7 +158,7 @@ def resolve_model(pattern: str) -> tuple[str, str]:
     if len(matches) == 1:
         return matches[0]
     if not matches:
-        raise ValueError(f"model pattern {pattern!r} not found in pi --list-models — "
+        raise ValueError(f"model pattern {pattern!r} not found in pi --list-models - "
                          "authenticate/register it or fix the config")
     raise ValueError(f"model pattern {pattern!r} is ambiguous: {matches}")
 
@@ -105,13 +178,18 @@ def _context_tokens(usage: dict) -> int:
                    for part in ("input", "output", "cacheRead", "cacheWrite")))
 
 
-def context_window(provider: str, model_id: str) -> int:
-    """The model's context ceiling from pi's merged model catalog."""
-    registry = json.loads(Path(MODELS_JSON).read_text())
+def context_window(provider: str, model_id: str, extensions: tuple[str, ...] = ()) -> int:
+    """The model's context ceiling from pi's merged model catalog.
+
+    `extensions` is passed through to `_pi_catalog` for the same reason
+    `resolve_model` takes it: a bridge-only model's context window is only
+    listed once the extension that registers the model is loaded.
+    """
+    registry = json.loads(Path(MODELS_JSON).read_text(encoding="utf-8"))
     for model in registry.get("providers", {}).get(provider, {}).get("models", []):
         if model.get("id") == model_id:
             return int(model.get("contextWindow") or 0)
-    for listed_provider, listed_model, window in _pi_catalog():
+    for listed_provider, listed_model, window in _pi_catalog(extensions):
         if listed_provider == provider and listed_model == model_id:
             return window
     return 0
@@ -125,7 +203,7 @@ def _text_of(container: dict) -> str:
 
 
 def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
 
 def _label(tool: str, args: dict) -> str:
@@ -154,7 +232,7 @@ class ToolCallTracker:
     def __init__(self) -> None:
         self._open: dict[str, dict] = {}
 
-    def observe(self, event: dict) -> Optional[dict]:
+    def observe(self, event: dict) -> dict | None:
         """Returns the record for a finished tool call, else None."""
         etype = event.get("type", "")
         if etype == "message_end":
@@ -205,18 +283,19 @@ class ToolCallTracker:
         }
 
 
-def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
-        on_spawn: Optional[Callable[[int], None]] = None,
-        on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
+def run(request: PiRequest, on_event: Callable[[dict], None] | None = None,
+        on_spawn: Callable[[int], None] | None = None,
+        on_exit: Callable[[int], None] | None = None) -> PiResult:
     """Run one non-interactive pi turn.
 
     `on_spawn(pid)` and `on_exit(pid)` bracket the child process so the caller
     can record it as killable — a hung coding agent is otherwise a pid you have
     to hunt for in `ps` while the run sits there.
     """
-    provider, model_id = resolve_model(request.model)
+    extensions = tuple(request.extensions)
+    provider, model_id = resolve_model(request.model, extensions=extensions)
     cmd = [
-        PI_PATH, "-p", "--mode", "json",
+        *PI_CMD, *NO_EXTENSION_DISCOVERY, "-p", "--mode", "json",
         "--provider", provider, "--model", model_id,
         "--thinking", request.thinking,
         "--session-id", request.session_id,
@@ -233,7 +312,7 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     result = PiResult(session_id=request.session_id,
-                      context_window=context_window(provider, model_id))
+                      context_window=context_window(provider, model_id, extensions=extensions))
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or
@@ -242,11 +321,11 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     # a run that sat idle at 0% CPU with an empty raw_output.jsonl.
     process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, bufsize=1, cwd=request.cwd,
+                               text=True, encoding="utf-8", bufsize=1, cwd=request.cwd,
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
+    with raw_path.open("a", encoding="utf-8") as raw:
         assert process.stdout is not None
         for line in process.stdout:
             raw.write(line)

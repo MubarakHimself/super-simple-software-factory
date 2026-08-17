@@ -1009,6 +1009,9 @@ def test_apply_engine_service_converges_a_fresh_host(tmp_path, monkeypatch):
         ["git", "var", "GIT_COMMITTER_IDENT"],
         ["systemctl", "daemon-reload"],
         ["systemctl", "enable", "--now", "sdl-engine"],
+        # try-restart last: enable --now is a no-op on an already-running unit,
+        # so a REWRITTEN unit only takes effect through this call.
+        ["systemctl", "try-restart", "sdl-engine"],
     ]
 
 
@@ -1101,6 +1104,9 @@ def test_apply_engine_service_parks_and_rewrites_when_unit_content_is_stale(tmp_
         ["git", "var", "GIT_COMMITTER_IDENT"],
         ["systemctl", "daemon-reload"],
         ["systemctl", "enable", "--now", "sdl-engine"],
+        # try-restart last: enable --now is a no-op on an already-running unit,
+        # so a REWRITTEN unit only takes effect through this call.
+        ["systemctl", "try-restart", "sdl-engine"],
     ]
 
 

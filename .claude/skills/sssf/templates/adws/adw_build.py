@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_build.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> builder
+Phases: engineer(request) -> git(worktree) -> builder
 """
 
 import argparse
@@ -27,6 +27,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
+
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder", retries=1,
                                description="Implement the request")) as ph:

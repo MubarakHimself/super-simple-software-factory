@@ -1867,8 +1867,18 @@ def apply_engine_service(ctx: Ctx) -> Result:
     if enable_result.returncode != 0:
         return Result("failed", f"systemctl enable --now sdl-engine exited "
                        f"{enable_result.returncode}: {enable_result.stderr[-300:]}")
+    # enable --now is a no-op on an already-running unit, so a REWRITTEN unit
+    # would keep running the old ExecStart/User/env until the next boot.
+    # try-restart only touches a running service - a stopped one stays stopped
+    # for enable --now above to have started.
+    restart_result = run(["systemctl", "try-restart", "sdl-engine"], timeout=PROBE_TIMEOUT,
+                         ctx=ctx)
+    restart_note = ("" if restart_result.returncode == 0
+                    else f"; try-restart exited {restart_result.returncode} - the running "
+                         f"process may still be the previous unit")
     return Result("needs-operator" if stalled else "installed",
-                  f"{unit_path} written, daemon-reload'd, enabled --now{note}")
+                  f"{unit_path} written, daemon-reload'd, enabled --now, "
+                  f"try-restarted{restart_note}{note}")
 
 
 def verify_engine_service(ctx: Ctx) -> Result:

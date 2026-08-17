@@ -170,7 +170,15 @@ async function startFakeBox(options: { password?: string } = {}): Promise<FakeBo
 
         session.on("sftp", (acceptSftp) => {
           const sftp = acceptSftp();
-          const open = new Map<string, { path: string; chunks: string[] }>();
+          // Chunks are kept as BYTES and decoded once, at CLOSE. Decoding each
+          // WRITE packet on its own splits any multi-byte character that
+          // straddles a packet boundary into two replacement characters - a
+          // corruption invented by this stand-in, not by the uploader (a real
+          // SFTP server writes the bytes to disk). The script is full of
+          // box-drawing characters, so shifting one line by a few bytes was
+          // enough to fail the byte-for-byte assertion below for no real
+          // reason. `Buffer.from` copies: ssh2 reuses its receive buffer.
+          const open = new Map<string, { path: string; chunks: Buffer[] }>();
           let counter = 0;
           sftp.on("OPEN", (reqid, filename) => {
             const handle = Buffer.alloc(4);
@@ -179,12 +187,12 @@ async function startFakeBox(options: { password?: string } = {}): Promise<FakeBo
             sftp.handle(reqid, handle);
           });
           sftp.on("WRITE", (reqid, handle, _offset, data) => {
-            open.get(handle.toString("hex"))?.chunks.push(data.toString("utf-8"));
+            open.get(handle.toString("hex"))?.chunks.push(Buffer.from(data));
             sftp.status(reqid, 0);
           });
           sftp.on("CLOSE", (reqid, handle) => {
             const entry = open.get(handle.toString("hex"));
-            if (entry) box.uploads.set(entry.path, entry.chunks.join(""));
+            if (entry) box.uploads.set(entry.path, Buffer.concat(entry.chunks).toString("utf-8"));
             sftp.status(reqid, 0);
           });
           sftp.on("REALPATH", (reqid, path) => sftp.name(reqid, [{ filename: path, longname: path, attrs: {} as never }]));
@@ -744,6 +752,76 @@ describe("the one-click deploy", () => {
   );
 
   test(
+    "the self-contained run's full step list streams through in order",
+    async () => {
+      // The shape a STAMPED PROJECT deploy prints: no `installer` step (that
+      // repo has no installer/), and the provisioning the script does itself
+      // instead. This is the contract machines.ts has to keep parsing.
+      const vps = await box({ password: "pw8" });
+      const added = await addOrFail({ host: "127.0.0.1", port: vps.port, user: "root", password: "pw8" });
+      vps.deploy.lines = [
+        "STEP preflight OK user=root sudo=no target=/root/hardware",
+        "STEP apt OK installed git curl (waited 45s for the boot-time apt lock)",
+        "STEP sqlite OK sqlite3 stdlib module present; CLI absent (optional, never installed)",
+        "STEP uv OK installed uv 0.9.2",
+        "STEP node OK installed node v22.11.0 npm 10.9.0",
+        "STEP just OK installed just 1.58.0",
+        "STEP clone OK cloned https://github.com/x/hardware.git into /root/hardware",
+        "STEP checkout OK integration at 848a485",
+        "STEP stamp OK adws/engine.py and adws/adw_modules present - this checkout can run the engine",
+        "STEP uv-sync OK no pyproject.toml in /root/hardware - each adws/*.py carries its own PEP 723 dependencies",
+        "STEP pi OK installed - PI_PATH='node /usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js'",
+        "npm WARN deprecated something@1.0.0",
+        "STEP pi-packages OK merged both names into settings.json; both installed under /root/.pi/agent/npm/node_modules",
+        "STEP claude-cli OK installed 2.0.1 (Claude Code)",
+        "STEP codex-cli OK installed codex-cli 0.44.0",
+        "STEP git-identity OK set repo-local identity sdl-factory engine <engine@sdl-factory.local>",
+        "STEP skills OK removed morning-brief grilling from /root/.claude/skills (sssf kept)",
+        "STEP engine-service OK /etc/systemd/system/sdl-engine.service written (User=root, WorkingDirectory=/root/hardware)",
+        "STEP engine OK sdl-engine is active since Sun 2026-08-17 20:00:00 UTC",
+        "DEPLOY COMPLETE",
+      ];
+      vps.deploy.code = 0;
+
+      const job = startDeploy(added, {
+        repoUrl: "https://github.com/x/hardware.git",
+        branch: "integration",
+        dir: "/root/hardware",
+        script: await readFile(bootstrapPath(), "utf-8"),
+      });
+      await waitFor(() => job.state !== "running");
+
+      expect(job.state).toBe("done");
+      expect(job.error).toBeNull();
+      expect(job.steps.map((step) => step.name)).toEqual([
+        "preflight", "apt", "sqlite", "uv", "node", "just", "clone", "checkout", "stamp",
+        "uv-sync", "pi", "pi-packages", "claude-cli", "codex-cli", "git-identity", "skills",
+        "engine-service", "engine",
+      ]);
+      expect(job.steps.every((step) => step.state === "ok")).toBe(true);
+      // A detail with quotes, angle brackets and parentheses survives whole -
+      // the parser takes everything after OK, and stops at nothing.
+      expect(job.steps.find((step) => step.name === "git-identity")?.detail).toContain(
+        "<engine@sdl-factory.local>",
+      );
+      expect(job.steps.find((step) => step.name === "apt")?.detail).toContain("waited 45s");
+      expect(job.lines).toContain("npm WARN deprecated something@1.0.0");
+
+      // The argv contract is unchanged by the rewrite: three quoted arguments,
+      // url then branch then directory, and nothing else.
+      const shCommand = vps.commands.find((command) => command.startsWith("sh "))!;
+      const quoted = [...shCommand.matchAll(/'([^']*)'/g)].map((match) => match[1]);
+      expect(quoted).toEqual([
+        ".sdl-factory-bootstrap.sh",
+        "https://github.com/x/hardware.git",
+        "integration",
+        "/root/hardware",
+      ]);
+    },
+    40_000,
+  );
+
+  test(
     "an exit 0 without DEPLOY COMPLETE is still a failure - a truncated run is not a success",
     async () => {
       const vps = await box({ password: "pw7" });
@@ -859,12 +937,253 @@ describe("deploy/bootstrap.sh", () => {
 
   test("every step it can reach prints a STEP line", async () => {
     const script = await readFile(bootstrapPath(), "utf-8");
-    for (const name of ["preflight", "apt", "uv", "node", "just", "clone", "checkout", "uv-sync", "installer", "skills", "engine"]) {
+    for (const name of [
+      "preflight", "apt", "sqlite", "uv", "node", "just", "clone", "checkout", "stamp",
+      "uv-sync", "installer", "pi", "pi-packages", "claude-cli", "codex-cli", "git-identity",
+      "skills", "engine-service", "engine",
+    ]) {
       expect(script).toContain(` ${name} `);
     }
     expect(script).toContain("DEPLOY COMPLETE");
     // The honest clone failure the operator asked for, verbatim.
     expect(script).toContain("repository not reachable from the server - make it public or add a deploy key");
+    // The stamped-project precondition: an older stamp is named as such, with
+    // the fix (which is on the laptop, not on the box).
+    expect(script).toContain(
+      "this project was stamped by an older sssf skill - re-run Initialize factory on the laptop, push, and redeploy",
+    );
+  });
+
+  test("nothing in it can stop and wait for a human", async () => {
+    const script = await readFile(bootstrapPath(), "utf-8");
+    const code = script.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const joined = code.join("\n");
+
+    // The backstop: no child of this script has a terminal to read from.
+    expect(joined).toContain("exec </dev/null");
+
+    // apt/dpkg: the field failure was a lock held by the boot-time apt timer.
+    expect(joined).toContain("DEBIAN_FRONTEND=noninteractive");
+    expect(joined).toContain("NEEDRESTART_MODE=a");
+    expect(joined).toContain("DPkg::Lock::Timeout=600");
+    expect(joined).toContain("--force-confdef");
+    expect(joined).toContain("--force-confold");
+    // and every apt-get the script itself runs carries them. A STEP message
+    // that merely names apt-get is not an invocation, so those are excluded by
+    // their `ok`/`fail` prefix - and the second filter proves the exclusion is
+    // not hiding a real call: nothing runs apt-get except through `asroot`.
+    const isMessage = (line: string) => /(^\s*|\|\|\s*|&&\s*|;\s*)(ok|fail)\s/.test(line);
+    const aptCalls = code.filter((line) => line.includes("asroot apt-get "));
+    expect(aptCalls.length).toBeGreaterThan(0);
+    for (const call of aptCalls) expect(call).toContain("$APT_OPTS");
+    const strayApt = code.filter(
+      (line) =>
+        line.includes("apt-get") &&
+        !line.includes("asroot apt-get") &&
+        !line.includes("have apt-get") &&
+        !line.includes("grep -qxE") && // apt_busy's process-name pattern, not a call
+        !isMessage(line),
+    );
+    expect(strayApt).toEqual([]);
+
+    // git: a private repo fails, it never asks.
+    expect(joined).toContain("GIT_TERMINAL_PROMPT=0");
+    expect(joined).toContain("GIT_ASKPASS=/bin/true");
+    expect(joined).toContain("BatchMode=yes");
+
+    // npm: no confirmation, no funding/audit chatter to page through. Same
+    // rule as apt above - a failure message that quotes the command is not the
+    // command, and every real install goes through `asroot`.
+    const npmInstalls = code.filter((line) => line.includes("asroot npm install"));
+    expect(npmInstalls.length).toBeGreaterThan(0);
+    for (const call of npmInstalls) {
+      expect(call).toContain("--no-fund");
+      expect(call).toContain("--no-audit");
+    }
+    const strayNpm = code.filter(
+      (line) => line.includes("npm install") && !line.includes("asroot npm install") && !isMessage(line),
+    );
+    expect(strayNpm).toEqual([]);
+    expect(joined).toContain("npm_config_yes=true");
+
+    // curl: silent, fail-on-error forms only. (`git curl ca-certificates` in
+    // the apt package list is a name, not a call - hence the `curl -` anchor.)
+    const curlCalls = code.filter((line) => /curl\s+-/.test(line));
+    expect(curlCalls.length).toBeGreaterThan(0);
+    for (const call of curlCalls) expect(call).toMatch(/curl\s+(-LsSf|-fsSL|--proto)/);
+
+    // sudo is only ever the non-interactive form: a password prompt on a box
+    // with no tty is the hang this whole rewrite exists to prevent.
+    const sudoCalls = code.filter((line) => line.includes("sudo ") && !isMessage(line));
+    expect(sudoCalls.length).toBeGreaterThan(0);
+    for (const call of sudoCalls) expect(call).toMatch(/sudo\s+-n\s/);
+
+    // ssh is never INVOKED here - the only mention is the batch-mode transport
+    // git would use if the operator's origin were an ssh url.
+    for (const line of code.filter((line) => /(^|[;&|(]\s*)ssh\s/.test(line))) {
+      expect(line).toContain("GIT_SSH_COMMAND=");
+    }
+
+    // pagers: `systemctl status` pages by default, and a pager with nowhere to
+    // page to is a hang.
+    for (const call of code.filter((line) => line.includes("systemctl status"))) {
+      expect(call).toContain("--no-pager");
+    }
+    expect(joined).toContain("SYSTEMD_PAGER=cat");
+  });
+
+  // A STEP line is the entire contract with machines.ts, and its details are
+  // interpolated command output - `npm --version` prepends a config warning on
+  // some boxes, a python heredoc a DeprecationWarning on others. A newline in
+  // there splits the step in two: parseStepLine keeps the truncated first half
+  // and the remainder becomes orphan log noise. So this runs the script's OWN
+  // `ok`/`fail` (lifted out of the file, never retyped here - a copy would pass
+  // while the script regressed) against output that really does span lines.
+  test("a STEP line stays one line even when the tool it quotes prints several", async () => {
+    const shell = posixShell();
+    if (!shell) {
+      console.warn("[machines.test] no POSIX shell on PATH - STEP single-line check skipped");
+      return;
+    }
+    const script = await readFile(bootstrapPath(), "utf-8");
+    const start = script.indexOf("flatten() {");
+    const end = script.indexOf("tail_of()");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const protocol = script.slice(start, end);
+
+    const harness = [
+      protocol,
+      // `fail` exits 1 by design, so it is asked its question in a subshell.
+      `ok node "node v20.11.1 npm $(printf 'npm WARN config production Use \\\`--omit=dev\\\` instead.\\n10.8.2\\n')"`,
+      `( fail clone "unreachable $(printf 'line one\\nline two\\nline three\\n')" ) || true`,
+    ].join("\n");
+
+    const proc = Bun.spawn([shell, "-c", harness], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const guard = setTimeout(() => proc.kill(), 10_000);
+    try {
+      const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      const lines = stdout.split("\n").filter((line) => line.length > 0);
+      // Two calls in, two lines out. Three would mean a detail broke a step apart.
+      expect(lines).toHaveLength(2);
+      for (const line of lines) expect(parseStepLine(line)).not.toBeNull();
+      expect(parseStepLine(lines[0]!)).toMatchObject({ name: "node", state: "ok" });
+      expect(parseStepLine(lines[1]!)).toMatchObject({ name: "clone", state: "fail" });
+      // Flattened, not truncated: the whole of the tool's output survives on
+      // the one line. Losing the reason would trade a broken parse for a
+      // silent one - the version that came after the warning is the answer.
+      expect(parseStepLine(lines[0]!)!.detail).toContain("10.8.2");
+      expect(parseStepLine(lines[1]!)!.detail).toContain("line three");
+    } finally {
+      clearTimeout(guard);
+    }
+  }, 20_000);
+
+  /* ── drift guards against installer/steps.py ────────────────────────────
+     The inline provisioning path exists because a stamped project repo has no
+     installer/. It is only correct while it installs the SAME things the
+     installer does, so these read steps.py and fail when the two disagree -
+     the mirror drift that made this rewrite necessary in the first place. */
+
+  const stepsPath = join(import.meta.dir, "..", "..", "..", "..", "installer", "steps.py");
+
+  test("it installs the packages installer/steps.py names, never a guess", async () => {
+    if (!existsSync(stepsPath)) {
+      console.warn("[machines.test] no installer/steps.py in this checkout - drift guard skipped");
+      return;
+    }
+    const steps = await readFile(stepsPath, "utf-8");
+    const script = await readFile(bootstrapPath(), "utf-8");
+
+    // pi's own npm package and the cli.js under it.
+    const piPackage = /"npm", "install", "-g", "--ignore-scripts",\s*"([^"]+)"/.exec(steps)?.[1];
+    expect(piPackage).toBe("@earendil-works/pi-coding-agent");
+    expect(script).toContain(`${piPackage}`);
+    expect(script).toContain("@earendil-works/pi-coding-agent/dist/cli.js");
+    expect(script).toContain(".pi/agent/npm/node_modules");
+
+    // the two pi extensions, taken from steps.py's PI_PACKAGES tuple.
+    const tuple = /PI_PACKAGES = \(([^)]*)\)/.exec(steps)?.[1] ?? "";
+    const piPackages = [...tuple.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+    expect(piPackages).toEqual(["npm:pi-claude-bridge", "npm:@tintinweb/pi-subagents"]);
+    for (const name of piPackages) expect(script).toContain(name);
+
+    // the two CLIs the bridge and codex lanes shell out to.
+    const globalInstalls = [...steps.matchAll(/"npm", "install", "-g", "(@[^"]+)"/g)].map((m) => m[1]!);
+    expect(globalInstalls).toContain("@anthropic-ai/claude-code");
+    expect(globalInstalls).toContain("@openai/codex");
+    for (const name of globalInstalls) expect(script).toContain(name);
+
+    // the committer identity the engine refuses to run without.
+    const gitName = /ENGINE_GIT_NAME = "([^"]+)"/.exec(steps)?.[1];
+    const gitEmail = /ENGINE_GIT_EMAIL = "([^"]+)"/.exec(steps)?.[1];
+    expect(script).toContain(`ENGINE_GIT_NAME="${gitName}"`);
+    expect(script).toContain(`ENGINE_GIT_EMAIL="${gitEmail}"`);
+    expect(script).toContain("git var GIT_COMMITTER_IDENT");
+    expect(script).toContain("config --local");
+
+    // the three .env values, and the roster default.
+    for (const key of ["PI_PATH", "PI_MODELS_PATH", "PI_BRIDGE_PATH"]) expect(script).toContain(key);
+    const defaultConfig = /DEFAULT_ENGINE_CONFIG = "([^"]+)"/.exec(steps)?.[1];
+    expect(script).toContain(defaultConfig!);
+  });
+
+  test("the systemd unit it writes is the one installer/steps.py renders", async () => {
+    if (!existsSync(stepsPath)) {
+      console.warn("[machines.test] no installer/steps.py in this checkout - unit drift guard skipped");
+      return;
+    }
+    const steps = await readFile(stepsPath, "utf-8");
+    const script = await readFile(bootstrapPath(), "utf-8");
+    const unit = /cat >"\$UNIT_TMP" <<UNIT\n([\s\S]*?)\nUNIT\n/.exec(script)?.[1];
+    expect(unit).toBeTruthy();
+
+    // Fixed lines: identical text on both sides.
+    for (const line of [
+      "[Unit]",
+      "Description=SDL factory engine - runs the Kanban",
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "[Service]",
+      "Type=simple",
+      "Restart=always",
+      "RestartSec=10",
+      "[Install]",
+      "WantedBy=multi-user.target",
+    ]) {
+      expect(unit).toContain(line);
+      expect(steps).toContain(line);
+    }
+
+    // Templated lines: the same four keys, filled from this host.
+    expect(unit).toContain("User=$SERVICE_USER");
+    expect(unit).toContain("WorkingDirectory=$DIR");
+    expect(unit).toContain("Environment=SSSF_CONFIG=$ENGINE_CONFIG");
+    expect(unit).toContain("ExecStart=$UV_BIN run adws/engine.py");
+    for (const key of ["User=", "WorkingDirectory=", "Environment=SSSF_CONFIG=", "run adws/engine.py"]) {
+      expect(steps).toContain(key);
+    }
+
+    // `User=` is the checkout's owner, not whoever ran the deploy - without it
+    // systemd starts the engine as root and every git call dies on "dubious
+    // ownership" while is-active still says active.
+    expect(script).toContain('stat -c %U "$DIR"');
+    // ExecStart resolves uv absolutely: a unit gets no login shell.
+    expect(script).toContain("UV_BIN=$(command -v uv");
+    expect(script).toContain("systemctl daemon-reload");
+    expect(script).toContain("systemctl enable --now sdl-engine");
+  });
+
+  test("the installer stays the preferred path where a repo has one", async () => {
+    const script = await readFile(bootstrapPath(), "utf-8");
+    expect(script).toContain('if [ -f "$DIR/installer/install.py" ]; then');
+    expect(script).toContain("uv run installer/install.py --target server --yes");
+    // Its three-way exit code still means what it meant: 2 is deployed-but-a-
+    // credential-is-missing, not a failure.
+    expect(script).toContain("converged, but something needs you");
+    // And its absence is no longer fatal - that was the bug that made every
+    // stamped-project deploy stop dead at this step.
+    expect(script).not.toContain("this checkout is not an SDL Factory repository");
   });
 
   test("uses no bashisms a Ubuntu /bin/sh (dash) would reject", async () => {
@@ -938,10 +1257,28 @@ describe("deploy/bootstrap.sh", () => {
  *      password; `~/.sdl-factory/keys/m-*` is the key it generated.
  *   2. `ssh -i ~/.sdl-factory/keys/m-<id> root@<ip> 'echo ok'` from a terminal
  *      -> `ok`. That is the same key the app installed.
- *   3. Deploy factory on that row. EXPECT the STEP lines to stream in order:
- *      preflight, apt, uv, node, just, clone, checkout, uv-sync, installer,
- *      skills, engine, then DEPLOY COMPLETE. On the box:
- *      `systemctl is-active sdl-engine` -> `active`.
+ *   3. Deploy factory on that row. EXPECT the STEP lines to stream in order.
+ *      For a STAMPED PROJECT repo (the normal case - it has no installer/):
+ *      preflight, apt, sqlite, uv, node, just, clone, checkout, stamp,
+ *      uv-sync, service-user, pi, pi-packages, claude-cli, codex-cli,
+ *      providers, git-identity, skills, engine-service, engine, then DEPLOY
+ *      COMPLETE. `providers` is the honest one: on a box with no provider
+ *      registered in ~/.pi/agent/models.json it reads `OK NEEDS YOU: ...`,
+ *      because this path cannot converge what steps.py copies out of
+ *      installer/assets/.
+ *      For the sdl-factory repo itself, `installer` replaces the six
+ *      provisioning steps between uv-sync and skills. On the box:
+ *      `systemctl is-active sdl-engine` -> `active`,
+ *      `systemctl cat sdl-engine` -> User= the checkout's owner and
+ *      Environment=SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml, the same
+ *      answer installer/steps.py's DEFAULT_ENGINE_CONFIG gives. Shipping on a
+ *      different roster is one deliberate `SSSF_CONFIG=<path>` on the deploy,
+ *      honoured by both writers - never a file the checkout merely carries.
  *   4. Click Deploy factory again on the same box. EXPECT the same list, every
  *      step reading `already ...`, and DEPLOY COMPLETE - that is idempotency.
+ *   5. The humanless proof, on a box that has JUST booted (the field failure):
+ *      deploy within a minute of first boot, while `apt-daily` still holds
+ *      /var/lib/dpkg/lock-frontend. EXPECT `STEP apt OK ... (waited Ns for the
+ *      boot-time apt lock)` and a run that never stops - not
+ *      `E: Could not get lock`.
  */

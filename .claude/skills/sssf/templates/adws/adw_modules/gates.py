@@ -19,6 +19,17 @@ from .data_types import EnvelopeBase, GateReport
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
 
 
+def _resolve(run, path: str) -> Path:
+    """A relative artifact path resolves against `run.repo_root` — the run's
+    OWN tree, a worktree once one is entered — never the ADW process cwd
+    (which stays the main checkout, 5.1). Without this, an agent that wrote
+    `specs/plan.md` in its worktree would be told its artifact does not
+    exist, or worse: a stale file of the same name sitting in the main
+    checkout would make a false claim pass (5.4)."""
+    p = Path(path)
+    return p if p.is_absolute() else Path(run.repo_root) / p
+
+
 def _size(path: Path) -> str:
     n = path.stat().st_size
     return f"{n}B" if n < 1024 else f"{n / 1024:.1f}KB"
@@ -27,7 +38,7 @@ def _size(path: Path) -> str:
 def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         report.check(a, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "declared artifact does not exist")
     return report
@@ -36,7 +47,7 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
 def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if not (p.exists() and p.is_file()):
             continue                       # existence is artifacts_exist's job
         empty = p.stat().st_size == 0
@@ -47,11 +58,11 @@ def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
 def json_parses(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if p.suffix != ".json" or not p.exists():
             continue
         try:
-            parsed = json.loads(p.read_text())
+            parsed = json.loads(p.read_text(encoding="utf-8"))
             report.check(a, True, f"parses, {type(parsed).__name__}")
         except json.JSONDecodeError as e:
             report.check(a, False, f"declared JSON artifact does not parse: {e}")
@@ -62,7 +73,7 @@ def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
     """Every file claimed changed must exist on disk."""
     report = GateReport()
     for f in getattr(envelope, "changed_files", []):
-        p = Path(f)
+        p = _resolve(run, f)
         report.check(f, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "claimed changed file does not exist")
     return report
@@ -96,9 +107,12 @@ def verdict_consistent(envelope: EnvelopeBase, run) -> GateReport:
 
 
 def tests_pass(command: str):
-    """Gate factory: the given shell command must exit 0."""
+    """Gate factory: the given shell command must exit 0, run against the
+    run's own tree — `cwd=run.repo_root` (5.4), the worktree once one has
+    been entered."""
     def gate(envelope: EnvelopeBase, run) -> GateReport:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        result = subprocess.run(command, shell=True, cwd=run.repo_root,
+                                capture_output=True, text=True, encoding="utf-8")
         ok = result.returncode == 0
         note = f"exit {result.returncode}"
         if not ok:

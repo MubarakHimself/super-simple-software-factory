@@ -1,0 +1,70 @@
+# The toolchain the factory's own merge gate runs, in the project the factory
+# was stamped into. Not a package: nothing here is built or published, and no
+# ADW consults this file to run.
+#
+# WHY IT IS STAMPED. Every adws/*.py carries PEP 723 inline dependencies, so
+# `uv run adws/adw_plan.py` resolves that script's own header and skips this
+# file entirely. What needs it is the integration gate in adws/engine.py
+# (`quality_commands`), which re-runs three commands against every branch
+# before it merges:
+#
+#     uv run --project <tree> --group dev ruff check .
+#     uv run --project <tree> --group dev mypy adws
+#     uv run --project <tree> --group dev pytest -q adws/tests
+#
+# That gate is FAIL-CLOSED by design - a command that could not run at all
+# reads RED, never "unverified but fine". So a stamped project without this
+# file and without adws/tests/ never merges a single card: uv answers
+# `--group dev has no effect when used outside a project` and then
+# `Failed to spawn: ruff - program not found`, the engine blocks the card with
+# that as the reason, and `systemctl is-active sdl-engine` says `active` the
+# whole time. The deploy's stamp step checks for this file for exactly that
+# reason.
+#
+# `name` and `version` are placeholders - rename them to your project's if you
+# like, nothing reads them. What must survive is the `dev` group and
+# adws/tests/: they are the gate's contract.
+
+[project]
+name = "sssf-project"
+version = "0.1.0"
+description = "A project the Super Simple Software Factory was stamped into"
+requires-python = ">=3.10"
+# The same four every adws/*.py declares in its own PEP 723 header. Declared
+# here too because adws/tests/ imports adw_modules directly, so `uv run
+# --group dev pytest` needs them importable.
+dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
+
+[dependency-groups]
+# Everything the gate's lint / typecheck / test commands need. Installs clean
+# on Windows and Linux with no external toolchain.
+dev = ["ruff", "pytest", "mypy", "types-PyYAML"]
+
+# skylos is SEPARATE from `dev`, and not because it is optional - because it
+# does not install everywhere. It depends on tree-sitter-dart-orchard, which
+# publishes an sdist only and needs an MSVC toolchain to build on Windows; one
+# shared group would take ruff, pytest and mypy down with it on every
+# `uv sync`. adw_modules/quality.py treats every uv provisioning failure from
+# this group as TOOL UNAVAILABLE ("incomplete"), never as a pass or a fail.
+scan = ["skylos"]
+
+[tool.pytest.ini_options]
+testpaths = ["adws/tests"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["adws"]
+# adw_data/ is runtime session output and stamped prompt files, not source.
+exclude = "adws/adw_data"
+
+[tool.ruff]
+# adw_data/ holds runtime session output and the stamped prompt/config files,
+# copied verbatim from the skill template - not source this project owns.
+extend-exclude = ["adws/adw_data"]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    # every subprocess call inspects returncode itself - explicit check= is noise here
+    "PLW1510",
+]

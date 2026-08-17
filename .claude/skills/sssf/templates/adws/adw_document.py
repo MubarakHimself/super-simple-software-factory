@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_document.py "<prompt or path/to/prompt.md>" [--base main] [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> code(changes) -> documenter
+Phases: engineer(request) -> git(worktree) -> code(changes) -> documenter
 
 This runs AFTER a build, and the guard is structural rather than advisory: the
 change capture is a code phase, and an empty diff raises there — before the
@@ -23,8 +23,7 @@ import argparse
 import sys
 
 from adw_modules import agents, changes, gates, session, utils
-from adw_modules.data_types import (AgentCall, ChangeCapture, DocumentOutput,
-                                    PhaseParams)
+from adw_modules.data_types import AgentCall, ChangeCapture, DocumentOutput, PhaseParams
 
 REQUIRED_AGENTS = ["documenter"]
 
@@ -43,8 +42,12 @@ def main(prompt: str, base: str = "main",
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt)
 
+    with run.phase(PhaseParams(name="worktree", kind="code", owner="git",
+                               description="Cut or join this run's branch and its own working tree")) as ph:
+        ph.log(**run.enter_worktree(prompt))
+
     with run.phase(PhaseParams(name="changes", kind="code", owner="git",
-                               description=f"Diff the working tree against {base} — the change to be written up")) as ph:
+                               description=f"Diff the working tree against {base} - the change to be written up")) as ph:
         changeset = changes.capture(run, ChangeCapture(base=base))
         ph.log(base=f"{changeset.base.label} @ {changeset.base.commit[:7]}",
                reason=changeset.base.reason,
@@ -54,13 +57,13 @@ def main(prompt: str, base: str = "main",
         if changeset.empty:
             raise RuntimeError(
                 f"nothing changed since {changeset.base.label} ({changeset.base.reason}) "
-                f"— documenting runs after a build. Build something first, or point "
+                f"- documenting runs after a build. Build something first, or point "
                 f"--base at the ref the work should be measured from.")
 
     with run.phase(PhaseParams(name="document", kind="agent", owner="documenter", retries=1,
                                description="Turn the captured diff into a write-up an engineer can read")) as ph:
         ph.call(AgentCall(output_type=DocumentOutput, prompt=prompt,
-                          previous=changes.as_envelope(changeset, DOCUMENT_NOTES),
+                          previous=changes.as_envelope(changeset, DOCUMENT_NOTES, tree=run.repo_root),
                           gates=[gates.artifacts_exist, gates.files_non_empty]))
 
     return run.finish()
