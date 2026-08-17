@@ -111,11 +111,24 @@ export function MergeQueue({
           </div>
         ) : null}
 
-        {rows.length === 0 && !loading && report && !report.available ? (
+        {/* A project the factory has never run in has no `integration` branch
+            for the report to read - the normal state of a new project. It is
+            drawn exactly like "nothing waiting", never as a failure. */}
+        {rows.length === 0 && !loading && report && !report.available && report.not_started ? (
+          <div className="merge-queue-empty">
+            <div className="mq-empty-icon">·</div>
+            {report.reason}
+          </div>
+        ) : null}
+
+        {rows.length === 0 && !loading && report && !report.available && !report.not_started ? (
           <div className="merge-queue-empty">
             <div className="mq-empty-icon">!</div>
-            <code>adws/ship_report.py</code> could not assemble a chunk here.
-            <p className="mq-empty-reason">{report.reason ?? "the script gave no reason"}</p>
+            The shipping report could not be assembled here.
+            {/* One sentence; the script's full text is the tooltip. */}
+            <p className="mq-empty-reason" title={report.detail ?? undefined}>
+              {report.reason ?? "the script gave no reason"}
+            </p>
           </div>
         ) : null}
 

@@ -14,8 +14,14 @@ export interface ShipReportPayload {
   markdown: string;
   empty: boolean;
   available: boolean;
-  /** the script's own words when `available` is false; null otherwise. */
+  /** ONE plain sentence when `available` is false; null otherwise. */
   reason: string | null;
+  /** the script's full text when `reason` summarizes it - a tooltip, never a
+   * line on the card. */
+  detail: string | null;
+  /** the factory has never run in this project, so there is no integration
+   * branch to ship from. Normal, and never drawn as a failure. */
+  not_started: boolean;
 }
 
 /** `GET /api/app/p/:id/cards` - the card lifecycle (server/app/cards.ts).

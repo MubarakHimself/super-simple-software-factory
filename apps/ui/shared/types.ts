@@ -479,9 +479,15 @@ export interface ShipReportResponse {
   /** the report's own Gaps section, one entry per line */
   gaps: string[];
   /** false when the script could not run or refused - then `reason` says why
-   * in the script's own words and every field above is empty */
+   * in ONE plain sentence and every field above is empty */
   available: boolean;
   reason: string | null;
+  /** the script's full text when `reason` summarizes it, else null - what a
+   * title/tooltip carries, so nothing is hidden and nothing is a wall */
+  detail: string | null;
+  /** true only when this project has no `integration` branch: the factory has
+   * never run here. A quiet empty state, never an error - see `refusalFrom` */
+  not_started: boolean;
   generated_at: string;
 }
 
@@ -766,8 +772,10 @@ export interface ProviderSignedInRow {
   sync_note: string;
 }
 
-/** A starting point for the Add form. Every field is editable; `source_note`
- * says whether the endpoint was verified or is the vendor's published one. */
+/** A starting point for the Add form — a PREFILL, never a promise. Every field
+ * is editable, nothing here is a claim that the lane works, and a row's state
+ * still comes from what was actually written. `source_note` says whether the
+ * endpoint was verified or is only the vendor's published one. */
 export interface ProviderPreset {
   id: string;
   label: string;
@@ -776,6 +784,14 @@ export interface ProviderPreset {
   auth_header: boolean;
   compat: Record<string, unknown> | null;
   models: string[];
+  /** The env var the vendor's own docs name for this key (`DEEPSEEK_API_KEY`).
+   * Informational only: this app never reads it and never writes an `apiKey`
+   * field - the key goes into pi's `auth.json`, which pi resolves first. */
+  key_env: string | null;
+  /** Placeholder for the key box. Never a real key, never an invented prefix. */
+  key_placeholder: string;
+  /** Model lists age. This is the one line that says so, per preset. */
+  models_note: string;
   source_note: string;
 }
 

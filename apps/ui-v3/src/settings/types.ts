@@ -114,7 +114,23 @@ const FAMILY_RULES: { match: RegExp; family: ModelFamily }[] = [
   { match: /deepseek/, family: { id: "deepseek", label: "DeepSeek" } },
   { match: /gemini/, family: { id: "gemini", label: "Gemini (Google)" } },
   { match: /gpt/, family: { id: "gpt", label: "GPT (OpenAI)" } },
+  // The provider preset catalog made six more vendors one click away, and a
+  // family this table cannot name is a family the cross-family rule cannot
+  // ENFORCE: `familyOf` returns null for the reviewer, so `conflicts` comes back
+  // empty and the same family on both sides reads as "unknown" instead of
+  // CONFLICT. These four cover every starter model those presets ship
+  // (mistral-large / mistral-medium / devstral, llama-3.3 / llama-3.1,
+  // MiniMax-M2.7, cogito-v2-1-671b).
+  { match: /mistral|mixtral|ministral|magistral|codestral|devstral/, family: { id: "mistral", label: "Mistral" } },
+  { match: /llama/, family: { id: "llama", label: "Llama (Meta)" } },
+  { match: /minimax/, family: { id: "minimax", label: "MiniMax" } },
+  { match: /cogito/, family: { id: "cogito", label: "Cogito (Deep Cogito)" } },
 ];
+
+/** The families this table can read, for the surfaces that list them in words -
+ * so a rule added above is never contradicted by a sentence below it. */
+export const FAMILY_WORDS: string[] = FAMILY_RULES.map((rule) => rule.family.id);
+export const FAMILY_LABELS: string[] = FAMILY_RULES.map((rule) => rule.family.label);
 
 /** The part of a `provider/model` string that names the MODEL. */
 export function modelId(model: string): string {

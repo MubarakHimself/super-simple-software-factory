@@ -69,16 +69,30 @@ const LABEL: Record<Pane, string> = {
 };
 
 /**
+ * One sentence per tab, on the tab itself. The operator's ruling took the
+ * "what is a lane?" callout off the Lanes pane; the one sentence it was worth
+ * lives here, where the word is first read and costs no space.
+ */
+const TAB_TIP: Record<Pane, string> = {
+  roster: "Which model each agent in the pipeline runs.",
+  lanes: "A lane is one provider account — one rate-limit bucket. Two accounts means two runs at once without either hitting the other's limit.",
+  providers: "The accounts the factory signs in with, and the keys that live on this laptop.",
+  machines: "The servers the factory runs on, and the one-click deploy.",
+  appearance: "Theme and font, for this browser profile.",
+};
+
+/**
  * What the save bar says before anything has been changed. It is per pane
  * because the panes differ in what they can write, and one blanket "edits save
- * as you make them" would be false on three of the five.
+ * as you make them" would be false on three of the five. Short: the bar is one
+ * line tall and ellipsizes.
  */
 const IDLE_LINE: Record<Pane, string> = {
-  roster: "Nothing changed yet — model and thinking level save into the config file as you pick them.",
-  lanes: "Nothing changed yet — slots save into the config file's lanes: block as you set them.",
-  providers: "Nothing changed yet — providers save on this machine; sending a key to a server is a separate step.",
-  machines: "Nothing changed yet — servers save into this machine's own settings file as you add them.",
-  appearance: "Nothing changed yet — these preferences save in this browser profile only.",
+  roster: "Model and thinking level save as you pick them.",
+  lanes: "Slots save as you set them.",
+  providers: "Providers save on this machine; syncing to a server is a separate step.",
+  machines: "Servers save as you add them.",
+  appearance: "These preferences save in this browser profile only.",
 };
 
 function isPane(value: string | undefined): value is Pane {
@@ -187,9 +201,11 @@ export default function Settings() {
           </button>
         </div>
 
-        <div className="scope-footer">
-          <span className="global">Roster and lanes</span> belong to one project&apos;s config file. Providers, machines and
-          appearance are the same for every project on this machine.
+        <div
+          className="scope-footer"
+          title="Roster and lanes are written into one project's own config file. Providers, machines and appearance are the same for every project on this machine."
+        >
+          <span className="global">Roster and lanes</span> are per project. The rest is shared.
         </div>
       </div>
 
@@ -200,6 +216,7 @@ export default function Settings() {
               type="button"
               key={tab}
               className={`form-tab${tab === pane ? " active" : ""}`}
+              title={TAB_TIP[tab]}
               onClick={() => goPane(tab)}
             >
               {LABEL[tab]}

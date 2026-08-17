@@ -45,11 +45,12 @@
  * fires `?refresh=1` at it; without that the operator would add a provider and
  * find Roster still blind to it until a restart.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "../lib/api.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
 import { ReadFailure } from "../shell/EmptyState.tsx";
 import { PlusIcon } from "./icons.tsx";
+import { Alert, HowThisWorks } from "./notices.tsx";
 import type { ProviderDefinitionsResponse } from "./types.ts";
 
 /* ── the shapes the routes answer with ──────────────────────────────────────
@@ -105,6 +106,9 @@ interface ProviderPreset {
   auth_header: boolean;
   compat: Record<string, unknown> | null;
   models: string[];
+  key_env: string | null;
+  key_placeholder: string;
+  models_note: string;
   source_note: string;
 }
 
@@ -179,27 +183,61 @@ const SYNC_WORD: Record<ProviderSyncResult["state"], string> = {
   failed: "failed",
 };
 
-/** The status triple: dot, bold state, plain sentence. Used for every state on
- * this pane so a row never reads two different ways. */
+/** The state of a row: a dot and one word. The server's own sentence about WHY
+ * it is in that state rides on the tooltip — it is the answer to a question the
+ * operator only sometimes asks, and it used to be three lines of prose in every
+ * single row. */
 function Triple({ color, word, sentence }: { color: string; word: string; sentence: string }) {
   return (
-    <div className="pr-status" title={sentence} style={{ flexDirection: "column", alignItems: "flex-end", gap: 2, whiteSpace: "normal" }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span className="dot" style={{ background: color }} />
-        <strong style={{ color: "var(--t1)", fontWeight: 600 }}>{word}</strong>
-      </span>
-      <span style={{ color: "var(--t3)", textAlign: "right", maxWidth: 320, lineHeight: 1.5 }}>{sentence}</span>
+    <div className="pr-status" title={sentence}>
+      <span className="dot" style={{ background: color }} />
+      <strong style={{ color: "var(--t1)", fontWeight: 600 }}>{word}</strong>
     </div>
   );
 }
 
+/** What the row prints; the full list is the tooltip. */
 function modelWords(row: ProviderApiKeyRow): string {
-  if (row.models.length === 0) return "no models named — pi will list none for this lane";
-  return `${row.models.length} ${row.models.length === 1 ? "model" : "models"} · ${row.models.map((model) => model.id).join(", ")}`;
+  if (row.models.length === 0) return "no models named";
+  return `${row.models.length} ${row.models.length === 1 ? "model" : "models"}`;
+}
+
+function modelList(row: ProviderApiKeyRow): string {
+  if (row.models.length === 0) return "No model id is registered for this provider, so pi will list none for this lane.";
+  return row.models.map((model) => model.id).join(", ");
+}
+
+/** A provider id is a lane name and the part before the slash in a model
+ * string, so pi's own grammar for it is the grammar this box enforces. */
+const ID_RULE = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * `source_note` carries provenance for all nine presets, and for two of them
+ * (Together AI's `.ai` vs the older `.xyz` host; Z.AI's pay-as-you-go path vs a
+ * Coding Plan's) it carries the words NOT VERIFIED and the reason. On a preset
+ * whose endpoint might 404, that half is the whole point — and a `title=` the
+ * operator has already clicked past is not where it can live. So it is cut out
+ * of the note and shown, in words, the moment that preset is chosen.
+ */
+const NOT_VERIFIED = "NOT VERIFIED";
+
+function caveat(note: string): string | null {
+  const at = note.indexOf(NOT_VERIFIED);
+  if (at === -1) return null;
+  return note.slice(at + NOT_VERIFIED.length).replace(/^[:\s]+/, "").trim() || null;
 }
 
 /* ── add provider (bucket A) ────────────────────────────────────────────────*/
 
+/**
+ * The catalog is the first thing in the modal and the whole of the shortcut: a
+ * grid of names, one click, and the boxes below fill in. What it is NOT is a
+ * connection — a preset carries a base URL somebody verified and a starter
+ * model list that ages, and nothing more. The row it produces goes down the
+ * same add path as one typed by hand and shows the same honest state, so
+ * "applied" still means two files on this machine really carry the provider.
+ * Every field stays editable, and Custom starts blank.
+ */
 function AddProviderModal({
   presets,
   onClose,
@@ -209,20 +247,38 @@ function AddProviderModal({
   onClose: () => void;
   onAdded: (id: string, applied: ProviderLocalState) => void;
 }) {
-  const [presetId, setPresetId] = useState<string>(presets[0]?.id ?? "custom");
+  // Nothing is chosen until the operator chooses: nine presets and a silent
+  // default would put one vendor's endpoint in the boxes unasked.
+  const [presetId, setPresetId] = useState<string>("");
   const preset = presets.find((entry) => entry.id === presetId) ?? null;
 
-  const [id, setId] = useState(presets[0]?.id ?? "");
-  const [label, setLabel] = useState(presets[0]?.label ?? "");
-  const [baseUrl, setBaseUrl] = useState(presets[0]?.base_url ?? "");
-  const [api, setApi] = useState(presets[0]?.api ?? "openai-completions");
-  const [models, setModels] = useState((presets[0]?.models ?? []).join(", "));
+  const [id, setId] = useState("");
+  const [label, setLabel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [api, setApi] = useState("openai-completions");
+  const [models, setModels] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The one box no preset can ever fill, so it is the one that gets focus. */
+  const keyRef = useRef<HTMLInputElement>(null);
+  /** The alert sits at the TOP of `.modal-body`, which scrolls. Choosing a
+   * preset scrolls the form down to the key box, so an alert raised after that
+   * renders entirely above the scroll viewport: the operator clicks "Add
+   * provider", the modal does not visibly move, and the reason it refused is
+   * off-screen. The refusal has to be where the eye is, so raising one brings
+   * it into view. */
+  const alertRef = useRef<HTMLDivElement>(null);
+
+  /** Set the refusal AND scroll it into view - never one without the other. */
+  const raise = useCallback((message: string) => {
+    setError(message);
+    requestAnimationFrame(() => alertRef.current?.scrollIntoView({ block: "nearest" }));
+  }, []);
 
   const choose = (chosen: string) => {
     setPresetId(chosen);
+    setError(null);
     const next = presets.find((entry) => entry.id === chosen);
     if (!next) {
       setId("");
@@ -230,16 +286,38 @@ function AddProviderModal({
       setBaseUrl("");
       setApi("openai-completions");
       setModels("");
-      return;
+    } else {
+      setId(next.id);
+      setLabel(next.label);
+      setBaseUrl(next.base_url);
+      setApi(next.api);
+      setModels(next.models.join(", "));
     }
-    setId(next.id);
-    setLabel(next.label);
-    setBaseUrl(next.base_url);
-    setApi(next.api);
-    setModels(next.models.join(", "));
+    keyRef.current?.focus();
+  };
+
+  /** The app correcting the operator before the server has to. Each sentence
+   * says what is wrong and what to type instead. */
+  const complaint = (): string | null => {
+    const wanted = id.trim().toLowerCase();
+    if (!ID_RULE.test(wanted)) {
+      return `"${id.trim()}" cannot be a provider id. Use lowercase letters, digits, dot, dash and underscore, starting with a letter or digit — for example ollama-cloud-2.`;
+    }
+    if (!/^https?:\/\//i.test(baseUrl.trim())) {
+      return "The base URL has to start with http:// or https:// — paste the endpoint your provider gave you, ending in /v1.";
+    }
+    if (models.trim() === "") {
+      return "Name at least one model id, one per line or comma separated. A provider with no models resolves nothing and will not appear in the Roster dropdown.";
+    }
+    return null;
   };
 
   const submit = async () => {
+    const wrong = complaint();
+    if (wrong) {
+      raise(wrong);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -259,7 +337,7 @@ function AddProviderModal({
       });
       onAdded(response.provider.id, response.provider.local);
     } catch (caught) {
-      setError(errorText(caught));
+      raise(errorText(caught));
     } finally {
       setBusy(false);
     }
@@ -277,29 +355,62 @@ function AddProviderModal({
       <div className="modal fade-in" role="dialog" aria-modal="true" aria-label="Add provider" style={{ width: 520, maxHeight: "88vh" }}>
         <div className="modal-header">
           <h3>Add a provider</h3>
-          <div className="modal-sub">An account with an API key. A second account of one you already have is a second row here — and a second lane.</div>
+          <div className="modal-sub">One account, one lane.</div>
         </div>
 
         <div className="modal-body" style={{ overflowY: "auto" }}>
+          <div ref={alertRef}>{error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}</div>
+
           <div className="modal-field">
-            <label htmlFor="ap-preset">Start from</label>
-            <select id="ap-preset" value={presetId} onChange={(event) => choose(event.target.value)} disabled={busy}>
+            <label>Start from</label>
+            <div className="preset-grid">
               {presets.map((entry) => (
-                <option key={entry.id} value={entry.id}>
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={`preset-chip${presetId === entry.id ? " on" : ""}`}
+                  disabled={busy}
+                  title={entry.source_note}
+                  onClick={() => choose(entry.id)}
+                >
                   {entry.label}
-                </option>
+                </button>
               ))}
-              <option value="custom">Something else (type it all)</option>
-            </select>
-            <span className="field-hint">{preset ? preset.source_note : "Every field is yours. pi takes any OpenAI-compatible endpoint."}</span>
+              <button
+                type="button"
+                className={`preset-chip${presetId === "custom" ? " on" : ""}`}
+                disabled={busy}
+                title="pi takes any OpenAI-compatible endpoint. Every box below is yours to fill."
+                onClick={() => choose("custom")}
+              >
+                Custom
+              </button>
+            </div>
+            <span
+              className="field-hint"
+              title={
+                preset
+                  ? `${preset.source_note} Picking it fills the boxes below and nothing else - the row's state still comes from what is actually written.`
+                  : "A preset fills the boxes below. It does not test the endpoint, does not check the key, and never makes a row say applied on its own."
+              }
+            >
+              {preset ? `Prefilled from ${preset.label}. Edit anything.` : "Fills the boxes. Connects nothing."}
+            </span>
+            {preset && caveat(preset.source_note) ? (
+              <Alert kind="warn">
+                <strong>{preset.label}&apos;s endpoint is not verified.</strong> {caveat(preset.source_note)}
+              </Alert>
+            ) : null}
           </div>
 
           <div className="modal-field">
             <label htmlFor="ap-id">Provider id</label>
             <input id="ap-id" value={id} spellCheck={false} disabled={busy} placeholder="ollama-cloud-2" onChange={(event) => setId(event.target.value)} />
-            <span className="field-hint">
-              This is the lane name — the part before the slash in <code>ollama-cloud/kimi-k2.7-code</code>. Lowercase, digits, dot,
-              dash and underscore.
+            <span
+              className="field-hint"
+              title="The part before the slash in ollama-cloud/kimi-k2.7-code. Lowercase letters, digits, dot, dash and underscore."
+            >
+              The lane name.
             </span>
           </div>
 
@@ -316,31 +427,53 @@ function AddProviderModal({
           <div className="modal-field">
             <label htmlFor="ap-api">API</label>
             <input id="ap-api" value={api} spellCheck={false} disabled={busy} onChange={(event) => setApi(event.target.value)} />
-            <span className="field-hint">
-              One of <code>openai-completions</code>, <code>openai-responses</code>, <code>anthropic-messages</code>,{" "}
-              <code>google-generative-ai</code> — pi&apos;s own four words.
+            <span
+              className="field-hint"
+              title="pi's own four words: openai-completions, openai-responses, anthropic-messages, google-generative-ai"
+            >
+              pi&apos;s word for the wire format.
             </span>
           </div>
 
           <div className="modal-field">
             <label htmlFor="ap-models">Model ids</label>
-            <input id="ap-models" value={models} spellCheck={false} disabled={busy} placeholder="kimi-k2.7-code, glm-5.2" onChange={(event) => setModels(event.target.value)} />
-            <span className="field-hint">
-              Comma separated. A provider with no models named resolves nothing — pi lists exactly what is written here.
+            <textarea
+              id="ap-models"
+              rows={2}
+              value={models}
+              spellCheck={false}
+              disabled={busy}
+              placeholder="kimi-k2.7-code, glm-4.7"
+              onChange={(event) => setModels(event.target.value)}
+            />
+            <span
+              className="field-hint"
+              title={`pi lists exactly what is written here, and nothing else. ${preset ? preset.models_note : "One id per line, or comma separated."}`}
+            >
+              One per line or comma separated. Edit freely — model names age.
             </span>
           </div>
 
           <div className="modal-field">
             <label htmlFor="ap-key">API key</label>
-            <input id="ap-key" type="password" value={apiKey} spellCheck={false} disabled={busy} autoComplete="off" onChange={(event) => setApiKey(event.target.value)} />
-            <span className="field-hint">
-              Stored on this laptop at <code>~/.sdl-factory/providers.json</code> with mode 0600, and written into pi&apos;s own
-              <code> ~/.pi/agent/auth.json</code> here. <strong>It never enters git and never comes back out of this app</strong> —
-              the row below will show a fingerprint, not the key.
+            <input
+              id="ap-key"
+              ref={keyRef}
+              type="password"
+              value={apiKey}
+              spellCheck={false}
+              disabled={busy}
+              autoComplete="off"
+              placeholder={preset ? preset.key_placeholder : "paste the key your provider gave you"}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+            <span
+              className="field-hint"
+              title={`Stored on this laptop at ~/.sdl-factory/providers.json (0600) and written into pi's own ~/.pi/agent/auth.json here. It never enters git and never comes back out of this app.${preset?.key_env ? ` ${preset.label} documents this key as ${preset.key_env}; this app does not read that variable, it stores what you paste.` : ""}`}
+            >
+              Kept on this laptop only; the row will show a fingerprint, never the key.
             </span>
           </div>
-
-          {error ? <span className="modal-error">{error}</span> : null}
         </div>
 
         <div className="modal-footer">
@@ -473,14 +606,15 @@ export function Providers({
       <div className="form-panel-title">
         Providers &amp; auth · <span className="scope-name-inline">Factory defaults</span>
       </div>
-      <div className="form-panel-sub">
-        A provider is an account — one account is one lane and one rate-limit bucket. A second account of the same service is a
-        second row here, with its own id.
-      </div>
+      <div className="form-panel-sub">A provider is an account, and one account is one lane.</div>
 
       {providers.error ? <ReadFailure error={providers.error} /> : null}
-      {writeError ? <p className="modal-error">{writeError}</p> : null}
-      {notice ? <p className="section-note">{notice}</p> : null}
+      {writeError ? <Alert onDismiss={() => setWriteError(null)}>{writeError}</Alert> : null}
+      {notice ? (
+        <Alert kind="ok" onDismiss={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      ) : null}
 
       {/* ── bucket A ────────────────────────────────────────────────────── */}
       <div className="form-section">
@@ -494,10 +628,8 @@ export function Providers({
 
         {(data?.api_key.length ?? 0) === 0 ? (
           <p className="section-empty">
-            {providers.loading
-              ? "Reading this machine's provider registry…"
-              : (data?.reason ?? "No API-key provider is registered on this machine.")}
-            {data ? <span className="se-note">{data.registry_path}</span> : null}
+            {providers.loading ? "Reading this machine's provider registry…" : "No API-key provider yet."}
+            <span className="se-note">{providers.loading ? "" : "Add provider takes a name, an endpoint and a key."}</span>
           </p>
         ) : (
           data!.api_key.map((row) => {
@@ -514,14 +646,11 @@ export function Providers({
                       </span>
                     ) : null}
                   </div>
-                  <div className="pr-auth">
-                    {row.auth_mechanism} · key {row.key_fingerprint}
-                  </div>
-                  <div className="pr-auth" title={row.base_url}>
-                    {row.api} · {row.base_url}
+                  <div className="pr-auth" title={`${row.auth_mechanism} · ${row.api} · ${row.base_url}`}>
+                    key {row.key_fingerprint} · {row.base_url}
                   </div>
                 </div>
-                <div className="pr-models" title={modelWords(row)}>
+                <div className="pr-models" title={modelList(row)}>
                   {modelWords(row)}
                 </div>
                 <Triple color={LOCAL_COLOR[row.local.state]} word={LOCAL_WORD[row.local.state]} sentence={row.local.reason} />
@@ -556,34 +685,30 @@ export function Providers({
         </button>
 
         {unkeyedLanes.length > 0 ? (
-          <p className="section-note">
+          <Alert kind="warn">
             <strong>{projectName}</strong>&apos;s roster draws on {unkeyedLanes.join(", ")}, which {unkeyedLanes.length === 1 ? "has" : "have"} no
-            key registered here. That is fine if the credential already lives on the factory machine — this pane only knows what it
-            was told.
-          </p>
+            key here. Add the key, or check it already lives on the factory machine.
+          </Alert>
         ) : null}
 
-        <p className="section-note">
-          Keys live at <strong>{data?.registry_path ?? "~/.sdl-factory/providers.json"}</strong> (0600) and, once applied, in{" "}
-          <strong>{data?.pi_auth_path ?? "~/.pi/agent/auth.json"}</strong> (0600). The provider block written into{" "}
-          <strong>{data?.pi_models_path ?? "~/.pi/agent/models.json"}</strong> carries no key at all — pi reads auth.json first, so
-          the file that describes the provider stays inert.
-        </p>
-        <p className="section-note">{data?.catalog_note}</p>
+        <HowThisWorks label="Where these keys live">
+          <p>
+            Keys are on this laptop at <code>{data?.registry_path ?? "~/.sdl-factory/providers.json"}</code> (0600) and,
+            once applied, in <code>{data?.pi_auth_path ?? "~/.pi/agent/auth.json"}</code> (0600). The block written into{" "}
+            <code>{data?.pi_models_path ?? "~/.pi/agent/models.json"}</code> carries no key at all. Neither file is in any
+            repository.
+          </p>
+          {data?.catalog_note ? <p>{data.catalog_note}</p> : null}
+          {data?.reason ? <p>{data.reason}</p> : null}
+        </HowThisWorks>
       </div>
 
       {/* ── bucket B ────────────────────────────────────────────────────── */}
       <div className="form-section">
         <div className="form-section-title">
-          <span>Signed in</span>
-        </div>
-        <div className="lane-callout">
-          <div className="lc-title">These two have no key to type</div>
-          <div className="lc-body">
-            Claude and Codex are subscription logins. This pane reads whether you are signed in on this machine — the file&apos;s
-            existence, never its contents — and carries what a server needs when you sync. Signing in itself opens a browser, so it
-            stays yours.
-          </div>
+          <span>
+            Signed in <span className="section-plain">— subscription logins, no key to type</span>
+          </span>
         </div>
 
         {(data?.signed_in ?? []).map((row) => {
@@ -600,12 +725,18 @@ export function Providers({
                     </span>
                   ) : null}
                 </div>
-                <div className="pr-auth">{row.auth_mechanism}</div>
-                <div className="pr-auth" title={row.artifact_path}>
-                  {row.artifact_path}
-                  {row.artifact_mtime ? ` · last changed ${new Date(row.artifact_mtime).toLocaleString()}` : ""}
+                <div
+                  className="pr-auth"
+                  title={`${row.auth_mechanism} · ${row.artifact_path}${row.artifact_mtime ? ` · last changed ${new Date(row.artifact_mtime).toLocaleString()}` : ""}`}
+                >
+                  {row.auth_mechanism}
+                  {row.artifact_mtime ? ` · last changed ${new Date(row.artifact_mtime).toLocaleDateString()}` : ""}
                 </div>
-                {row.detected ? null : <div className="form-hint">How to sign in: {row.how_to_sign_in}</div>}
+                {row.detected ? null : (
+                  <div className="form-hint" title={row.how_to_sign_in}>
+                    Sign in with <code>{row.how_to_sign_in}</code>
+                  </div>
+                )}
                 {row.id === "claude" && !row.token_available ? (
                   <div className="modal-field" style={{ marginTop: 8, maxWidth: 420 }}>
                     <label htmlFor="claude-token">Token from `claude setup-token`</label>
@@ -618,9 +749,11 @@ export function Providers({
                       placeholder="paste it here, then sync"
                       onChange={(event) => setClaudeToken(event.target.value)}
                     />
-                    <span className="field-hint">
-                      Sent with the next sync and written on the machine only, into its own ~/.sdl-factory/secrets.env (0600). This
-                      laptop never stores it, and the box clears itself once the sync has run.
+                    <span
+                      className="field-hint"
+                      title="Sent with the next sync and written on that machine only, into its own ~/.sdl-factory/secrets.env (0600). This laptop never stores it, and the box clears itself once the sync has run."
+                    >
+                      Goes to the server on the next sync; never stored here.
                     </span>
                   </div>
                 ) : null}
@@ -646,6 +779,15 @@ export function Providers({
             </div>
           );
         })}
+
+        <HowThisWorks label="What signed in means here">
+          <p>
+            Claude and Codex are subscription logins, not keys. This pane reads whether their auth file exists on this
+            machine and when it last changed — never its contents — and carries what a server needs when you sync.
+            Signing in itself opens a browser, so it stays yours; <strong>Re-check</strong> is how a row catches up after
+            you have done it in a terminal.
+          </p>
+        </HowThisWorks>
       </div>
 
       {/* ── sync ────────────────────────────────────────────────────────── */}
@@ -656,9 +798,11 @@ export function Providers({
         <div className="form-row">
           <div className="form-label-group">
             <div className="form-label">Write these credentials onto a server</div>
-            <div className="form-hint">
-              Over the same SSH connection Machines made: API keys into the machine&apos;s ~/.pi/agent/auth.json, a Claude token into
-              its ~/.sdl-factory/secrets.env, this machine&apos;s Codex login copied across. Every provider reports for itself.
+            <div
+              className="form-hint"
+              title="Over the same SSH connection Machines made: API keys into the machine's ~/.pi/agent/auth.json, a Claude token into its ~/.sdl-factory/secrets.env, this machine's Codex login copied across."
+            >
+              Over the SSH connection Machines already made
             </div>
           </div>
           <select
@@ -684,9 +828,8 @@ export function Providers({
 
         {servers.length === 0 ? (
           <p className="section-empty">
-            No server is registered on this machine, so there is nothing to sync to. Settings → Machines takes an IP and a password
-            once.
-            {machines.error ? <span className="se-note">{machines.error}</span> : null}
+            No server registered, so there is nothing to sync to.
+            <span className="se-note">{machines.error ?? "Machines takes an IP and a password once."}</span>
           </p>
         ) : null}
 

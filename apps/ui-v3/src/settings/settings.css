@@ -26,7 +26,10 @@
 .scope-item.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent);border-radius:1px;}
 .scope-item .si-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0;}
 .scope-item .si-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.scope-item .si-badge{font-family:var(--font-mono);font-size:10px;color:var(--t3);padding:1px 6px;border:1px solid var(--hairline);border-radius:3px;}
+/* v3 settings addition: the font-size floor. Nothing that carries meaning is
+   drawn below --text-meta (12px) anywhere in Settings - the drawing's 10px
+   badges included. */
+.scope-item .si-badge{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);padding:1px 6px;border:1px solid var(--hairline);border-radius:3px;}
 .scope-item.active .si-badge{color:var(--accent);border-color:var(--accent-dim);}
 .scope-add{display:flex;align-items:center;gap:10px;height:38px;width:100%;padding:0 10px;border-radius:var(--r-chip);color:var(--accent);font-size:var(--text-body);transition:background .12s;cursor:pointer;text-align:left;}
 .scope-add:hover{background:var(--row-hover);}
@@ -95,6 +98,15 @@
 .roster-select{height:38px;padding:0 40px 0 14px;border:1px solid var(--hairline-2);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);appearance:none;cursor:pointer;width:100%;min-width:0;max-width:100%;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;}
 .roster-select:focus{outline:none;border-color:var(--accent);}
 .roster-select:disabled{color:var(--t3);cursor:default;}
+/* `.roster-select` is width:100% because it fills a GRID cell in the agent
+   table. Inside a `.form-row`, which is a FLEX row, that same 100% is a demand
+   for the whole row: the label group (flex:1, min-width:0) is squeezed to a few
+   characters and its hint wraps to one word per line - the vertical text in the
+   operator's Defaults screenshot. The cap below is what keeps a sentence a
+   sentence, and the floor under .form-label-group keeps every other form row
+   safe from the same collapse. */
+.defaults-select{width:auto;max-width:320px;min-width:220px;flex:0 1 auto;}
+.form-label-group{min-width:min(240px,100%);}
 .role-select{height:30px;padding:0 30px 0 10px;border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);color:var(--t2);font-size:var(--text-meta);font-family:inherit;appearance:none;cursor:pointer;min-width:96px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%23645c52' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
 .role-select:focus{outline:none;border-color:var(--accent);}
 .role-select:disabled{color:var(--t3);cursor:default;}
@@ -139,6 +151,12 @@
 .agent-row .ar-source .mono{font-family:var(--font-mono);color:var(--t3);}
 .agent-row .ar-source .ar-sep{color:var(--t4);}
 .agent-row .ar-thinking .ar-source{margin-top:4px;}
+/* A model pi's own list marks without thinking support: the sentence stands
+   where the dropdown would, quiet, and never a control that means nothing. */
+.agent-row .ar-thinking .no-thinking,.form-row .no-thinking{font-size:var(--text-meta);color:var(--t3);line-height:1.45;display:block;}
+/* pi's model list takes seconds on a cold process; until it lands every model
+   dropdown holds one option. This line says which state it is in. */
+.catalog-state{margin:8px 0 4px;font-size:var(--text-meta);color:var(--t3);}
 .agent-row .ar-missing{grid-column:2 / -1;font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
 .agent-row .ar-missing strong{color:var(--t1);font-family:var(--font-mono);font-weight:600;}
 .agent-row .ar-missing .mono{font-family:var(--font-mono);color:var(--t3);}
@@ -149,10 +167,16 @@
 .family-chip.unknown{color:var(--warn);border-color:rgba(217,164,65,0.3);background:rgba(217,164,65,0.08);}
 
 /* ── the builder's model pool ── */
-.pool-pane{margin:0 10px 16px;padding:14px 16px;border:1px solid var(--hairline-2);border-left:2px solid var(--accent-dim);border-radius:0 var(--r-control) var(--r-control) 0;background:var(--raised);}
-.pool-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;}
-.pool-head .pool-title{font-family:var(--font-serif);font-size:var(--text-body);font-weight:600;color:var(--t1);}
-.pool-head .pool-count{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);}
+/* The pool editor is a lot of controls for a setting most projects never
+   touch, so the builder's row carries a word-button instead and the editor
+   opens under it. Collapsed, the bar is one line: the count, and what that
+   count means for the router. */
+.pool-block{padding:0 10px 12px;}
+.pool-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.pool-toggle{height:24px;padding:0 10px;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);border:1px solid var(--accent-dim);border-radius:var(--r-chip);background:transparent;cursor:pointer;transition:border-color .15s;}
+.pool-toggle:hover{border-color:var(--accent);}
+.pool-bar-note{font-size:var(--text-meta);color:var(--t3);}
+.pool-pane{margin:10px 0 4px;padding:14px 16px;border:1px solid var(--hairline-2);border-left:2px solid var(--accent-dim);border-radius:0 var(--r-control) var(--r-control) 0;background:var(--raised);}
 .pool-empty{display:flex;flex-direction:column;gap:10px;align-items:flex-start;font-size:var(--text-meta);color:var(--t2);line-height:1.6;}
 .pool-empty .mono{font-family:var(--font-mono);color:var(--t1);}
 .pool-row{display:grid;grid-template-columns:88px minmax(200px,1fr) max-content max-content max-content;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--hairline);}
@@ -232,12 +256,13 @@
    from - and a lane switched off dims rather than disappearing, because it is
    still a lane the roster names. */
 .lane-list{display:flex;flex-direction:column;}
-.lane-row{flex-wrap:wrap;}
-.lane-row.off .lane-id,.lane-row.off .lane-models{opacity:0.5;}
-.lane-row .lane-slots-edit{display:flex;flex-direction:column;gap:4px;flex-shrink:0;}
+.lane-row{flex-wrap:wrap;padding:12px 0;}
+.lane-row .lane-slots-edit{display:flex;align-items:center;gap:8px;flex-shrink:0;cursor:pointer;}
 .lane-row .lane-slots-edit .lse-label{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;}
 .lane-row .lane-slots-edit .role-select{min-width:64px;}
-.lane-row .lane-slots-edit .lse-source{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t4);white-space:nowrap;}
+/* v3 settings addition: where the number came from, in three words - it was a
+   two-line block, and the save bar already confirms the write. */
+.lane-row .lse-source{display:flex;align-items:center;font-size:var(--text-meta);color:var(--t4);white-space:nowrap;flex-shrink:0;min-width:92px;}
 .lane-row .lane-pinned{flex-basis:100%;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--warn);padding-left:164px;}
 
 /* v3 settings addition: a value that is real but not editable here. It reads as
@@ -257,7 +282,8 @@
 .provider-row .pr-icon{width:36px;height:36px;border-radius:var(--r-chip);background:var(--raised);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);color:var(--accent);font-weight:600;}
 .provider-row .pr-body{flex:1;min-width:0;}
 .provider-row .pr-name{font-size:var(--text-body);color:var(--t1);font-weight:500;}
-.provider-row .pr-auth{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;}
+/* One line now, not three: the mechanism and the endpoint ride on the title. */
+.provider-row .pr-auth{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .provider-row .pr-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);color:var(--t2);white-space:nowrap;}
 .provider-row .pr-status .dot{width:6px;height:6px;border-radius:50%;}
 .provider-row .pr-actions{display:flex;gap:8px;flex-shrink:0;}
@@ -293,7 +319,7 @@
 
 /* ── machine rows ── */
 .machine-list{display:flex;flex-direction:column;}
-.machine-row{display:grid;grid-template-columns:40px 2fr 1.2fr 1.2fr 1.3fr auto;align-items:center;gap:20px;padding:18px 0;border-bottom:1px solid var(--hairline);}
+.machine-row{display:grid;grid-template-columns:36px minmax(160px,1.6fr) minmax(110px,0.9fr) minmax(150px,1.2fr) minmax(150px,1.2fr) auto;align-items:center;gap:18px;padding:12px 0;border-bottom:1px solid var(--hairline);}
 .machine-row:last-child{border-bottom:none;}
 .machine-row .mc-icon{width:36px;height:36px;border-radius:var(--r-chip);border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--font-mono);font-size:var(--text-body);font-weight:600;}
 .machine-row .mc-body{min-width:0;}
@@ -302,8 +328,14 @@
 .machine-row .mc-ip{font-family:var(--font-mono);font-size:var(--text-mono);color:var(--t2);white-space:nowrap;}
 .machine-row .mc-factory{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);white-space:nowrap;}
 .machine-row .mc-factory .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;}
-.machine-row .mc-status{display:flex;align-items:center;gap:6px;font-size:var(--text-meta);font-family:var(--font-mono);color:var(--t2);white-space:nowrap;}
-.machine-row .mc-status .dot{width:6px;height:6px;border-radius:50%;}
+.machine-row .mc-status{display:flex;align-items:center;gap:7px;min-width:0;font-size:var(--text-meta);font-family:var(--font-mono);color:var(--t2);}
+.machine-row .mc-status .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+/* v3 settings addition, on the operator's ruling: the row's own one-line state,
+   where a second status block used to sit underneath every machine. The full
+   sentence and the pinned host key ride on the cell's title. */
+.machine-row .mc-state{min-width:0;display:flex;flex-direction:column;gap:1px;}
+.machine-row .mc-state .mc-state-id{color:var(--t2);}
+.machine-row .mc-state .mc-state-why{font-family:var(--font-sans);color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .machine-row .mc-actions{display:flex;gap:8px;flex-shrink:0;}
 .machine-row .mc-tag{font-family:var(--font-mono);font-size:var(--text-meta);color:var(--accent);background:var(--accent-surface);border-radius:var(--r-chip);padding:1px 7px;font-weight:normal;}
 .machine-row .mc-tag.dim{color:var(--t3);background:var(--raised);border:1px solid var(--hairline);}
@@ -325,7 +357,7 @@
 .theme-card.selected .tc-name{color:var(--accent);}
 /* v3 settings addition: the five themes that are drawn but not built say so on
    the card, so a click is never the first time the operator learns it. */
-.theme-card .tc-later{font-family:var(--font-mono);font-size:10px;font-weight:normal;color:var(--t4);border:1px solid var(--hairline);border-radius:3px;padding:1px 6px;flex-shrink:0;white-space:nowrap;}
+.theme-card .tc-later{font-family:var(--font-mono);font-size:var(--text-meta);font-weight:normal;color:var(--t4);border:1px solid var(--hairline);border-radius:3px;padding:1px 6px;flex-shrink:0;white-space:nowrap;}
 /* A real theme name wraps to two lines in a 140px card, and a centred badge
    beside a two-line name reads as a caption on the second line. Top-aligned, it
    reads as what it is: a stamp on the card. */
@@ -344,6 +376,39 @@
 .save-status-bar .save-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 .scope-name-inline{color:var(--accent);}
+
+/* ═══ THE OPERATOR'S RULING — guidance at the moment it is needed ═══════════
+   *"There is TOO MUCH TEXT. No human in the world is going to read this... I
+   would rather, if I make a mistake, the UI corrects me — like an alert."*
+
+   So the paragraphs came off the panes and split two ways: an ALERT when a
+   write fails or an input cannot be accepted (one sentence, what happened and
+   the fix), and a HOW-THIS-WORKS disclosure for the standing mechanism truths,
+   closed every time a pane opens. Nothing below --text-meta (12px): a hint that
+   would need to be smaller than that to fit is a hint that should not exist. */
+.pane-alert{display:flex;align-items:flex-start;gap:9px;padding:9px 12px;margin:10px 0;border:1px solid var(--hairline);border-left-width:2px;border-radius:var(--r-control);background:var(--raised);font-size:var(--text-meta);color:var(--t2);line-height:1.55;}
+.pane-alert .pa-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:6px;background:var(--fail);}
+.pane-alert .pa-text{flex:1;min-width:0;}
+.pane-alert .pa-text strong{color:var(--t1);font-weight:600;}
+.pane-alert .pa-text code{font-family:var(--font-mono);color:var(--t1);word-break:break-word;}
+.pane-alert .pa-close{flex-shrink:0;background:none;border:none;padding:0 2px;line-height:1;font-size:var(--text-head);color:var(--t4);cursor:pointer;transition:color .15s;}
+.pane-alert .pa-close:hover{color:var(--t2);}
+.pane-alert.fail{border-left-color:var(--fail);}
+.pane-alert.warn{border-left-color:var(--warn);}
+.pane-alert.warn .pa-dot{background:var(--warn);}
+.pane-alert.ok{border-left-color:var(--ok);}
+.pane-alert.ok .pa-dot{background:var(--ok);}
+
+.how-works{margin-top:14px;}
+.how-works>summary{display:inline-flex;align-items:center;gap:6px;width:fit-content;list-style:none;cursor:pointer;font-size:var(--text-meta);color:var(--t3);border-bottom:1px dotted var(--hairline-2);padding-bottom:1px;transition:color .15s,border-color .15s;}
+.how-works>summary::-webkit-details-marker{display:none;}
+.how-works>summary::before{content:"›";display:inline-block;color:var(--t4);transition:transform .15s;}
+.how-works[open]>summary::before{transform:rotate(90deg);}
+.how-works>summary:hover{color:var(--accent);border-bottom-color:var(--accent-dim);}
+.how-works .hw-body{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:12px 14px;border-left:2px solid var(--hairline-2);border-radius:0 var(--r-control) var(--r-control) 0;background:var(--raised);font-size:var(--text-meta);color:var(--t3);line-height:1.6;max-width:82ch;}
+.how-works .hw-body p{margin:0;}
+.how-works .hw-body strong{color:var(--t2);font-weight:600;}
+.how-works .hw-body code{font-family:var(--font-mono);color:var(--t2);word-break:break-all;}
 
 /* v3 settings addition: one plain sentence under a section, for the truth a
    control cannot carry on its own ("nothing is written here yet", "credentials
@@ -387,6 +452,21 @@
 .modal-steps .step-text{min-width:0;}
 .modal-steps .step-detail{display:block;font-family:var(--font-mono);font-size:var(--text-meta);color:var(--t3);margin-top:2px;word-break:break-word;}
 .modal-field input:disabled,.modal-field select:disabled{color:var(--t3);cursor:default;}
+
+/* v3 settings addition: the Add-provider PRESET CATALOG. A preset is a prefill,
+   so it is drawn as a grid of names you click once - not a wizard, not a
+   promise, and never a claim that the lane is connected. The chip's title
+   carries where its base URL came from; the grid itself stays wordless. */
+.preset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px;}
+.preset-chip{height:30px;padding:0 10px;font-size:var(--text-meta);color:var(--t2);border:1px solid var(--hairline);border-radius:var(--r-chip);background:var(--canvas);cursor:pointer;transition:border-color .15s,color .15s,background .15s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.preset-chip:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.preset-chip.on{border-color:var(--accent);color:var(--accent);background:var(--accent-surface);}
+.preset-chip:disabled{color:var(--t4);cursor:default;}
+/* Model ids run long (accounts/fireworks/routers/...), so the list is a box you
+   can grow, not a one-line input that hides what you pasted. */
+.modal-field textarea{min-height:54px;padding:8px 12px;border:1px solid var(--hairline);border-radius:var(--r-control);background:var(--canvas);color:var(--t1);font-size:var(--text-body);font-family:var(--font-mono);line-height:1.5;resize:vertical;transition:border-color .15s;}
+.modal-field textarea:focus{outline:none;border-color:var(--accent);}
+.modal-field textarea:disabled{color:var(--t3);cursor:default;}
 
 @media(max-width:1100px){.scope-pane{width:180px;}}
 @media(max-width:920px){.scope-pane{width:160px;}}

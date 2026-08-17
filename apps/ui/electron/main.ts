@@ -790,10 +790,17 @@ async function enterDashboard(
     // the operator would see v1/v2 in a window titled v3. Same explicit-flag
     // spirit as the server's own never-dir-presence rule.
     if (UI_V3 && !(await servedUiIs("v3"))) {
-      log(
-        "ERROR: a healthy server on :4700 is serving a different UI generation. " +
-          "Stop it (the `just ui`/`just ui2` window or its bun process) and relaunch `just app3`.",
-      );
+      const message =
+        "A healthy server on :4700 is serving a different UI generation. " +
+        "Stop it (the `just ui`/`just ui2` window or its bun process) and relaunch `just app3`.";
+      log(`ERROR: ${message}`);
+      // Same contract as the not-healthy path below: the caller relies on this
+      // function having already dialog'd and exited on failure - returning
+      // false silently would leave a headless process with no window.
+      if (opts.fatalOnFailure) {
+        dialog.showErrorBox("SDL Factory", message);
+        app.exit(1);
+      }
       return false;
     }
     log("found a healthy server already running - reusing it, spawning nothing");

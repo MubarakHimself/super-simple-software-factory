@@ -20,7 +20,16 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseShipReport, performShip, runShipReport, type ReportRun, type ShipDeps } from "./ship.ts";
+import {
+  NOT_STARTED_SENTENCE,
+  buildShipReport,
+  parseShipReport,
+  performShip,
+  refusalFrom,
+  runShipReport,
+  type ReportRun,
+  type ShipDeps,
+} from "./ship.ts";
 
 const roots: string[] = [];
 
@@ -301,6 +310,98 @@ describe("runShipReport", () => {
       // the abbreviated sha the report prints IS the fixture's own commit
       expect(fixture.shas.get(card.name)!.startsWith(card.sha!)).toBe(true);
     }
+  }, 60_000);
+});
+
+// ── the refusal an operator actually reads ──────────────────────────────────
+//
+// The defect this covers: a project the factory has never run in has no
+// `integration` branch, the script says so in git's vocabulary, and Home and
+// the merge rail printed that sentence verbatim in a red box. It is the normal
+// state of every fresh project and it is now one plain sentence.
+
+describe("refusalFrom", () => {
+  test("no integration branch is 'the factory hasn't run here', with the script's text kept for a tooltip", () => {
+    const said =
+      "ship_report: error: 'integration' does not resolve to a commit in C:\\repo - is this checkout missing " +
+      "that branch? (fetch it, or pass --integration origin/<name>, or --range to name two refs that exist here)";
+    const refusal = refusalFrom(said);
+    expect(refusal.not_started).toBe(true);
+    expect(refusal.reason).toBe(NOT_STARTED_SENTENCE);
+    expect(refusal.reason).not.toContain("does not resolve");
+    expect(refusal.detail).toContain("does not resolve to a commit"); // nothing is hidden
+  });
+
+  // The state STRICTLY EARLIER than a missing `integration`: the app was pointed
+  // at a project before the factory was installed in it, so `adws/ship_report.py`
+  // is not there to run. With the registry empty this is the FIRST refusal a new
+  // operator meets, and it was printing an absolute Windows path in red.
+  test("no factory installed is the same quiet state, with the path kept for a tooltip", async () => {
+    const root = await mkdtemp(join(tmpdir(), "no-factory-"));
+    roots.push(root);
+    const attempt = await runShipReport(root, null);
+    expect(attempt.ok).toBe(false);
+
+    const refusal = refusalFrom(attempt.reason!);
+    expect(refusal.not_started).toBe(true);
+    expect(refusal.reason).toBe(NOT_STARTED_SENTENCE);
+    expect(refusal.reason).not.toContain(root); // no absolute path in the sentence
+    expect(refusal.detail).toContain("ship_report.py"); // nothing is hidden
+
+    // And the whole way through the endpoint's own builder, on the real seam.
+    const report = await buildShipReport(root, null, { report: runShipReport });
+    expect(report.available).toBe(false);
+    expect(report.not_started).toBe(true);
+    expect(report.reason).toBe(NOT_STARTED_SENTENCE);
+  });
+
+  test("a missing `main` is NOT that - it is a real problem with the checkout", () => {
+    const refusal = refusalFrom(
+      "ship_report: error: 'main' does not resolve to a commit in C:\\repo - is this checkout missing that branch? (fetch it)",
+    );
+    expect(refusal.not_started).toBe(false);
+    expect(refusal.reason).toContain("'main' does not resolve");
+  });
+
+  test("any other failure keeps its first sentence, and only its first sentence", () => {
+    const refusal = refusalFrom("Traceback (most recent call last). File x, line 3. KeyError: 'cards'");
+    expect(refusal.reason).toBe("Traceback (most recent call last).");
+    expect(refusal.detail).toContain("KeyError");
+    expect(refusal.not_started).toBe(false);
+  });
+
+  test("a one-sentence failure carries no tooltip - there is nothing more to show", () => {
+    const refusal = refusalFrom("could not run 'uv run adws/ship_report.py --pr': ENOENT (is uv on PATH?)");
+    expect(refusal.detail).toBeNull();
+    expect(refusal.not_started).toBe(false);
+  });
+});
+
+describe("buildShipReport", () => {
+  const uvHere = Bun.which("uv");
+  test.skipIf(!uvHere)("a fixture with no integration branch reports not_started, empty, and no git vocabulary", async () => {
+    const fixture = await makeFixture([]);
+    const here = resolve(import.meta.dir, "..", "..", "..", "..");
+    await mkdir(join(fixture.root, "adws", "adw_modules"), { recursive: true });
+    await cp(join(here, "adws", "ship_report.py"), join(fixture.root, "adws", "ship_report.py"));
+    await cp(join(here, "adws", "adw_modules", "git_helper.py"), join(fixture.root, "adws", "adw_modules", "git_helper.py"));
+    await git(fixture.root, "add", "-A");
+    await git(fixture.root, "commit", "-m", "the factory's report script");
+
+    // The factory has never run here: only the engine ever creates
+    // `integration`, so a fresh project simply does not have one.
+    await git(fixture.root, "push", "origin", "--delete", "integration");
+    await git(fixture.root, "branch", "-D", "integration");
+    await git(fixture.root, "fetch", "--prune", "origin");
+
+    // The real script's own words, through the real seam.
+    const report = await buildShipReport(fixture.root, null, { report: runShipReport });
+    expect(report.available).toBe(false);
+    expect(report.not_started).toBe(true);
+    expect(report.empty).toBe(true);
+    expect(report.cards).toEqual([]);
+    expect(report.reason).toBe(NOT_STARTED_SENTENCE);
+    expect(report.detail).toContain("integration");
   }, 60_000);
 });
 

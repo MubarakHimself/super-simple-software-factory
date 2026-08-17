@@ -51,13 +51,17 @@ import { apiPost } from "../lib/api.ts";
 import { useResource, type Resource } from "../lib/poll.ts";
 import { ReadFailure } from "../shell/EmptyState.tsx";
 import { PlusIcon } from "./icons.tsx";
+import { HowThisWorks } from "./notices.tsx";
 import type { SaveReporter } from "./save.ts";
 import {
   familyOf,
+  FAMILY_LABELS,
+  FAMILY_WORDS,
   isFactoryAbsent,
   providerOf,
   UNKNOWN_FAMILY,
   type BuilderPoolEntry,
+  type CatalogModel,
   type ConfigRead,
   type ConfigResponse,
   type ModelCatalog,
@@ -141,12 +145,16 @@ function FamilyChip({ model }: { model: string }) {
 function ModelSelect({
   value,
   catalog,
+  loading,
   disabled,
   className = "roster-select",
   onPick,
 }: {
   value: string;
   catalog: ModelCatalog | null;
+  /** the read is still in flight - NOT the same as `catalog === null`, which is
+   * also what a failed read leaves behind */
+  loading: boolean;
   disabled: boolean;
   className?: string;
   onPick: (model: string) => void;
@@ -170,8 +178,22 @@ function ModelSelect({
     >
       {/* The value the file actually holds always appears, even when this
           machine's pi catalog has never heard of it — a select that silently
-          shows a different model than the file is the worst outcome here. */}
-      {known.has(value) ? null : <option value={value}>{value} — not in this machine&apos;s catalog</option>}
+          shows a different model than the file is the worst outcome here.
+          Before the catalog lands there is exactly this one option, and it must
+          not claim the list was read and came back without it. Nor may it claim
+          the list is still being read after the read has FAILED: `catalog` is
+          null in both cases, so `loading` is what tells them apart, and the
+          three sentences match the line above the table. */}
+      {known.has(value) ? null : (
+        <option value={value}>
+          {value}
+          {catalog !== null
+            ? " — not in this machine's catalog"
+            : loading
+              ? " — reading pi's model list…"
+              : " — pi's model list could not be read here"}
+        </option>
+      )}
       {(catalog?.providers ?? []).map((provider) => (
         <optgroup key={provider.id} label={provider.id}>
           {provider.models.map((model) => (
@@ -182,6 +204,99 @@ function ModelSelect({
         </optgroup>
       ))}
     </select>
+  );
+}
+
+// ── thinking is a per-MODEL capability, not a per-agent preference ──────────
+//
+// Ported from ui-v2's RosterPane (`findLane` / `thinkingOptions`), which is
+// where this was first read correctly. pi has ONE level vocabulary for every
+// provider (`pi --help`), and one honest narrowing: `--list-models` carries a
+// per-model `thinking` yes/no column, which `/api/app/models` already serves as
+// `CatalogModel.thinking`. So a level is offered when the model supports one,
+// and named as unsupported when it does not. Nothing here guesses: a model pi's
+// list does not name has UNKNOWN support, says so, and keeps its dropdown.
+
+/** The catalog entry for a `provider/id`, or null when pi's list does not name
+ * it (a model registered since the probe, or a hand-edited config line). */
+function findModel(catalog: ModelCatalog | null, model: string): CatalogModel | null {
+  const cut = model.indexOf("/");
+  if (!catalog || cut === -1) return null;
+  const provider = catalog.providers.find((entry) => entry.id === model.slice(0, cut));
+  return provider?.models.find((entry) => entry.id === model.slice(cut + 1)) ?? null;
+}
+
+type Thinks = "yes" | "no" | "unknown";
+
+function thinksOn(catalog: ModelCatalog | null, model: string): Thinks {
+  const found = findModel(catalog, model);
+  if (found) return found.thinking ? "yes" : "no";
+  return "unknown";
+}
+
+const NO_THINKING = "no thinking - not supported by this model";
+
+/** The Thinking cell: the level dropdown, or - when pi's own list marks this
+ * model without thinking support - the sentence that says so instead. The
+ * config's own word is never rewritten from here; it is only stopped from being
+ * offered as a choice that means nothing. */
+function ThinkingCell({
+  model,
+  catalog,
+  value,
+  levels,
+  source,
+  disabled,
+  onPick,
+}: {
+  model: string;
+  catalog: ModelCatalog | null;
+  value: string;
+  levels: string[];
+  /** "inherited" / "set on this agent" - unchanged by this cell */
+  source: string;
+  disabled: boolean;
+  onPick: (level: string) => void;
+}) {
+  const thinks = thinksOn(catalog, model);
+
+  if (thinks === "no") {
+    return (
+      <>
+        <span
+          className="no-thinking"
+          title={`pi's own model list marks ${model} without thinking support. The config still says thinking: ${value}; it simply means nothing to this model.`}
+        >
+          {NO_THINKING}
+        </span>
+        <div className="ar-source">{source}</div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <select
+        className="role-select"
+        value={value}
+        disabled={disabled}
+        title={thinks === "unknown" ? `pi's model list does not name ${model}, so its thinking support is unknown here` : undefined}
+        onChange={(event) => {
+          if (event.target.value !== value) onPick(event.target.value);
+        }}
+      >
+        {levels.includes(value) ? null : <option value={value}>{value}</option>}
+        {levels.map((level) => (
+          <option key={level} value={level}>
+            {level}
+          </option>
+        ))}
+      </select>
+      <div className="ar-source">
+        {source}
+        {thinks === "unknown" ? " · support unknown" : ""}
+      </div>
+    </>
   );
 }
 
@@ -210,9 +325,12 @@ export function Roster({
   const [applied, setApplied] = useState<ConfigResponse | null>(null);
   const [appliedPool, setAppliedPool] = useState<BuilderPoolEntry[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** null = the operator has not said; the pool's own size decides. */
+  const [poolOpen, setPoolOpen] = useState<boolean | null>(null);
   useEffect(() => {
     setApplied(null);
     setAppliedPool(null);
+    setPoolOpen(null);
   }, [projectId]);
 
   const { refresh: refreshConfig } = config;
@@ -281,6 +399,18 @@ export function Roster({
   const roster = data?.roster ?? [];
   const defaults = data?.defaults ?? null;
   const levels = catalog.data?.thinking_levels?.length ? catalog.data.thinking_levels : THINKING_FALLBACK;
+  const defaultThinks = thinksOn(catalog.data, defaults?.model ?? "");
+  /** pi's model list takes seconds to come back on a cold process, and until it
+   * does every model dropdown holds exactly one option: the value the file
+   * already has. That reads as "this row is locked" - the reviewer's row is the
+   * one an operator goes looking for, and it is the one that got reported. So
+   * the pane says which of the three states the list is in, once, above the
+   * table. */
+  const catalogLine = catalog.loading
+    ? "Reading pi's model list — the model dropdowns fill in when it lands."
+    : (catalog.data?.providers.length ?? 0) === 0
+      ? (catalog.data?.detail ?? "pi's model list could not be read here, so no other model can be offered.")
+      : null;
   const byProvider = new Map((definitions.data?.providers ?? []).map((provider) => [provider.id, provider]));
 
   // Pipeline order first, then anything else the file names, so an agent this
@@ -361,6 +491,7 @@ export function Roster({
           <ModelSelect
             value={agent.model}
             catalog={catalog.data}
+            loading={catalog.loading}
             disabled={busy !== null}
             onPick={(model) => void editAgent({ target: "agent", agent: agent.name, model }, `${agent.name}'s model`, marker)}
           />
@@ -387,28 +518,17 @@ export function Roster({
         </div>
 
         <div className="ar-thinking">
-          <select
-            className="role-select"
+          <ThinkingCell
+            model={agent.model}
+            catalog={catalog.data}
             value={agent.thinking}
+            levels={levels}
+            source={agent.thinking_inherited ? "inherited" : "set on this agent"}
             disabled={busy !== null}
-            onChange={(event) => {
-              if (event.target.value !== agent.thinking) {
-                void editAgent(
-                  { target: "agent", agent: agent.name, thinking: event.target.value },
-                  `${agent.name}'s thinking level`,
-                  marker,
-                );
-              }
-            }}
-          >
-            {levels.includes(agent.thinking) ? null : <option value={agent.thinking}>{agent.thinking}</option>}
-            {levels.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-          <div className="ar-source">{agent.thinking_inherited ? "inherited" : "set on this agent"}</div>
+            onPick={(thinking) =>
+              void editAgent({ target: "agent", agent: agent.name, thinking }, `${agent.name}'s thinking level`, marker)
+            }
+          />
         </div>
 
         <div className="ar-family">
@@ -441,130 +561,166 @@ export function Roster({
     if (router.error) return <ReadFailure error={router.error} />;
     if (router.loading && !router.data) return <p className="section-empty">Reading the builder pool…</p>;
 
+    // The editor is a lot of controls for a setting most projects never touch,
+    // so it lives behind one word-button on the builder's own row. Collapsed by
+    // default until there is more than one model - which is the state in which
+    // there is something to spread and something to reorder.
+    //
+    // NO POOL AND A ONE-ENTRY POOL ARE NOT THE SAME CONFIG, and this count used
+    // to report both as "1". `adws/engine.py:plan_run` takes the classical path
+    // only when the pool is EMPTY (`if not engine.builder_pool:` - dispatch runs
+    // `engine.config` itself). One entry is enough to put every builder run
+    // through `pick_pool_model` + `derive_config` (a per-card temp roster) and
+    // to make a full lane hold the card in the pool's own words. So the number
+    // is the pool's real size, and "no pool" says no pool.
+    const inPool = poolModels.length;
+    const open = poolOpen ?? inPool > 1;
+
     return (
-      <div className="pool-pane">
-        <div className="pool-head">
-          <span className="pool-title">Builder model pool</span>
-          <span className="pool-count">
-            {poolModels.length === 0 ? "one model" : `${poolModels.length} of ${maxPool}`}
-          </span>
+      <div className="pool-block">
+        <div className="pool-bar">
+          <button type="button" className="pool-toggle" aria-expanded={open} onClick={() => setPoolOpen(!open)}>
+            Pool · {inPool === 0 ? "none" : inPool}
+          </button>
+          {open ? null : (
+            <span className="pool-bar-note">
+              {inPool === 0
+                ? "No pool — the builder runs its own model and the router dispatches this roster as it stands."
+                : inPool === 1
+                  ? "One model — every builder run is routed through it."
+                  : `${inPool} models, one per run.`}
+            </span>
+          )}
         </div>
 
-        {poolModels.length === 0 ? (
-          <div className="pool-empty">
-            <p>
-              The builder runs one model — <span className="mono">{builder.model}</span>. A pool lets the router hand
-              concurrent runs to different providers, so one account&apos;s rate limit does not stall the rest.
-            </p>
-            <button type="button" className="pool-add" disabled={busy !== null} onClick={startPool}>
-              <PlusIcon /> Start a pool from {builder.model}
-            </button>
-          </div>
-        ) : (
-          <>
-            {drifted ? (
-              <div className="pool-drift">
-                The pool&apos;s first entry is <strong>{poolModels[0]}</strong> while the builder&apos;s own model is{" "}
-                <strong>{builder.model}</strong>. The router reads the pool; entry 1 is meant to be the builder&apos;s
-                model.
-                <button
-                  type="button"
-                  className="rt-clear"
-                  disabled={busy !== null}
-                  onClick={() => void editPool([{ model: builder.model }, ...pool.slice(1).filter((e) => e.model !== builder.model)], "the pool's first entry", "pool")}
-                >
-                  make entry 1 the builder&apos;s model
+        {open ? (
+          <div className="pool-pane">
+            {poolModels.length === 0 ? (
+              <div className="pool-empty">
+                <p>
+                  The builder runs one model — <span className="mono">{builder.model}</span>. A pool lets the router hand
+                  concurrent runs to different providers, so one account&apos;s rate limit does not stall the rest.
+                </p>
+                <button type="button" className="pool-add" disabled={busy !== null} onClick={startPool}>
+                  <PlusIcon /> Start a pool from {builder.model}
                 </button>
               </div>
-            ) : null}
+            ) : (
+              <>
+                {drifted ? (
+                  <div className="pool-drift">
+                    The pool&apos;s first entry is <strong>{poolModels[0]}</strong> while the builder&apos;s own model is{" "}
+                    <strong>{builder.model}</strong>. The router reads the pool; entry 1 is meant to be the builder&apos;s
+                    model.
+                    <button
+                      type="button"
+                      className="rt-clear"
+                      disabled={busy !== null}
+                      onClick={() => void editPool([{ model: builder.model }, ...pool.slice(1).filter((e) => e.model !== builder.model)], "the pool's first entry", "pool")}
+                    >
+                      make entry 1 the builder&apos;s model
+                    </button>
+                  </div>
+                ) : null}
 
-            {pool.map((entry, index) => (
-              <div className="pool-row" key={`${entry.model}:${index}`}>
-                <span className={`pool-index${index === 0 ? " primary" : ""}`}>{index === 0 ? "1 · primary" : index + 1}</span>
-                <ModelSelect
-                  value={entry.model}
-                  catalog={catalog.data}
-                  disabled={busy !== null}
-                  className="roster-select pool-select"
-                  onPick={(model) => setPoolAt(index, model)}
-                />
-                <span className="pool-provider mono">{providerOf(entry.model) ?? "no provider named"}</span>
-                <FamilyChip model={entry.model} />
-                <div className="pool-actions">
-                  <button
-                    type="button"
-                    className="pool-btn"
-                    disabled={busy !== null || index <= 1}
-                    title={index === 0 ? "the primary is entry 1" : index === 1 ? "already first after the primary" : "move up"}
-                    onClick={() => movePool(index, -1)}
+                {pool.map((entry, index) => (
+                  <div className="pool-row" key={`${entry.model}:${index}`}>
+                    <span className={`pool-index${index === 0 ? " primary" : ""}`}>{index === 0 ? "1 · primary" : index + 1}</span>
+                    <ModelSelect
+                      value={entry.model}
+                      catalog={catalog.data}
+                      loading={catalog.loading}
+                      disabled={busy !== null}
+                      className="roster-select pool-select"
+                      onPick={(model) => setPoolAt(index, model)}
+                    />
+                    <span className="pool-provider mono">{providerOf(entry.model) ?? "no provider named"}</span>
+                    <FamilyChip model={entry.model} />
+                    <div className="pool-actions">
+                      <button
+                        type="button"
+                        className="pool-btn"
+                        disabled={busy !== null || index <= 1}
+                        title={index === 0 ? "the primary is entry 1" : index === 1 ? "already first after the primary" : "move up"}
+                        onClick={() => movePool(index, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="pool-btn"
+                        disabled={busy !== null || index === 0 || index === pool.length - 1}
+                        title={index === 0 ? "the primary is entry 1" : "move down"}
+                        onClick={() => movePool(index, 1)}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="pool-btn danger"
+                        disabled={busy !== null}
+                        /* While a pool exists the router only ever picks FROM
+                           it (`pick_pool_model`), and the builder's own `model:`
+                           line is never dispatched - so removing entry 1 takes
+                           that model out of dispatch entirely, it does not fall
+                           back to it. Emptying the pool is the only thing that
+                           hands the builder its own model back. */
+                        title={
+                          index === 0
+                            ? pool.length === 1
+                              ? "empties the pool - the builder goes back to running its own model, dispatched from this roster as it stands"
+                              : "while a pool exists the router only picks from it, so this drops the model out of dispatch entirely - the builder runs the rest of the pool"
+                            : "remove from the pool"
+                        }
+                        onClick={() => removePool(index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="pool-foot">
+                  <select
+                    className="role-select pool-pick"
+                    value=""
+                    disabled={busy !== null || pool.length >= maxPool}
+                    onChange={(event) => {
+                      if (event.target.value) addPool(event.target.value);
+                    }}
                   >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="pool-btn"
-                    disabled={busy !== null || index === 0 || index === pool.length - 1}
-                    title={index === 0 ? "the primary is entry 1" : "move down"}
-                    onClick={() => movePool(index, 1)}
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="pool-btn danger"
-                    disabled={busy !== null}
-                    title={
-                      index === 0
-                        ? "removing the primary from the pool leaves the builder running its own model plus the rest of the pool"
-                        : "remove from the pool"
-                    }
-                    onClick={() => removePool(index)}
-                  >
-                    Remove
-                  </button>
+                    <option value="">
+                      {pool.length >= maxPool ? `pool full — ${maxPool} models` : "+ Add a model from…"}
+                    </option>
+                    {(catalog.data?.providers ?? []).map((provider) => {
+                      const options = provider.models
+                        .map((model) => `${provider.id}/${model.id}`)
+                        .filter((model) => !poolModels.includes(model));
+                      if (options.length === 0) return null;
+                      return (
+                        <optgroup key={provider.id} label={provider.id}>
+                          {options.map((model) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                  <span className="pool-note">
+                    {pool.length >= maxPool
+                      ? `the pool holds at most ${maxPool} models`
+                      : `${maxPool - pool.length} more can go in this pool`}
+                  </span>
                 </div>
-              </div>
-            ))}
+              </>
+            )}
 
-            <div className="pool-foot">
-              <select
-                className="role-select pool-pick"
-                value=""
-                disabled={busy !== null || pool.length >= maxPool}
-                onChange={(event) => {
-                  if (event.target.value) addPool(event.target.value);
-                }}
-              >
-                <option value="">
-                  {pool.length >= maxPool ? `pool full — ${maxPool} models` : "+ Add a model from…"}
-                </option>
-                {(catalog.data?.providers ?? []).map((provider) => {
-                  const options = provider.models
-                    .map((model) => `${provider.id}/${model.id}`)
-                    .filter((model) => !poolModels.includes(model));
-                  if (options.length === 0) return null;
-                  return (
-                    <optgroup key={provider.id} label={provider.id}>
-                      {options.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </optgroup>
-                  );
-                })}
-              </select>
-              <span className="pool-note">
-                {pool.length >= maxPool
-                  ? `the pool holds at most ${maxPool} models`
-                  : `${maxPool - pool.length} more can go in this pool`}
-              </span>
-            </div>
-          </>
-        )}
-
-        <p className="section-note">{POOL_SENTENCE}</p>
-        {router.data?.reason ? <p className="section-note mono">{router.data.reason}</p> : null}
+            <p className="section-note">{POOL_SENTENCE}</p>
+            {router.data?.reason ? <p className="section-note mono">{router.data.reason}</p> : null}
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -582,10 +738,7 @@ export function Roster({
       <div className="form-panel-title">
         Agent roster · <span className="scope-name-inline">{projectName}</span>
       </div>
-      <div className="form-panel-sub">
-        The five agents a run walks through, in order, and the model each one runs on. The builder is the one that runs
-        long and in parallel, so it is the one with a pool.
-      </div>
+      <div className="form-panel-sub">The five agents a run walks through, in order, and the model each one runs on.</div>
 
       {config.error ? <ReadFailure error={config.error} /> : null}
 
@@ -595,6 +748,8 @@ export function Roster({
             Pipeline <span className="section-plain">— scout, planner, builder, reviewer, documenter</span>
           </span>
         </div>
+
+        {catalogLine ? <p className="catalog-state">{catalogLine}</p> : null}
 
         {roster.length === 0 ? (
           <p className="section-empty">
@@ -630,12 +785,20 @@ export function Roster({
           </div>
         )}
 
-        <p className="section-note">
-          Model and thinking level are written one line at a time into <strong>{CONFIG_PATH}</strong>, and the pool into
-          that same file&apos;s <strong>router.builder_pool</strong> block; the previous file is kept beside it on every
-          save. Which agents exist is the pipeline&apos;s own shape — a run walks these five phases — so this pane
-          changes what they run on, never how many there are.
-        </p>
+        {/* Standing mechanism truth — where the write goes, what the backup is,
+            why there are five rows and no add button. True, not urgent, and the
+            exact category `HowThisWorks` exists for. */}
+        <HowThisWorks label="Where these settings are written">
+          <p>
+            Model and thinking level are written one line at a time into <code>{CONFIG_PATH}</code>, and the pool into
+            that same file&apos;s <code>router.builder_pool</code> block. The previous file is kept beside it on every
+            save.
+          </p>
+          <p>
+            Which agents exist is the pipeline&apos;s own shape — a run walks these five phases — so this pane changes
+            what they run on, never how many there are.
+          </p>
+        </HowThisWorks>
       </div>
 
       <div className="form-section">
@@ -658,8 +821,8 @@ export function Roster({
             ) : reviewerFamily === null ? (
               <>
                 The reviewer runs <strong>{reviewer.model}</strong>, and its model name matches no family this app knows —{" "}
-                {UNKNOWN_FAMILY}. A family is read from the model (kimi, glm, grok, qwen, claude, gpt, deepseek, gemini),
-                never from the provider account that serves it.
+                {UNKNOWN_FAMILY}. A family is read from the model ({FAMILY_WORDS.join(", ")}), never from the provider
+                account that serves it.
               </>
             ) : conflicts.length > 0 ? (
               <>
@@ -712,10 +875,15 @@ export function Roster({
           ) : null}
         </div>
 
-        <p className="section-note">
-          A <strong>provider</strong> is an account and a lane — Ollama Cloud, OpenCode, xAI. A <strong>family</strong> is
-          the model&apos;s: Kimi, GLM, Grok, Qwen, Claude, GPT, DeepSeek, Gemini. One account can serve several families,
-          so the family is read from the model name and nothing else.
+        {/* The de-texting pass owns this footnote only: it was four lines of
+            glossary under a box that already names every family it read. One
+            line stays, because provider-vs-family is the distinction the whole
+            rule turns on; the rest is the tooltip. */}
+        <p
+          className="section-note"
+          title={`A provider is an account and a lane — Ollama Cloud, OpenCode, xAI. A family is the model's — ${FAMILY_LABELS.join(", ")}. One account can serve several families, so the family is read from the model name and nothing else.`}
+        >
+          A <strong>provider</strong> is an account; a <strong>family</strong> is the model&apos;s.
         </p>
       </div>
 
@@ -727,12 +895,16 @@ export function Roster({
         </div>
         {defaults ? (
           <>
+            {/* `.form-row` is a flex row: a control that asks for 100% of it
+                leaves the label group nothing, and the hint wraps to one word
+                per line (the operator's screenshot). `defaults-select` is the
+                width cap that keeps the sentence a sentence. */}
             <div className="form-row">
               <div className="form-label-group">
                 <div className="form-label">Model</div>
                 <div className="form-hint">
                   {defaults.model
-                    ? `Every agent above marked "inherited from defaults" runs this one`
+                    ? "Every agent without its own model runs this one."
                     : "No default model in this file — each agent names its own"}
                 </div>
               </div>
@@ -740,7 +912,9 @@ export function Roster({
                 <ModelSelect
                   value={defaults.model}
                   catalog={catalog.data}
+                  loading={catalog.loading}
                   disabled={busy !== null}
+                  className="roster-select defaults-select"
                   onPick={(model) => void editAgent({ target: "defaults", model }, "the default model", "defaults")}
                 />
               ) : (
@@ -753,23 +927,39 @@ export function Roster({
                 <div className="form-hint">pi&apos;s own vocabulary{catalog.data?.source ? `, read from ${catalog.data.source}` : ""}</div>
               </div>
               {defaults.thinking ? (
-                <select
-                  className="form-select compact"
-                  value={defaults.thinking}
-                  disabled={busy !== null}
-                  onChange={(event) => {
-                    if (event.target.value !== defaults.thinking) {
-                      void editAgent({ target: "defaults", thinking: event.target.value }, "the default thinking level", "defaults");
+                defaultThinks === "no" ? (
+                  // The default model itself cannot think: offering a level here
+                  // would be offering a setting the engine cannot act on.
+                  <span
+                    className="no-thinking"
+                    title={`pi's own model list marks ${defaults.model} without thinking support. The config still says thinking: ${defaults.thinking}; it simply means nothing to this model.`}
+                  >
+                    {NO_THINKING}
+                  </span>
+                ) : (
+                  <select
+                    className="form-select compact"
+                    value={defaults.thinking}
+                    disabled={busy !== null}
+                    title={
+                      defaultThinks === "unknown"
+                        ? `pi's model list does not name ${defaults.model ?? "this model"}, so its thinking support is unknown here`
+                        : undefined
                     }
-                  }}
-                >
-                  {levels.includes(defaults.thinking) ? null : <option value={defaults.thinking}>{defaults.thinking}</option>}
-                  {levels.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
+                    onChange={(event) => {
+                      if (event.target.value !== defaults.thinking) {
+                        void editAgent({ target: "defaults", thinking: event.target.value }, "the default thinking level", "defaults");
+                      }
+                    }}
+                  >
+                    {levels.includes(defaults.thinking) ? null : <option value={defaults.thinking}>{defaults.thinking}</option>}
+                    {levels.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                )
               ) : (
                 <span className="form-hint mono">not set</span>
               )}
@@ -781,13 +971,16 @@ export function Roster({
       </div>
 
       {catalog.error ? <ReadFailure error={catalog.error} /> : null}
-      {catalog.data?.detail ? <p className="section-note mono">{catalog.data.detail}</p> : null}
+      {/* `catalog.data.detail` used to live here, a footnote away from the
+          dropdowns it explains. It is now `catalogLine`, above the table. */}
       {definitions.error ? <ReadFailure error={definitions.error} /> : null}
-      <p className="section-note">
-        Authentication is never read on this machine. Credentials live in <strong>~/.pi/agent/auth.json</strong> (0600)
-        on the machine that runs the factory, written over SSH and never in git — so that column says what it knows and
-        no more.
-      </p>
+      <HowThisWorks label="Where credentials live">
+        <p>
+          Authentication is never read on this machine. Credentials live in <code>~/.pi/agent/auth.json</code> (0600) on
+          the machine that runs the factory, written over SSH and never in git — so the Authentication column says what
+          it knows and no more.
+        </p>
+      </HowThisWorks>
     </div>
   );
 }

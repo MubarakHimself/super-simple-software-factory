@@ -1,14 +1,10 @@
 /**
- * Machines (global — "Factory defaults") — the servers the factory actually
- * runs on, and the one-click deploy.
+ * Machines (global — "Factory defaults") — the servers the factory runs on,
+ * and the one-click deploy.
  *
  * The operator's sentence this pane exists to satisfy: *"hypothetically the
  * server has NO CLI tool, nothing... I put in the IP together with the password
- * and I click connect, which means the factory is set up."* So every control
- * here is wired to something that really happens on a real box. The previous
- * version of this file drew six controls and disabled all six; the honest state
- * for a thing that is not wired is to say so, but the honest state for a thing
- * that IS wired is to work.
+ * and I click connect, which means the factory is set up."*
  *
  * ── What is wired, and to what ──────────────────────────────────────────────
  *   Add server        POST   /api/app/machines            (connect, install key, save)
@@ -20,29 +16,25 @@
  *   Default machine   POST   /api/app/default-machine
  *   Runs on           POST   /api/app/p/:id/machine       (the project manifest)
  *
- * Exactly one control is still disabled, and it says why in its own words:
- * Failover has no mechanism behind it — nothing on this machine reads a second
- * machine when the first is unreachable, so a select that stored a choice would
- * be storing a decision nobody acts on.
+ * ── The layout, after the operator's ruling ─────────────────────────────────
+ * An earlier build put a paragraph under every control and a second copy of
+ * each machine's status underneath its own row. The verdict was *"you ruined
+ * it."* So: one row per machine (name · host · factory · status dot · actions),
+ * every long truth on the row's own `title=`, the deploy log visible only while
+ * something is running or has just run, and the standing explanations behind
+ * one "How this works" link at the foot of the section.
  *
- * ── The credential sentence, printed where the credential is typed ──────────
+ * The Failover select went out entirely rather than being drawn disabled with
+ * an apology beside it: nothing in this app or the engine moves a run to a
+ * second machine, so there was no control to draw. Nothing that could be
+ * written was removed.
+ *
  * The password is used ONCE, on the connect that installs this app's own
  * generated ed25519 key into the server's `~/.ssh/authorized_keys`. It is never
- * written to disk and never sent back in a response. That is a fact about
- * `server/app/machines.ts`, and this pane prints it beside the password field
- * rather than in a help page nobody opens.
+ * written to disk and never sent back in a response (`server/app/machines.ts`).
  *
- * ── Plain browser vs the desktop shell ──────────────────────────────────────
- * Nothing here needs Electron. The SSH runs in the Bun server at :4700, so the
- * plain browser has every capability the packaged app has — no degraded mode to
- * declare, which is itself worth stating rather than leaving the operator to
- * wonder.
- *
- * ── Types ───────────────────────────────────────────────────────────────────
- * Declared here, on this directory's stated convention ("a surface owns its own
- * types in its own directory"), mirrored from `apps/ui/shared/types.ts`. ui-v3
- * is its own package and does not compile against the server's tsconfig, so
- * they cannot be imported across that boundary.
+ * Types are declared here, on this directory's convention ("a surface owns its
+ * own types in its own directory"), mirrored from `apps/ui/shared/types.ts`.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShell } from "../App.tsx";
@@ -51,6 +43,7 @@ import { useResource, type Resource } from "../lib/poll.ts";
 import { ReadFailure } from "../shell/EmptyState.tsx";
 import { appToken } from "../lib/token.ts";
 import { PlusIcon } from "./icons.tsx";
+import { Alert, HowThisWorks } from "./notices.tsx";
 
 /* ── the shapes the registry routes answer with ─────────────────────────────*/
 
@@ -217,6 +210,14 @@ function factoryOf(row: MachineRegistryRow): { color: string; text: string; titl
   return { color: FAIL, text: `engine ${engine} · ${checkout}`, title: `systemctl is-active sdl-engine = ${engine}` };
 }
 
+/** The pinned host key, as a tooltip line rather than a printed paragraph. */
+function fingerprintText(row: MachineRegistryRow): string {
+  if (row.kind === "local") return "";
+  return row.host_fingerprint
+    ? `Host key ${row.host_fingerprint}, pinned when this machine was added. Any connection answered by a different key is refused before anything is sent.`
+    : "No host key pinned yet — the next connection pins the key it sees.";
+}
+
 /* ── the add-server modal ───────────────────────────────────────────────────*/
 
 type AuthMode = "password" | "key";
@@ -244,7 +245,28 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
   const secretGiven = mode === "password" ? password.length > 0 : keyPath.trim().length > 0;
   const ready = host.trim().length > 0 && user.trim().length > 0 && secretGiven && !busy;
 
+  /** The app correcting the operator before the SSH attempt does it slowly. */
+  const complaint = useCallback((): string | null => {
+    const address = host.trim();
+    if (address === "" || /\s/.test(address)) {
+      return "Type the server's address — an IP like 203.0.113.10, or a hostname. No spaces.";
+    }
+    if (/^[a-z]+:\/\//i.test(address)) {
+      return `Drop the scheme: this wants ${address.replace(/^[a-z]+:\/\//i, "")}, not a URL.`;
+    }
+    const portNumber = Number(port);
+    if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+      return `Port ${port || "(empty)"} is not a port. SSH is on 22 unless you moved sshd.`;
+    }
+    return null;
+  }, [host, port]);
+
   const connect = useCallback(async () => {
+    const wrong = complaint();
+    if (wrong) {
+      setError(wrong);
+      return;
+    }
     setBusy(true);
     setError(null);
     setSteps([]);
@@ -271,7 +293,7 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
     } finally {
       if (alive.current) setBusy(false);
     }
-  }, [host, keyPath, mode, name, onAdded, password, port, user]);
+  }, [complaint, host, keyPath, mode, name, onAdded, password, port, user]);
 
   return (
     <div
@@ -283,10 +305,14 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
       <div className="modal add-project fade-in" role="dialog" aria-modal="true" aria-label="Add server">
         <div className="modal-header">
           <h3>Add server</h3>
-          <div className="modal-sub">A bare Ubuntu box with an IP and a password is the whole starting condition.</div>
+          <div className="modal-sub" title="A bare Ubuntu box with nothing installed on it is enough.">
+            An IP and a password is the whole starting condition.
+          </div>
         </div>
 
         <div className="modal-body">
+          {error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}
+
           <div className="modal-field">
             <label htmlFor="ms-host">Host or IP</label>
             <input
@@ -297,14 +323,16 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
               autoComplete="off"
               disabled={busy}
             />
-            <span className="field-hint">The address your provider gave you. Nothing needs to be installed on it.</span>
+            <span className="field-hint" title="Nothing needs to be installed on the box first — a bare Ubuntu image is enough.">
+              The address your provider gave you.
+            </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="modal-field">
               <label htmlFor="ms-user">User</label>
               <input id="ms-user" value={user} onChange={(event) => setUser(event.target.value)} autoComplete="off" disabled={busy} />
-              <span className="field-hint">root, or a user with passwordless sudo.</span>
+              <span className="field-hint">root, or passwordless sudo.</span>
             </div>
             <div className="modal-field">
               <label htmlFor="ms-port">Port</label>
@@ -323,7 +351,9 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
               autoComplete="off"
               disabled={busy}
             />
-            <span className="field-hint">What this box is called in this app. Nothing on the server reads it.</span>
+            <span className="field-hint" title="Nothing on the server reads this name.">
+              What this box is called in this app.
+            </span>
           </div>
 
           <div className="modal-field">
@@ -345,16 +375,11 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
                 autoComplete="off"
                 disabled={busy}
               />
-              <span className="field-hint">
-                <strong>This password is used once and is never stored.</strong> Connect signs in with it, generates an
-                ed25519 key for this app alone, installs the public half in the server&apos;s{" "}
-                <code>~/.ssh/authorized_keys</code>, then reconnects using only that key to prove it works. The password
-                is not written to any file, not put in the registry, and not sent back in any response. From then on this
-                app authenticates with the key, which stays on this laptop and never enters git.
-                <br />
-                This first connect also <strong>pins the server&apos;s host key</strong>: there is nothing to compare it
-                against yet, so it is trusted once and remembered, and every connection after this one — probe, deploy,
-                and the credential sync — is refused unless that same key answers.
+              <span
+                className="field-hint"
+                title="Connect signs in with it once, generates an ed25519 key for this app alone, installs the public half in the server's ~/.ssh/authorized_keys, then reconnects with only that key to prove it works. The password is not written to any file, not put in the registry, and not sent back in any response."
+              >
+                <strong>Used once, never stored.</strong>
               </span>
             </div>
           ) : (
@@ -368,15 +393,14 @@ function AddServer({ onClose, onAdded }: { onClose: () => void; onAdded: (result
                 autoComplete="off"
                 disabled={busy}
               />
-              <span className="field-hint">
-                Your own key, used as it is. This app does not generate one, does not touch the server&apos;s
-                authorized_keys, and does not copy the key anywhere. The server&apos;s host key is pinned on this first
-                connect, and every connection afterwards must be answered by it.
+              <span
+                className="field-hint"
+                title="Used as it is: this app generates no key, does not touch the server's authorized_keys, and copies your key nowhere."
+              >
+                Your own key, used as it is.
               </span>
             </div>
           )}
-
-          {error ? <span className="modal-error">{error}</span> : null}
 
           {steps.length > 0 ? (
             <div className="modal-field">
@@ -512,11 +536,17 @@ function DeployPanel({
             </option>
           ))}
         </select>
-        <button type="button" className="pr-btn" onClick={() => void start()} disabled={running || starting || projects.length === 0}>
+        <button
+          type="button"
+          className="pr-btn"
+          onClick={() => void start()}
+          disabled={running || starting || projects.length === 0}
+          title="Pushes one POSIX script over SFTP and runs it: apt essentials, uv, Node, just, clone this project's own origin, check out integration, uv sync, the installer's server target, then confirm sdl-engine is active. Every step is idempotent."
+        >
           {running ? "Deploying…" : starting ? "Starting…" : view ? "Deploy again" : "Deploy"}
         </button>
-        <span className="form-hint" style={{ flex: 1, minWidth: 180 }}>
-          The server clones what this project&apos;s own <code>origin</code> points at — no URL is typed twice.
+        <span className="form-hint" style={{ flex: 1, minWidth: 160 }} title="No repository URL is ever typed twice.">
+          Clones this project&apos;s own <code>origin</code>
         </span>
       </div>
 
@@ -525,12 +555,12 @@ function DeployPanel({
         <span className="st-id">
           {job === null || job.state === "none" ? "not deployed" : job.state === "running" ? "running" : job.state}
         </span>
-        <span className="st-sentence" style={{ whiteSpace: "normal" }} title={headline}>
+        <span className="st-sentence" title={headline}>
           {headline}
         </span>
       </div>
 
-      {error ? <span className="modal-error">{error}</span> : null}
+      {error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}
 
       {view && view.steps.length > 0 ? (
         <div className="modal-steps" style={{ maxHeight: 260 }}>
@@ -568,13 +598,6 @@ function DeployPanel({
           </pre>
         </details>
       ) : null}
-
-      <p className="section-note" style={{ marginTop: 0 }}>
-        Every step is idempotent: deploying a second time reports <strong>already present</strong> down the list rather
-        than installing anything twice. Planning skills under <code>~/.claude/skills</code> are stripped on the server
-        (the factory&apos;s own <code>sssf</code> skill is kept) and what was removed is named in the log — the server
-        executes, it does not plan.
-      </p>
     </div>
   );
 }
@@ -662,9 +685,12 @@ function Row({
           {factory.text}
         </div>
 
-        <div className="mc-status" title={status.sentence}>
+        <div className="mc-status" title={`${status.sentence}\n\n${fingerprintText(row)}`}>
           <span className="dot" style={{ background: status.color }} />
-          {status.id}
+          <span className="mc-state">
+            <span className="mc-state-id">{status.id}</span>
+            <span className="mc-state-why">{status.sentence}</span>
+          </span>
         </div>
 
         <div className="mc-actions">
@@ -679,8 +705,8 @@ function Row({
             </button>
           ) : (
             <>
-              <button type="button" className="pr-btn" onClick={() => setOpen((value) => !value)}>
-                {open ? "Hide deploy" : "Deploy factory"}
+              <button type="button" className="pr-btn" onClick={() => setOpen((value) => !value)} title="Install or update the factory on this server">
+                {open ? "Hide deploy" : "Deploy"}
               </button>
               {confirming ? (
                 <>
@@ -701,30 +727,12 @@ function Row({
         </div>
       </div>
 
-      {!isLocal ? (
-        <div style={{ margin: "-8px 0 10px 60px" }}>
-          <div className="status-triple">
-            <span className="st-dot dot" style={{ background: status.color, width: 7, height: 7, borderRadius: "50%" }} />
-            <span className="st-id">{status.id}</span>
-            <span className="st-sentence" style={{ whiteSpace: "normal" }}>
-              {status.sentence}
-            </span>
-          </div>
-          <p className="section-note mono" style={{ marginTop: 6 }} title="the server must answer with this exact host key or the connection is refused before anything is sent">
-            {row.host_fingerprint
-              ? `host key ${row.host_fingerprint} · pinned when this machine was added`
-              : "host key not pinned yet — the next connection pins the key it sees"}
-          </p>
-          {confirming ? (
-            <p className="section-note" style={{ marginTop: 6 }}>
-              Remove takes this machine out of <strong>this laptop&apos;s registry only</strong>. Nothing on{" "}
-              {row.host} is stopped, uninstalled or deleted — not the checkout, not the engine, not this app&apos;s key in
-              its authorized_keys.
-            </p>
-          ) : null}
-          {error ? <p className="section-note" style={{ color: "var(--fail)", marginTop: 6 }}>{error}</p> : null}
-        </div>
+      {confirming ? (
+        <Alert kind="warn" onDismiss={() => setConfirming(false)}>
+          Remove takes {row.name} out of this laptop&apos;s list only — nothing on {row.host} is stopped or deleted.
+        </Alert>
       ) : null}
+      {error ? <Alert onDismiss={() => setError(null)}>{error}</Alert> : null}
 
       {open && !isLocal ? (
         <DeployPanel row={row} projects={projects} defaultProjectId={defaultProjectId} onFinished={onChanged} />
@@ -808,12 +816,15 @@ export function Machines(_legacy: {
       <div className="form-panel-title">
         Machines · <span className="scope-name-inline">Factory defaults</span>
       </div>
-      <div className="form-panel-sub">
-        Planning happens on this laptop. Factory execution happens on a server. Add one with its IP and its password, and
-        the rest is this app&apos;s job.
-      </div>
+      <div className="form-panel-sub">You plan here; the factory runs on a server you add with its IP and password.</div>
 
       {list.error ? <ReadFailure error={list.error} /> : null}
+      {writeError ? <Alert onDismiss={() => setWriteError(null)}>{writeError}</Alert> : null}
+      {notice ? (
+        <Alert kind="ok" onDismiss={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      ) : null}
 
       <div className="form-section">
         <div className="form-section-title">
@@ -832,9 +843,8 @@ export function Machines(_legacy: {
 
         {rows.length === 0 ? (
           <p className="section-empty">
-            {list.loading
-              ? "Reading this machine's server registry…"
-              : "The registry read failed, so not even this machine's own row could be drawn — the line above carries the server's own words."}
+            {list.loading ? "Reading this machine's server registry…" : "No machine could be read."}
+            <span className="se-note">{list.loading ? "" : "The message above carries the server's own words."}</span>
           </p>
         ) : (
           <div className="machine-list">
@@ -852,26 +862,30 @@ export function Machines(_legacy: {
           </div>
         )}
 
-        {list.data?.reason ? <p className="section-note">{list.data.reason}</p> : null}
-
-        {notice ? (
-          <p className="section-note" style={{ color: "var(--t2)" }}>
-            {notice}
+        <HowThisWorks label="What Add server and Deploy actually do">
+          <p>
+            <strong>Connect</strong> signs in once with the password you type, generates an ed25519 key for this app
+            alone, installs its public half on the server, then reconnects with only that key to prove it works before
+            anything is saved. The password is never written anywhere. That first connect also pins the box&apos;s host
+            key: a later connection answered by a different key is refused before a password, an API key or an OAuth
+            token can be sent to it.
           </p>
-        ) : null}
-        {writeError ? (
-          <p className="section-note" style={{ color: "var(--fail)" }}>
-            {writeError}
+          <p>
+            <strong>Deploy</strong> pushes one POSIX script over SFTP and runs it — apt essentials, uv, Node, just, clone
+            your project&apos;s origin, check out <code>integration</code>, <code>uv sync</code>, the installer&apos;s
+            server target, strip planning skills, confirm <code>sdl-engine</code> is active. Each step reports itself; a
+            failure names the step and stops there. Running it twice reports <strong>already present</strong> rather
+            than installing anything twice.
           </p>
-        ) : null}
-
-        <p className="section-note">
-          A server row says <strong>reachable</strong> only when this app just spoke to it over SSH; anything it has not
-          proven reads <strong>unreachable</strong> with the connection&apos;s own error, never a guess. The registry is{" "}
-          <span className="section-note mono">{list.data?.registry_path ?? "~/.sdl-factory/machines.json"}</span> and the
-          keys are in <span className="section-note mono">{list.data?.key_dir ?? "~/.sdl-factory/keys"}</span> — both
-          outside every repository, so nothing about a machine can reach git.
-        </p>
+          <p>
+            A row says <strong>reachable</strong> only when this app just spoke to the box over SSH — anything unproven
+            reads unreachable with the connection&apos;s own error. The registry is{" "}
+            <code>{list.data?.registry_path ?? "~/.sdl-factory/machines.json"}</code> and the keys are in{" "}
+            <code>{list.data?.key_dir ?? "~/.sdl-factory/keys"}</code>, both outside every repository. All of it runs in
+            this app&apos;s own local server, so the browser and the desktop app can do exactly the same things.
+            {list.data?.reason ? ` ${list.data.reason}` : ""}
+          </p>
+        </HowThisWorks>
       </div>
 
       <div className="form-section">
@@ -909,21 +923,12 @@ export function Machines(_legacy: {
           ))
         )}
 
-        <p className="section-note">
-          The binding is a field on this machine&apos;s own project list, beside the repository path — it never enters the
-          project&apos;s repository. A project with no binding uses the default machine below.
-        </p>
-      </div>
-
-      <div className="form-section">
-        <div className="form-section-title">
-          <span>Default dispatch</span>
-        </div>
-
         <div className="form-row">
           <div className="form-label-group">
-            <div className="form-label">Default machine</div>
-            <div className="form-hint">Where a project runs when nothing above binds it</div>
+            <div className="form-label">Everything else</div>
+            <div className="form-hint" title="The binding is a field on this machine's own project list, beside the repository path — it never enters the project's repository.">
+              Where a project runs when nothing above binds it
+            </div>
           </div>
           <select
             className="form-select compact"
@@ -938,38 +943,6 @@ export function Machines(_legacy: {
               </option>
             ))}
           </select>
-        </div>
-
-        <div className="form-row">
-          <div className="form-label-group">
-            <div className="form-label">Failover</div>
-            <div className="form-hint">If the default machine is unreachable, fall back to…</div>
-          </div>
-          <select className="form-select compact" disabled value="later">
-            <option value="later">not wired — later</option>
-          </select>
-        </div>
-
-        <p className="section-note">
-          Failover is drawn and disabled on purpose: nothing in this app or in the engine moves a run to a second machine
-          when the first goes quiet, so a choice stored here would be a decision nobody acts on. The default machine
-          select above is real and writes to the registry as you pick it.
-        </p>
-      </div>
-
-      <div className="lane-callout">
-        <div className="lc-title">What Add server actually does</div>
-        <div className="lc-body">
-          Connect signs in once with the password you type, generates an ed25519 key for this app alone, installs its
-          public half on the server, then reconnects with only that key to prove it works before anything is saved. The
-          password is never written anywhere. That first connect also pins the box&apos;s <strong>host key</strong>: any
-          later connection answered by a different key is refused by name, before a password, a provider API key or an
-          OAuth token can be sent to it. <strong>Deploy factory</strong> then pushes one POSIX script over SFTP and
-          runs it: apt essentials, uv, Node, just, clone your project&apos;s origin, check out <code>integration</code>,{" "}
-          <code>uv sync</code>, the factory installer&apos;s server target, strip planning skills, and confirm{" "}
-          <code>sdl-engine</code> is active. Each step reports itself as it happens, and a failure names the step and
-          stops there. All of it runs in this app&apos;s own local server, so the browser at :4700 and the desktop app can
-          do exactly the same things.
         </div>
       </div>
 

@@ -261,6 +261,28 @@ export function mergeModelsJson(existing: unknown, id: string, block: Record<str
  * The provider block written into `models.json`. It deliberately carries NO
  * `apiKey`: the credential lives in `auth.json`, which pi resolves first. That
  * makes this block inert — safe to read, safe to show, worthless if copied.
+ *
+ * ── FIELD-FOR-FIELD against the research doc's mapping table ────────────────
+ * `docs/research/opencode-providers-2026-08-17.md` §3 tabulates what a preset
+ * has to write into a pi provider block. Every row of it, and this module's
+ * answer:
+ *   provider key      -> the registry entry's `id` (the `providers.<id>` key)
+ *   `baseUrl`         -> `base_url`                                  WRITTEN
+ *   `api`             -> `"openai-completions"` for every preset     WRITTEN
+ *   `authHeader`      -> `auth_header`, true for every preset        WRITTEN
+ *   `models[].id`     -> the model id, verbatim                      WRITTEN
+ *   `models[].name`   -> the id again when nothing better was typed  WRITTEN
+ *   `apiKey`          -> NOT WRITTEN, by this file's own design: pi resolves
+ *                        `auth.json` (#2) above a block's `apiKey` (#4), so the
+ *                        key goes there and this block stays inert.
+ *   `contextWindow` / `maxTokens` / `cost`
+ *                     -> NOT WRITTEN. The research doc's §5 deliberately omits
+ *                        those numbers ("pull pricing live at implementation
+ *                        time"), and §4 shows models.dev's own cost block
+ *                        already disagreeing with DeepSeek's published price.
+ *                        Omitting them takes pi's documented defaults, which is
+ *                        honest; inventing them would not be. A model that
+ *                        needs a real window gets it typed, per model, later.
  */
 export function providerBlock(entry: Pick<StoredProvider, "api" | "base_url" | "auth_header" | "compat" | "models">): Record<string, unknown> {
   const block: Record<string, unknown> = {
@@ -353,16 +375,51 @@ async function writeJson600(path: string, value: unknown): Promise<void> {
   await chmod(path, 0o600).catch(() => {});
 }
 
-// ── presets (the Add form's starting points) ────────────────────────────────
+// ── the preset catalog (the Add form's starting points) ─────────────────────
 
 /**
- * The three API-key lanes the operator named. Every field is either taken from
- * this repo's own running seed or from the vendor's documented endpoint, and
- * each row says which — a base URL nobody verified must not look like one that
- * was. All of it is editable in the form: a preset is a starting point, never a
- * constraint.
+ * THE CATALOG. One entry per provider the operator can start from, unified —
+ * the three lanes this pane already carried (Ollama Cloud, OpenCode Go,
+ * OpenRouter) sit in the same list as the six from
+ * `docs/research/opencode-providers-2026-08-17.md` §5, because there is no
+ * second mechanism: every one of them is a plain pi provider block.
+ *
+ * ── WHAT A PRESET IS ────────────────────────────────────────────────────────
+ * A PREFILL. Picking one fills the boxes in the Add form and nothing else. It
+ * does not test the endpoint, does not validate the key, and never moves a row
+ * to `applied` — that word still means two files on a real machine really carry
+ * the provider. A provider added from the catalog goes down the exact same add
+ * path as one typed by hand; `source` records which preset the shape came from
+ * so a row can say where its base URL came from, and that is the whole of it.
+ *
+ * ── WHERE EACH FIELD COMES FROM ─────────────────────────────────────────────
+ * `base_url` and `key_env` are copied verbatim from the research doc's §5
+ * table, which took each from a primary source: models.dev's live `api.json`
+ * where the provider carries an explicit `api` field (DeepSeek, OpenRouter,
+ * Fireworks, Z.AI), or the vendor's own docs where models.dev's schema does not
+ * require one (Groq, Mistral, Together — `@ai-sdk/*` packages carry the
+ * endpoint in the SDK, so models.dev has no `api` field to read). Each
+ * `source_note` says which, and says NOT VERIFIED where the research doc did.
+ *
+ * ── WHAT THE CATALOG DELIBERATELY DOES NOT CARRY ────────────────────────────
+ * No `cost`, no `contextWindow`, no `maxTokens`. The research doc's §5 omits
+ * them on purpose ("pull pricing live at implementation time... not from this
+ * document" — §4 shows models.dev's own cost block already disagreeing with
+ * DeepSeek's published price). A number nobody re-checked is worse than pi's
+ * own documented defaults, so the block carries neither and pi defaults apply.
+ * No `apiKey` either, for this module's own reason (see `providerBlock`).
+ *
+ * `key_env` is recorded because the vendor's docs name it and the operator will
+ * recognise it — NOT because this app reads it. Nothing here touches the
+ * environment.
  */
+
+/** Said once, per preset, because it is true of every catalog model list: the
+ * ids were right on the day they were read and vendors rename models. */
+const MODELS_AGE = "Starter ids from the 2026-08-17 research pass - vendors rename models, so edit these freely.";
+
 export const PRESETS: ProviderPreset[] = [
+  // ── the three this pane already carried ───────────────────────────────────
   {
     id: "ollama-cloud",
     label: "Ollama Cloud",
@@ -376,8 +433,10 @@ export const PRESETS: ProviderPreset[] = [
       supportsUsageInStreaming: true,
     },
     models: ["kimi-k2.7-code"],
-    source_note:
-      "Verified: byte-for-byte this repo's own running seed, installer/assets/pi/ollama-cloud.provider.json.",
+    key_env: null,
+    key_placeholder: "your Ollama Cloud key",
+    models_note: "This repo's own seed names kimi-k2.7-code; add whatever else your account serves.",
+    source_note: "Verified: byte-for-byte this repo's own running seed, installer/assets/pi/ollama-cloud.provider.json.",
   },
   {
     id: "opencode-go",
@@ -387,8 +446,11 @@ export const PRESETS: ProviderPreset[] = [
     auth_header: true,
     compat: null,
     models: [],
+    key_env: null,
+    key_placeholder: "your OpenCode key",
+    models_note: "No fixed list is on record here - name the models your plan serves.",
     source_note:
-      "Endpoint and provider prefix from docs/research/provider-limits-and-models.md section 1.4, quoting opencode.ai/docs/go. Model ids are yours to name - the research doc records no fixed list.",
+      "Endpoint and provider prefix from docs/research/provider-limits-and-models.md section 1.4, quoting opencode.ai/docs/go. The key itself is minted by a browser sign-in at opencode.ai/auth - this app cannot fetch one, you paste it.",
   },
   {
     id: "openrouter",
@@ -397,9 +459,97 @@ export const PRESETS: ProviderPreset[] = [
     base_url: "https://openrouter.ai/api/v1",
     auth_header: true,
     compat: null,
-    models: [],
+    models: ["deepseek/deepseek-v4-flash"],
+    key_env: "OPENROUTER_API_KEY",
+    key_placeholder: "your OpenRouter key",
+    models_note: "OpenRouter ids are namespaced vendor/model - write the whole string, e.g. deepseek/deepseek-v4-flash.",
     source_note:
-      "OpenRouter's published OpenAI-compatible base URL. NOT VERIFIED against this repo's own record - no doc here has ever wired it. Check it against openrouter.ai/docs before trusting the row.",
+      "Base URL and OPENROUTER_API_KEY from models.dev's live api.json, read directly in docs/research/opencode-providers-2026-08-17.md section 5. OpenRouter's REST surface is OpenAI-shaped, so openai-completions applies even though its own SDK package is not the openai-compatible one.",
+  },
+  // ── the catalog from the 2026-08-17 research pass ─────────────────────────
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    api: "openai-completions",
+    base_url: "https://api.deepseek.com",
+    auth_header: true,
+    compat: null,
+    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    key_env: "DEEPSEEK_API_KEY",
+    key_placeholder: "your DeepSeek key",
+    models_note: MODELS_AGE,
+    source_note:
+      "Base URL and DEEPSEEK_API_KEY from models.dev's live api.json, cross-checked against api-docs.deepseek.com's own 'Your First API Call' page. No /v1 suffix: DeepSeek's own example sets the bare host and lets the client append the path.",
+  },
+  {
+    id: "fireworks-ai",
+    label: "Fireworks AI",
+    api: "openai-completions",
+    base_url: "https://api.fireworks.ai/inference/v1/",
+    auth_header: true,
+    compat: null,
+    models: ["accounts/fireworks/routers/kimi-k2p7-code-fast", "accounts/fireworks/routers/glm-5p2-fast"],
+    key_env: "FIREWORKS_API_KEY",
+    key_placeholder: "your Fireworks key",
+    models_note: "Fireworks ids are long accounts/fireworks/routers/... paths - copy them verbatim, they are not names.",
+    source_note:
+      "Fireworks is modelled in models.dev as @ai-sdk/openai-compatible, so its own api field is directly authoritative - no separate vendor-doc check was needed for this base URL.",
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    api: "openai-completions",
+    base_url: "https://api.groq.com/openai/v1",
+    auth_header: true,
+    compat: null,
+    models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+    key_env: "GROQ_API_KEY",
+    key_placeholder: "your Groq key",
+    models_note: `${MODELS_AGE} The research pass also lists whisper-large-v3, which is speech, not a chat lane.`,
+    source_note:
+      "models.dev carries no api field for Groq (it ships @ai-sdk/groq, which knows its own endpoint), so this base URL came from Groq's own console.groq.com/docs/openai page. GROQ_API_KEY is models.dev's recorded env name.",
+  },
+  {
+    id: "mistral",
+    label: "Mistral",
+    api: "openai-completions",
+    base_url: "https://api.mistral.ai/v1",
+    auth_header: true,
+    compat: null,
+    models: ["mistral-large-2411", "mistral-medium-2508", "devstral-medium-2507"],
+    key_env: "MISTRAL_API_KEY",
+    key_placeholder: "your Mistral key",
+    models_note: MODELS_AGE,
+    source_note:
+      "Same shape as Groq: models.dev has no api field for @ai-sdk/mistral, so this base URL is from docs.mistral.ai/api's own curl example. Mistral's chat-completions surface is OpenAI-shaped.",
+  },
+  {
+    id: "togetherai",
+    label: "Together AI",
+    api: "openai-completions",
+    base_url: "https://api.together.ai/v1",
+    auth_header: true,
+    compat: null,
+    models: ["deepcogito/cogito-v2-1-671b", "MiniMaxAI/MiniMax-M2.7"],
+    key_env: "TOGETHER_API_KEY",
+    key_placeholder: "your Together AI key",
+    models_note: `${MODELS_AGE} Together ids are namespaced vendor/model, and the vendor half is case-sensitive.`,
+    source_note:
+      "Base URL from docs.together.ai/docs/openai-api-compatibility, the .ai domain read in the 2026-08-17 pass. NOT VERIFIED: older material elsewhere names api.together.xyz and the two were not reconciled - if calls 404, try that host.",
+  },
+  {
+    id: "zai",
+    label: "Z.AI (GLM)",
+    api: "openai-completions",
+    base_url: "https://api.z.ai/api/paas/v4",
+    auth_header: true,
+    compat: null,
+    models: ["glm-4.7", "glm-4.6", "glm-4.5-flash"],
+    key_env: "ZHIPU_API_KEY",
+    key_placeholder: "your Z.AI key",
+    models_note: MODELS_AGE,
+    source_note:
+      "Base URL and ZHIPU_API_KEY from models.dev's live zai entry (Z.ai is the brand, Zhipu the company - the env name follows the company). NOT VERIFIED: a Coding Plan account may need /api/coding/paas/v4 instead of this pay-as-you-go path - check your plan tier before trusting the row.",
   },
 ];
 

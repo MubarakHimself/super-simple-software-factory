@@ -17,6 +17,7 @@ import {
   MAX_BUILDER_POOL,
   getRouter,
   postLaneEdit,
+  postRosterEdit,
   postRouterEdit,
   readRouterAndLanes,
   spliceBlock,
@@ -366,5 +367,105 @@ describe("the router and lanes endpoints", () => {
     const res = await postLaneEdit(request(id, { lane: "zai", slots: 2 }));
     expect(res.status).toBe(200);
     expect(((await res.json()) as { lanes: Record<string, unknown> }).lanes.zai).toEqual({ slots: 2 });
+  });
+
+  // ── the agent write, for EVERY agent ──────────────────────────────────────
+  //
+  // The operator's report was "the reviewer's model cannot be changed". The
+  // reviewer is the one agent whose model an operator has a standing reason to
+  // change (the cross-family rule: the writer's family never reviews its own
+  // code), and it is also an agent with NO `model:` line of its own - it
+  // inherits the default, like every agent in the shipped roster. So the write
+  // for it is an INSERT, not a replace, and that is the path these lock down.
+  // There is nothing reviewer-shaped in this endpoint, and these prove it by
+  // running the same write for all five phases.
+
+  /** The shipped roster's own shape: five phases, no per-agent `model:`, a
+   * trailing comment on the line the insert anchors next to. */
+  const PIPELINE_CONFIG = `defaults:
+  coding_agent: pi
+  model: ollama-cloud/kimi-k2.7-code   # provider/id - TEST LANE
+  thinking: medium                 # off | minimal | low | medium | high
+
+agents:
+  - name: planner
+    thinking: high                 # model: inherits defaults.model (test lane)
+    purpose: Turn a request into a plan.
+
+  - name: builder
+    color: "#22d3ee"
+    purpose: Implement the plan exactly.
+    tools:
+      - read
+
+  - name: scout
+    purpose: Find where things live.
+
+  - name: reviewer
+    thinking: high                 # model: inherits defaults.model (test lane)
+    color: "#fb7185"
+    purpose: Confirm what was built is what was asked for.
+    writes: []
+    tools:
+      - read
+
+  - name: documenter
+    purpose: Write up the change.
+`;
+
+  const PHASES = ["planner", "builder", "scout", "reviewer", "documenter"];
+
+  test("POST roster: every pipeline agent takes a model the same way, reviewer included", async () => {
+    for (const name of PHASES) {
+      const { id, configPath } = await project(PIPELINE_CONFIG);
+      const res = await postRosterEdit(request(id, { target: "agent", agent: name, model: "xai/grok-4.5" }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { roster: { name: string; model: string; model_inherited: boolean }[]; changed: string[] };
+      expect(body.changed).toEqual([`${name}.model set to xai/grok-4.5`]);
+
+      // exactly one agent moved, and it is the one that was asked for
+      for (const agent of body.roster) {
+        expect(agent.model).toBe(agent.name === name ? "xai/grok-4.5" : "ollama-cloud/kimi-k2.7-code");
+        expect(agent.model_inherited).toBe(agent.name !== name);
+      }
+
+      // and the file it wrote is the file plus one line
+      const after = await readFile(configPath, "utf-8");
+      expect(after.split("\n").length).toBe(PIPELINE_CONFIG.split("\n").length + 1);
+      expect(after).toContain(`  - name: ${name}\n    model: xai/grok-4.5\n`);
+      expect(after).toContain("thinking: high                 # model: inherits defaults.model (test lane)");
+    }
+  });
+
+  test("POST roster: the reviewer's model can be changed again, and cleared back to inherited", async () => {
+    const { id, configPath } = await project(PIPELINE_CONFIG);
+
+    expect((await postRosterEdit(request(id, { target: "agent", agent: "reviewer", model: "xai/grok-4.5" }))).status).toBe(200);
+    // a second change REPLACES the line rather than adding another
+    const second = await postRosterEdit(request(id, { target: "agent", agent: "reviewer", model: "openai-codex/gpt-5.5" }));
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { changed: string[] }).changed).toEqual([
+      "reviewer.model xai/grok-4.5 -> openai-codex/gpt-5.5",
+    ]);
+
+    const cleared = await postRosterEdit(request(id, { target: "agent", agent: "reviewer", model: null }));
+    expect(cleared.status).toBe(200);
+    const body = (await cleared.json()) as { roster: { name: string; model: string; model_inherited: boolean }[] };
+    const reviewer = body.roster.find((agent) => agent.name === "reviewer")!;
+    expect(reviewer.model).toBe("ollama-cloud/kimi-k2.7-code");
+    expect(reviewer.model_inherited).toBe(true);
+    // back to the file it started as, byte for byte
+    expect(await readFile(configPath, "utf-8")).toBe(PIPELINE_CONFIG);
+  });
+
+  test("POST roster: the reviewer's thinking level is the same one write, and refuses a word pi does not read", async () => {
+    const { id } = await project(PIPELINE_CONFIG);
+    const ok = await postRosterEdit(request(id, { target: "agent", agent: "reviewer", thinking: "xhigh" }));
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { changed: string[] }).changed).toEqual(["reviewer.thinking high -> xhigh"]);
+
+    const bad = await postRosterEdit(request(id, { target: "agent", agent: "reviewer", thinking: "ultra" }));
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toContain("not a word the factory reads");
   });
 });

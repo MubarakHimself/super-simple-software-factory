@@ -139,7 +139,12 @@ function ShippingReport({ projectId, ship }: { projectId: string; ship: Resource
       ) : data?.available && data.empty ? (
         <p className="summary">Nothing to ship yet — the factory hasn't integrated new work since the last chunk</p>
       ) : data && !data.available ? (
-        <p className="summary">{data.reason ?? "the shipping report could not be produced"}</p>
+        // One plain sentence, quiet: a project the factory has never run in is
+        // the normal state of a new project, not a fault. The script's own full
+        // text stays available as the tooltip and never becomes the card.
+        <p className="summary" title={data.detail ?? undefined}>
+          {data.reason ?? "the shipping report could not be produced"}
+        </p>
       ) : null}
       {ship.error ? <ReadFailure error={ship.error} /> : null}
       <Link className="primary-cta" to={runsPath(projectId)}>

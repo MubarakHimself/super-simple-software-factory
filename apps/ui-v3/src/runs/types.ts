@@ -218,7 +218,14 @@ export interface ShipReport {
   tip: string | null;
   gaps: string[];
   available: boolean;
+  /** ONE plain sentence when `available` is false (server/app/ship.ts's
+   * `refusalFrom`), never the script's raw stderr. */
   reason: string | null;
+  /** the script's full text when `reason` summarizes it - the tooltip. */
+  detail: string | null;
+  /** no `integration` branch here: the factory has never run in this project.
+   * A quiet empty state, not a failure. */
+  not_started: boolean;
   generated_at: string;
 }
 

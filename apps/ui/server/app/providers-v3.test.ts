@@ -345,25 +345,196 @@ describe("env text merge (ported from installer/steps.py:merge_env_text)", () =>
   });
 });
 
-describe("presets", () => {
-  test("the three buckets-A lanes the operator named are all present and shaped for pi", () => {
-    expect(PRESETS.map((preset) => preset.id).sort()).toEqual(["ollama-cloud", "opencode-go", "openrouter"]);
+/* ── the preset catalog ────────────────────────────────────────────────────
+   The catalog is DATA copied out of docs/research/opencode-providers-2026-08-17.md
+   §5, which itself copied each field from a primary source. So the test that
+   matters is not "does it parse" but "is it still the same string the research
+   doc verified" - a base URL that drifts by one character is a lane that 404s
+   with no error anywhere in this app. Hence the verbatim table below: it is the
+   research doc's own row, restated, and it fails the moment either moves. */
+
+/** Exactly the §5 table (plus the three lanes this pane already carried),
+   base URL and env var, copied character for character. */
+const RESEARCH_TABLE: Record<string, { base_url: string; key_env: string | null }> = {
+  "ollama-cloud": { base_url: "https://ollama.com/v1", key_env: null },
+  "opencode-go": { base_url: "https://opencode.ai/zen/go/v1/", key_env: null },
+  openrouter: { base_url: "https://openrouter.ai/api/v1", key_env: "OPENROUTER_API_KEY" },
+  deepseek: { base_url: "https://api.deepseek.com", key_env: "DEEPSEEK_API_KEY" },
+  "fireworks-ai": { base_url: "https://api.fireworks.ai/inference/v1/", key_env: "FIREWORKS_API_KEY" },
+  groq: { base_url: "https://api.groq.com/openai/v1", key_env: "GROQ_API_KEY" },
+  mistral: { base_url: "https://api.mistral.ai/v1", key_env: "MISTRAL_API_KEY" },
+  togetherai: { base_url: "https://api.together.ai/v1", key_env: "TOGETHER_API_KEY" },
+  zai: { base_url: "https://api.z.ai/api/paas/v4", key_env: "ZHIPU_API_KEY" },
+};
+
+describe("the preset catalog", () => {
+  test("every provider the research doc verified is in it, and nothing else is", () => {
+    expect(PRESETS.map((preset) => preset.id).sort()).toEqual(Object.keys(RESEARCH_TABLE).sort());
+  });
+
+  test("each base URL and env var is the research doc's own string, character for character", () => {
     for (const preset of PRESETS) {
-      expect(preset.api).toBe("openai-completions");
-      expect(preset.base_url).toMatch(/^https:\/\//);
-      expect(preset.source_note.length).toBeGreaterThan(20);
+      const row = RESEARCH_TABLE[preset.id]!;
+      expect({ id: preset.id, base_url: preset.base_url, key_env: preset.key_env }).toEqual({
+        id: preset.id,
+        base_url: row.base_url,
+        key_env: row.key_env,
+      });
     }
   });
 
-  test("the ollama-cloud preset matches this repo's own running seed", () => {
+  test("every entry is shaped for pi and says where its endpoint came from", () => {
+    for (const preset of PRESETS) {
+      // The research doc's mapping table: openai-completions for every one of
+      // them, because every REST surface here is OpenAI-shaped.
+      expect(preset.api).toBe("openai-completions");
+      expect(preset.auth_header).toBe(true);
+      expect(preset.base_url).toMatch(/^https:\/\//);
+      expect(isValidProviderId(preset.id)).toBe(true);
+      expect(preset.label.trim()).not.toBe("");
+      expect(preset.source_note.length).toBeGreaterThan(20);
+      // A model list with no "these age" line is a model list somebody will
+      // trust in six months.
+      expect(preset.models_note.length).toBeGreaterThan(20);
+      expect(preset.key_placeholder.trim()).not.toBe("");
+    }
+  });
+
+  test("an env var name is documentation, never something this app reads out of the environment", () => {
+    for (const preset of PRESETS) {
+      if (preset.key_env === null) continue;
+      expect(preset.key_env).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      // The placeholder is a prompt, not a leaked key or an invented prefix.
+      expect(preset.key_placeholder).not.toContain("sk-");
+    }
+  });
+
+  test("the ollama-cloud preset still matches this repo's own running seed", () => {
     const preset = PRESETS.find((entry) => entry.id === "ollama-cloud")!;
-    expect(preset.base_url).toBe("https://ollama.com/v1");
     expect(preset.compat).toMatchObject({ maxTokensField: "max_tokens", supportsDeveloperRole: false });
     expect(preset.models).toContain("kimi-k2.7-code");
   });
 
-  test("an endpoint nobody verified says so in its own note", () => {
-    expect(PRESETS.find((entry) => entry.id === "openrouter")!.source_note).toContain("NOT VERIFIED");
+  test("the two endpoints the research doc left unresolved say NOT VERIFIED on their own row", () => {
+    // Together AI: api.together.ai vs. the older api.together.xyz, unreconciled.
+    expect(PRESETS.find((entry) => entry.id === "togetherai")!.source_note).toContain("NOT VERIFIED");
+    // Z.AI: pay-as-you-go path confirmed, Coding Plan path never was.
+    expect(PRESETS.find((entry) => entry.id === "zai")!.source_note).toContain("NOT VERIFIED");
+  });
+
+  test("a preset carries starter model ids, verbatim, including the long Fireworks paths", () => {
+    expect(PRESETS.find((entry) => entry.id === "deepseek")!.models).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    expect(PRESETS.find((entry) => entry.id === "fireworks-ai")!.models).toContain(
+      "accounts/fireworks/routers/kimi-k2p7-code-fast",
+    );
+    // OpenRouter ids are namespaced vendor/model - the whole string is the id.
+    expect(PRESETS.find((entry) => entry.id === "openrouter")!.models[0]).toContain("/");
+  });
+
+  test("no preset carries a cost, context window or token ceiling", () => {
+    // The research doc's own instruction (section 5): pull pricing live, never
+    // freeze a fast-moving vendor's numbers into a file. pi's documented
+    // defaults are honest; an unchecked number is not.
+    const text = JSON.stringify(PRESETS);
+    expect(text).not.toContain("contextWindow");
+    expect(text).not.toContain("maxTokens\"");
+    expect(text).not.toContain("\"cost\"");
+  });
+});
+
+describe("a preset produces a valid pi provider block", () => {
+  test("every catalog entry maps field-for-field onto the research doc's table", () => {
+    for (const preset of PRESETS) {
+      // Exactly what the Add form posts when a preset is picked and a key typed.
+      const entry = storedProvider({
+        id: preset.id,
+        label: preset.label,
+        api: preset.api,
+        base_url: preset.base_url,
+        auth_header: preset.auth_header,
+        compat: preset.compat,
+        models: preset.models.map((model) => ({ id: model, name: null })),
+        source: preset.id,
+      });
+      const block = providerBlock(entry) as Record<string, unknown>;
+
+      // opencode-providers-2026-08-17.md section 3, row by row:
+      expect(block["baseUrl"]).toBe(preset.base_url); //          baseUrl <- api
+      expect(block["api"]).toBe("openai-completions"); //         api     <- npm
+      expect(block["authHeader"]).toBe(true); //                  authHeader
+      if (preset.models.length === 0) {
+        expect(block["models"]).toBeUndefined();
+      } else {
+        expect(block["models"]).toEqual(
+          // models[].id verbatim; models[].name falls back to the id.
+          preset.models.map((model) => ({ id: model, name: model, input: ["text"] })),
+        );
+      }
+      // The credential never rides in this block - auth.json wins in pi's own
+      // resolution order, so the file that could be read by anything is inert.
+      expect(block["apiKey"]).toBeUndefined();
+      expect(JSON.stringify(block)).not.toContain("SECRETVALUE");
+      // pi's documented defaults, not invented numbers.
+      expect(block["contextWindow"]).toBeUndefined();
+      expect(block["maxTokens"]).toBeUndefined();
+      expect(block["cost"]).toBeUndefined();
+    }
+  });
+
+  test("a preset block merges into models.json under its own id and touches nothing else", () => {
+    const existing = { providers: { xai: { api: "keep" } } };
+    let models: Record<string, unknown> = existing;
+    for (const preset of PRESETS) {
+      models = mergeModelsJson(
+        models,
+        preset.id,
+        providerBlock({
+          api: preset.api,
+          base_url: preset.base_url,
+          auth_header: preset.auth_header,
+          compat: preset.compat,
+          models: preset.models.map((model) => ({ id: model, name: null })),
+        }),
+      );
+    }
+    const providers = models["providers"] as Record<string, Record<string, unknown>>;
+    expect(providers["xai"]).toEqual({ api: "keep" });
+    for (const preset of PRESETS) expect(providers[preset.id]!["baseUrl"]).toBe(preset.base_url);
+    // pi resolves `provider/model` by its leading segment, so every catalog id
+    // has to survive as a plain JSON key that never needs quoting.
+    for (const preset of PRESETS) expect(isValidProviderId(preset.id)).toBe(true);
+  });
+
+  test("the custom path is unchanged: no preset, no prefill, the same block", () => {
+    // What the form posts with Custom picked and every box typed by hand.
+    const entry = storedProvider({
+      id: "my-own-lane",
+      label: "My Own Lane",
+      base_url: "https://api.example.internal/v1",
+      compat: null,
+      models: [{ id: "some-model", name: null }],
+      source: "operator",
+    });
+    expect(providerBlock(entry)).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://api.example.internal/v1",
+      authHeader: true,
+      models: [{ id: "some-model", name: "some-model", input: ["text"] }],
+    });
+    // A hand-typed id is not in the catalog and does not need to be.
+    expect(PRESETS.some((preset) => preset.id === "my-own-lane")).toBe(false);
+    expect(isValidProviderId("my-own-lane")).toBe(true);
+  });
+
+  test("the catalog reaches the pane, and carries no key of any kind", async () => {
+    const response = await buildResponse();
+    expect(response.presets.map((preset) => preset.id).sort()).toEqual(Object.keys(RESEARCH_TABLE).sort());
+    // A preset is a prefill. Nothing in it is a credential, and nothing in it
+    // puts a provider on the pane - the rows come from the registry alone.
+    expect(response.api_key).toHaveLength(0);
+    for (const preset of response.presets) {
+      expect(Object.prototype.hasOwnProperty.call(preset, "key")).toBe(false);
+    }
   });
 });
 

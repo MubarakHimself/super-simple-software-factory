@@ -129,6 +129,15 @@ export interface ReportRun {
 }
 
 /**
+ * The sentence this file writes when `adws/ship_report.py` is not there at all,
+ * and the substring `refusalFrom` reads it back by. It is a MARKER, not text
+ * the operator is meant to see: the absolute path in front of it goes to the
+ * tooltip and the refusal reads as the plain not-started sentence instead.
+ */
+const NO_SCRIPT_MARK =
+  "the shipping report is the factory's own script, and this project has no factory installed yet";
+
+/**
  * `uv run adws/ship_report.py --pr [--range BASE..TIP]`, cwd = the project
  * root, utf-8 in and out, killed at the timeout. Pure read-only: every git
  * call inside that script is a query (its own docstring, "PURE READ-ONLY").
@@ -136,13 +145,7 @@ export interface ReportRun {
 export async function runShipReport(root: string, range: string | null): Promise<ReportRun> {
   const script = join(root, "adws", "ship_report.py");
   if (!existsSync(script)) {
-    return {
-      ok: false,
-      markdown: "",
-      reason:
-        `${script} does not exist - the shipping report is the factory's own script, ` +
-        `and this project has no factory installed yet`,
-    };
+    return { ok: false, markdown: "", reason: `${script} does not exist - ${NO_SCRIPT_MARK}` };
   }
   if (range !== null && !/^[A-Za-z0-9._/-]+\.\.[A-Za-z0-9._/-]+$/.test(range)) {
     return { ok: false, markdown: "", reason: `${range} is not a BASE..TIP range this app will pass to the script` };
@@ -190,6 +193,78 @@ export async function runShipReport(root: string, range: string | null): Promise
       reason: `could not run '${argv.join(" ")}': ${(error as Error).message} (is uv on PATH?)`,
     };
   }
+}
+
+// ── a refusal, in words the operator can act on ─────────────────────────────
+//
+// `ship_report.py` is a script, and a script's stderr is written for whoever
+// ran it. Nobody runs this one: the app does, and the operator reads what comes
+// back. So the refusals that are NOT faults get named here - the two states a
+// project passes through on its way to having something to ship - and every
+// other one is cut to its first sentence with the script's full text kept for a
+// tooltip - never a wall of git vocabulary in a red box.
+
+/**
+ * `ship_report.py:resolve_range` (READ-ONLY; quoted from that file) refuses a
+ * ref this checkout does not have with
+ *
+ *   f"{ref!r} does not resolve to a commit in {root} - is this checkout missing "
+ *   f"that branch? (fetch it, or pass --integration origin/<name>, or --range "
+ *   f"to name two refs that exist here)"
+ *
+ * which `main()` prints as `ship_report: error: <that>` on stderr, exit 1.
+ *
+ * A project the factory has never run in has no `integration` branch at all -
+ * only the engine ever creates one - so this refusal is the NORMAL state of
+ * every fresh project, not a fault. The quoted ref is what tells the two cases
+ * apart: `'main'` missing is a real problem with the checkout and stays an
+ * error; any other ref is the factory's own working line.
+ *
+ * The `--range` refusal one branch above it reads `{ref!r} (from --range) does
+ * not resolve to a commit in {root}` and deliberately does not match here.
+ */
+const MISSING_REF_RE = /'([^']+)' does not resolve to a commit in .+? - is this checkout missing that branch\?/;
+
+/** What the app says instead, on Home and in the merge rail. */
+export const NOT_STARTED_SENTENCE = "The factory hasn't run on this project yet - there is nothing to ship.";
+
+/** The first sentence of `text`, whitespace flattened. Terminator included so
+ * the line reads as a sentence; the whole text when there is no terminator. */
+function firstSentence(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const stop = flat.search(/[.!?](\s|$)/);
+  return stop === -1 ? flat : flat.slice(0, stop + 1);
+}
+
+export interface Refusal {
+  /** one plain sentence - what a card or an empty state prints */
+  reason: string;
+  /** the script's full text when `reason` is a summary of it, else null - what
+   * a title/tooltip carries, never printed inline */
+  detail: string | null;
+  /** true for the two states that are not faults - no factory installed here
+   * yet, and no `integration` branch yet: a quiet empty state, not an error the
+   * operator has to do anything about */
+  not_started: boolean;
+}
+
+export function refusalFrom(raw: string): Refusal {
+  const said = raw.replace(/\s+/g, " ").trim().replace(/^ship_report: error: /, "");
+  // Strictly EARLIER in onboarding than a missing `integration`: the app was
+  // pointed at a project before the factory was installed in it, so there is no
+  // report script to run. Every other surface already knows this state by name
+  // (`factory === "absent"` on Home, `isFactoryAbsent` in Roster); the ship path
+  // was the one that did not, and printed an absolute path in red for a project
+  // that is merely new. The path stays - behind the tooltip.
+  if (said.includes(NO_SCRIPT_MARK)) {
+    return { reason: NOT_STARTED_SENTENCE, detail: said, not_started: true };
+  }
+  const missing = MISSING_REF_RE.exec(said);
+  if (missing && missing[1] !== MAIN) {
+    return { reason: NOT_STARTED_SENTENCE, detail: said, not_started: true };
+  }
+  const short = firstSentence(said);
+  return { reason: short, detail: short === said ? null : said, not_started: false };
 }
 
 // ── parsing render_pr's own line grammar ────────────────────────────────────
@@ -447,7 +522,7 @@ export async function orderCardsByAncestry(root: string, parsed: ParsedReport): 
 
 // ── GET /api/app/p/:id/ship/report ──────────────────────────────────────────
 
-function emptyReport(reason: string): ShipReportResponse {
+function emptyReport(refusal: Refusal): ShipReportResponse {
   return {
     markdown: "",
     cards: [],
@@ -458,14 +533,16 @@ function emptyReport(reason: string): ShipReportResponse {
     tip: null,
     gaps: [],
     available: false,
-    reason,
+    reason: refusal.reason,
+    detail: refusal.detail,
+    not_started: refusal.not_started,
     generated_at: new Date().toISOString(),
   };
 }
 
 export async function buildShipReport(root: string, range: string | null, deps: ShipDeps = liveDeps): Promise<ShipReportResponse> {
   const run = await deps.report(root, range);
-  if (!run.ok) return emptyReport(run.reason ?? "the shipping report could not be produced");
+  if (!run.ok) return emptyReport(refusalFrom(run.reason ?? "the shipping report could not be produced"));
   const parsed = parseShipReport(run.markdown);
   // The rail renders these in array order and calls it "oldest first"; git is
   // what makes that true.
@@ -481,6 +558,8 @@ export async function buildShipReport(root: string, range: string | null, deps: 
     gaps: parsed.gaps,
     available: true,
     reason: null,
+    detail: null,
+    not_started: false,
     generated_at: new Date().toISOString(),
   };
 }
