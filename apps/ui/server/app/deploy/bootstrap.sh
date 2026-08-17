@@ -218,14 +218,25 @@ fi
 #      its own `apt-get update && apt-get install` inside.
 
 apt_busy() {
-  # `ps -eo comm=` truncates to 15 characters, which is exactly how the two
-  # long names appear: `unattended-upgr`, `apt.systemd.dai`. No package is
-  # needed for this (fuser/lsof are not installed on a minimal image), and a
-  # box with no ps at all simply reports "not busy" and leans on guard 2.
-  # `grep -x` matches the whole line, so a process merely NAMED after apt in
-  # its arguments is never mistaken for one holding the lock.
-  ps -eo comm= 2>/dev/null | tr -d ' ' |
-    grep -qxE '(apt|apt-get|aptitude|dpkg|unattended-upgr|apt\.systemd\.dai|packagekitd)'
+  # FIELD LESSON (2026-08-17): the process-name scan is a trap. Ubuntu runs
+  # `unattended-upgrade-shutdown --wait-for-signal` PERMANENTLY - its comm is
+  # `unattended-upgr`, so a name scan reads "busy" forever and every wait
+  # burns its full bound with the lock free. The truth is the LOCK, so probe
+  # it: a non-blocking flock on dpkg's frontend lock (python3 ships on every
+  # Debian/Ubuntu cloud image; if it is somehow absent the probe errors ->
+  # "not busy" and guard 2, APT_OPTS's DPkg::Lock::Timeout, carries alone).
+  python3 -c '
+import fcntl, sys
+try:
+    f = open("/var/lib/dpkg/lock-frontend", "ab")
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(f, fcntl.LOCK_UN)
+    sys.exit(1)   # lock acquired freely: apt is NOT busy
+except SystemExit:
+    raise
+except Exception:
+    sys.exit(0)   # lock held (or unreadable): busy
+' 2>/dev/null
 }
 
 # Silent by contract: a step prints ONE line, so the waiting happens inside the
@@ -238,6 +249,12 @@ apt_wait() {
   waited_here=0
   while [ "$waited_here" -lt 600 ]; do
     apt_busy || return 0
+    # A plain (non-STEP) heartbeat every 30s: the pane streams raw lines too,
+    # so a long lock wait is visible instead of reading as a hung deploy.
+    if [ $((waited_here % 30)) -eq 0 ] && [ "$waited_here" -gt 0 ]; then
+      printf 'waiting for the system apt to release the package lock (%ss)...
+' "$waited_here"
+    fi
     sleep 5
     waited_here=$((waited_here + 5))
     APT_WAITED=$((APT_WAITED + 5))
