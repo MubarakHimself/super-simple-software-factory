@@ -417,13 +417,15 @@ fi
 if have just; then
   ok just "already present: $(just --version 2>&1 | head -n 1)"
 else
+  have bash ||
+    fail just "this box has no bash - the just installer is a bash script, so just cannot be installed here"
   mkdir -p "$HOME/.local/bin"
   JUST_SETUP=$(mktemp 2>/dev/null) || JUST_SETUP="/tmp/just-install.$$"
   if ! out=$(curl --proto '=https' --tlsv1.2 -sSf --retry 3 -o "$JUST_SETUP" https://just.systems/install.sh 2>&1); then
     rm -f "$JUST_SETUP"
     fail just "could not fetch https://just.systems/install.sh: $(tail_of "$out")"
   fi
-  if ! out=$(sh "$JUST_SETUP" --to "$HOME/.local/bin" 2>&1); then
+  if ! out=$(bash "$JUST_SETUP" --to "$HOME/.local/bin" 2>&1); then
     rm -f "$JUST_SETUP"
     fail just "the just installer failed: $(tail_of "$out")"
   fi
