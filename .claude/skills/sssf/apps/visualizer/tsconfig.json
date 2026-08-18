@@ -20,7 +20,6 @@
     "jsxImportSource": "vue",
     "noEmit": true,
 
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["./shared/*"]

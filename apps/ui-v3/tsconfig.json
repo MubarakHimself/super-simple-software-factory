@@ -20,7 +20,6 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
     "types": ["vite/client", "node"],
-    "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "vite.config.ts"]
