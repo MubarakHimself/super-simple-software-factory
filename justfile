@@ -285,3 +285,15 @@ app3:
 app3-build:
     cd apps/ui-v3 && bun install && bunx vite build
     cd apps/ui && bun install && bunx vite build --config vite.setup.config.ts && bunx tsc -p electron/tsconfig.json && echo {"ui":"v3"}> dist-electron\ui-mode.json && set CSC_IDENTITY_AUTO_DISCOVERY=false&& bunx electron-builder --win portable
+
+# cut a release: rebuild the exe, then tag v<version> on GitHub with the exe
+# attached under a versioned asset name. The exe on disk keeps its stable
+# unversioned name ("SDL Factory.exe") so the Desktop shortcut never breaks;
+# only the uploaded copy carries the version. Before running: set the same
+# version in apps/ui/package.json and commit. Release notes are generated
+# from the commits since the last tag.
+#   just release 0.1.0
+release version: app3-build
+    copy /y "apps\ui\release\SDL Factory.exe" "apps\ui\release\SDL Factory {{version}}.exe"
+    gh release create v{{version}} "apps\ui\release\SDL Factory {{version}}.exe" --title "SDL Factory {{version}}" --generate-notes
+    del "apps\ui\release\SDL Factory {{version}}.exe"

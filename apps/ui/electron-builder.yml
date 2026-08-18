@@ -65,6 +65,13 @@ win:
     - target: portable
       arch:
         - x64
+  # A STABLE filename, deliberately unversioned: the operator's Desktop
+  # shortcut targets this exact path, and the default
+  # "${productName} ${version}.exe" would break that shortcut on every
+  # version bump. Releases get their versioned name at upload time
+  # (`just release` copies the exe to "SDL Factory <version>.exe" for the
+  # GitHub release asset); the file on disk keeps one name forever.
+  artifactName: "${productName}.exe"
 
 # --- Linux: config decided, NOT built in this phase -------------------------
 # AppImage + deb are the server-phase targets (MAP.md build phase 4, the
