@@ -14,6 +14,15 @@ own work happens in a worktree named by `run.repo_root` - so a git call with no
     - MUTATING functions (create_branch, commit_all, ensure_run_branch) take
       `tree` as a REQUIRED keyword-only argument. Forgetting it is a mypy
       error at the call site, not a silent commit to the wrong tree.
+
+EVERY git subprocess in this module goes through `_run_git` below, and nothing
+in here calls `subprocess.run` directly. That single door is what makes three
+guarantees hold everywhere rather than at the sites somebody remembered:
+unattended git never PROMPTS (`git_env`), never SIGNS (`SIGNING_OFF`), and
+never runs forever (`NETWORK_TIMEOUT` / `LOCAL_TIMEOUT`). All three exist
+because the engine's loop is a single thread: one git command waiting on a
+password prompt with no terminal to print it on stops the whole factory,
+silently, while systemd still calls the service `active`.
 """
 
 from __future__ import annotations
@@ -51,30 +60,185 @@ def factory_trunk() -> str:
     return (os.environ.get(FACTORY_TRUNK_ENV) or "").strip() or FACTORY_TRUNK_DEFAULT
 
 
-def _git(*args: str, tree: Path | str | None = None) -> str:
-    result = subprocess.run(["git", *args], cwd=tree, capture_output=True, text=True,
-                            encoding="utf-8")
+# ── how every git subprocess in this factory is launched ────────────────────
+#
+# THE FAILURE THIS CLOSES. Nothing here ran with a timeout or a non-interactive
+# environment, and the factory's whole point is that it runs unattended. A git
+# that decides to ASK a question - for a password, for an SSH host key, for a
+# GPG passphrase - has no terminal to ask on under systemd, and blocks forever
+# holding the engine's single loop thread. The service stays `active`, the
+# journal stays silent, and the Board stops moving with no error anywhere.
+# Every one of these is a real, reachable state on a fresh server: an https
+# remote whose credential helper is not configured, a hub whose host key is not
+# in known_hosts yet, a `commit.gpgsign = true` inherited from the operator's
+# own global gitconfig.
+#
+# So git is launched here, and only here, with the questions turned off.
+
+
+def git_env() -> dict[str, str]:
+    """The environment EVERY git subprocess this module launches runs under.
+
+    A fixed overlay on the operator's own environment, not a replacement - git
+    still needs their HOME, their SSH agent, their credential helpers. What is
+    pinned:
+
+        GIT_TERMINAL_PROMPT=0   git fails instead of prompting for credentials.
+        GIT_ASKPASS=""          and does not shell out to a GUI asker either -
+                                empty rather than unset, because an inherited
+                                SSH_ASKPASS/GIT_ASKPASS from the operator's
+                                desktop session is exactly what pops an
+                                invisible dialog on a headless box.
+        GIT_SSH_COMMAND         BatchMode=yes: ssh fails rather than asking for
+                                a passphrase or a password.
+                                StrictHostKeyChecking=accept-new: a hub whose
+                                key is not known yet is trusted on first sight
+                                (and pinned after), instead of hanging on
+                                "Are you sure you want to continue connecting?"
+                                - while a key that CHANGED is still refused,
+                                which `no` would not give us.
+        GIT_OPTIONAL_LOCKS=0    a read-only query never takes index.lock, so a
+                                background `git status` cannot make a concurrent
+                                run's commit fail on a lock it did not need.
+
+    Deliberately NOT cached: the operator's environment is read at each call, so
+    a repaired `.env` or a newly started ssh-agent is picked up with no restart -
+    the same rule `agent_pi.pi_cmd()` and `utils.uv_bin()` follow.
+    """
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "",
+        "GIT_SSH_COMMAND": "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+# Signing, neutralized centrally. `-c` overrides beat every config file, and
+# they are prepended to EVERY invocation rather than sniffed per verb: `-c
+# commit.gpgsign=false` is inert for `git status` and correct for `git commit`,
+# `git merge`, `git rebase`, `git cherry-pick` and `git am` alike - all of which
+# create commits, and all of which this factory runs. Sniffing the verb would
+# have to enumerate that list correctly forever; this cannot get it wrong.
+#
+# It is here rather than at the three commit sites (this file's `commit_all`,
+# engine.py's `commit_card` and `park_card`) because every one of them reaches
+# git through `_git`/`run` below, so one place covers them all - and covers the
+# next commit site nobody remembers to update. An operator with `commit.gpgsign
+# = true` in their global gitconfig would otherwise have every factory commit
+# hang waiting for a passphrase prompt that has no terminal to appear on.
+SIGNING_OFF = ("-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false")
+
+# Default ceilings. A git command that has not answered in this long is not
+# slow, it is stuck - and the engine's loop is single-threaded, so stuck means
+# the whole factory stops. Two tiers, because the honest bound is different by
+# an order of magnitude: a push over a slow link legitimately takes minutes,
+# while `rev-parse` in a local checkout takes milliseconds and one that has run
+# for a minute is never going to answer.
+NETWORK_TIMEOUT = 300.0
+LOCAL_TIMEOUT = 60.0
+
+# The verbs that touch the network. Everything else is a local query or a local
+# mutation, and gets the short ceiling.
+NETWORK_VERBS = frozenset({"push", "fetch", "pull", "clone", "ls-remote"})
+
+# What a timed-out `run()` reports back. 124 is what `timeout(1)` uses and what
+# `quality._run` already stamps on its own expiries, so every reader in this
+# factory already means the same thing by it.
+TIMEOUT_RETURNCODE = 124
+
+
+# git's pre-subcommand options that take their value as a SEPARATE argument.
+# `git -c key=value push` puts `key=value` between the option and the verb, and
+# a scan that only skipped things starting with `-` would read that value as
+# the verb and quietly give a push the 60s local ceiling.
+_OPTIONS_WITH_VALUES = frozenset({"-c", "-C", "--git-dir", "--work-tree",
+                                  "--namespace", "--exec-path"})
+
+
+def _timeout_for(args: tuple[str, ...], override: float | None) -> float:
+    """The ceiling for this invocation: the caller's own, else the tier the
+    verb belongs to.
+
+    The verb is the first argument that is neither an option nor an option's
+    value, so neither a `--no-pager` flag nor a `-c key=value` pair can hide it
+    and silently downgrade a network call to the local ceiling.
+    """
+    if override is not None:
+        return override
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("-"):
+            # `--git-dir=x` carries its value inline and needs no skip; the
+            # separate-value spelling does.
+            skip_next = arg in _OPTIONS_WITH_VALUES
+            continue
+        return NETWORK_TIMEOUT if arg in NETWORK_VERBS else LOCAL_TIMEOUT
+    return LOCAL_TIMEOUT
+
+
+def _argv(args: tuple[str, ...]) -> list[str]:
+    return ["git", *SIGNING_OFF, *args]
+
+
+def _run_git(args: tuple[str, ...], tree: Path | str | None,
+             timeout: float | None) -> subprocess.CompletedProcess[str]:
+    """One git subprocess, with this module's environment, signing overrides and
+    timeout applied. A timeout comes back as a FAILED CompletedProcess rather
+    than an exception, because that is the shape every caller in this file
+    already branches on - `returncode != 0` with git's own words in `stderr`.
+    Letting `TimeoutExpired` escape would sail past every one of those checks
+    and land in `engine.run_cycle`'s catch-all as an unnamed cycle failure."""
+    limit = _timeout_for(args, timeout)
+    try:
+        return subprocess.run(_argv(args), cwd=tree, capture_output=True, text=True,
+                              encoding="utf-8", env=git_env(), timeout=limit, check=False)
+    except subprocess.TimeoutExpired as expired:
+        # TimeoutExpired.stdout/.stderr are typed bytes|str and a timeout can
+        # interrupt the reader before it has decoded anything, so both are
+        # normalized here even though the call above passed `encoding=`.
+        def _text(raw: bytes | str | None) -> str:
+            if isinstance(raw, bytes):
+                return raw.decode("utf-8", errors="replace")
+            return raw or ""
+        return subprocess.CompletedProcess(
+            args=_argv(args), returncode=TIMEOUT_RETURNCODE, stdout=_text(expired.stdout),
+            stderr=(_text(expired.stderr)
+                    + f"\ngit {' '.join(args)} timed out after {limit:g}s and was killed. "
+                      f"Unattended git never prompts (GIT_TERMINAL_PROMPT=0, ssh BatchMode), "
+                      f"so this is a hung network call or a stuck lock, not a question "
+                      f"waiting for an answer."))
+
+
+def _git(*args: str, tree: Path | str | None = None,
+         timeout: float | None = None) -> str:
+    result = _run_git(args, tree, timeout)
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
-def run(*args: str, tree: Path | str) -> subprocess.CompletedProcess[str]:
+def run(*args: str, tree: Path | str,
+        timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     """Run an arbitrary git subcommand against `tree`, never raising.
 
     For callers that need to inspect a REFUSAL rather than treat it as fatal -
     git itself is the second/third safety net for `worktrees-prune` (a dirty
     tree or an unmerged branch is refused by git itself; this factory never
     passes --force or -D to route around that refusal).
+
+    A timeout is one more refusal: exit 124 with the reason in `stderr`, which
+    every existing caller already handles as "this git command did not work",
+    with no new branch to write.
     """
-    return subprocess.run(["git", *args], cwd=tree, capture_output=True, text=True,
-                          encoding="utf-8", check=False)
+    return _run_git(args, tree, timeout)
 
 
 def is_repo(tree: Path | str | None = None) -> bool:
-    result = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=tree,
-                            capture_output=True, text=True, encoding="utf-8")
-    return result.returncode == 0
+    return _run_git(("rev-parse", "--git-dir"), tree, None).returncode == 0
 
 
 def repo_root() -> Path:
@@ -197,9 +361,8 @@ def find_run_branch(adw_id: str, tree: Path | str | None = None) -> str | None:
     (should not happen — one branch per adw_id), the lexicographically first
     is returned, which is at least deterministic.
     """
-    result = subprocess.run(
-        ["git", "branch", "--list", f"adw/{adw_id}_*", "--format=%(refname:short)"],
-        cwd=tree, capture_output=True, text=True, encoding="utf-8", check=False)
+    result = _run_git(
+        ("branch", "--list", f"adw/{adw_id}_*", "--format=%(refname:short)"), tree, None)
     if result.returncode != 0:
         return None
     branches = sorted(line for line in result.stdout.splitlines() if line)
@@ -247,9 +410,8 @@ def changed_files(tree: Path | str | None = None) -> list[str]:
 
 def ref_exists(ref: str, tree: Path | str | None = None) -> bool:
     """True when `ref` resolves to a commit. Never raises — this is a question."""
-    result = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-                            cwd=tree, capture_output=True, text=True, encoding="utf-8")
-    return result.returncode == 0
+    return _run_git(("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"),
+                    tree, None).returncode == 0
 
 
 def is_ancestor(ref: str, other: str, tree: Path | str | None = None) -> bool:
@@ -260,9 +422,7 @@ def is_ancestor(ref: str, other: str, tree: Path | str | None = None) -> bool:
     the safe, under-report direction) after a squash merge — see
     `worktrees.is_merged_into_trunk` for the primary test.
     """
-    result = subprocess.run(["git", "merge-base", "--is-ancestor", ref, other],
-                            cwd=tree, capture_output=True, text=True, encoding="utf-8")
-    return result.returncode == 0
+    return _run_git(("merge-base", "--is-ancestor", ref, other), tree, None).returncode == 0
 
 
 def rev(ref: str = "HEAD", tree: Path | str | None = None) -> str:
@@ -333,8 +493,7 @@ def merge_tree_write(base: str, other: str, tree: Path | str | None = None) -> s
     --write-tree support, or another git-level error — neither exit 0 nor 1)
     returns None, so the caller can fall back to the ancestor test (8.4).
     """
-    result = subprocess.run(["git", "merge-tree", "--write-tree", base, other],
-                            cwd=tree, capture_output=True, text=True, encoding="utf-8")
+    result = _run_git(("merge-tree", "--write-tree", base, other), tree, None)
     if result.returncode not in (0, 1):
         return None
     first_line = result.stdout.split("\n", 1)[0].strip()
@@ -429,8 +588,7 @@ def has_remote(name: str = "origin", tree: Path | str | None = None) -> bool:
     """True when `tree`'s repo has a remote named `name` configured. Never
     raises - like `is_repo`, this is a question asked before an operation
     that needs one, not an assertion."""
-    result = subprocess.run(["git", "remote"], cwd=tree, capture_output=True,
-                            text=True, encoding="utf-8")
+    result = _run_git(("remote",), tree, None)
     return result.returncode == 0 and name in result.stdout.split()
 
 
@@ -438,9 +596,9 @@ def push_branch(branch: str, *, tree: Path | str, remote: str = "origin") -> tup
     """`git push -u <remote> <branch>` - never raises, never `--force`, and
     `branch` is always the caller's own `adw/<id>_<slug>` name, never `main`.
     Returns `(True, "")` on a clean push, `(False, stderr)` on any failure
-    (no network, rejected, auth...) - the caller decides how loud to be."""
-    result = subprocess.run(["git", "push", "-u", remote, branch], cwd=tree,
-                            capture_output=True, text=True, encoding="utf-8")
+    (no network, rejected, auth, or the 300s network ceiling running out) - the
+    caller decides how loud to be."""
+    result = _run_git(("push", "-u", remote, branch), tree, None)
     if result.returncode != 0:
         return False, result.stderr.strip()
     return True, ""

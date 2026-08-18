@@ -83,10 +83,22 @@ def test_the_core_modules_import_cleanly() -> None:
     """Import-time errors are the expensive kind: they surface as a dead
     systemd unit, not as a failed run. Only the modules that need no
     environment are imported here - agent_pi and everything that imports it
-    resolve PI_PATH at import time and belong to a configured host."""
+    resolve PI_PATH at import time and belong to a configured host.
+
+    worktrees is on this list because of a real failure (2026-08-18): a project
+    stamped by an old skill, re-stamped by a new one, ended up with a NEW
+    worktrees.py importing RunWorktree, WorktreeRow, WorktreesConfig and
+    WorktreeState from an OLD data_types.py that predated all four. Importing
+    each module alone proves nothing about that; worktrees is the module that
+    reaches ACROSS files, so importing it is what catches an adws/ tree living
+    at two generations at once - on the box, before a card is dispatched. The
+    stamp itself now refreshes factory-owned code on every run, which is the
+    fix; this is the detector for the day something slips past it.
+    """
     for name in ("adw_modules.data_types", "adw_modules.quality",
                  "adw_modules.gates", "adw_modules.git_helper",
-                 "adw_modules.tracer", "adw_modules.utils"):
+                 "adw_modules.tracer", "adw_modules.utils",
+                 "adw_modules.worktrees"):
         importlib.import_module(name)
 
 

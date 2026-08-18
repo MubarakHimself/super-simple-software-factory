@@ -61,7 +61,7 @@ from typing import Any
 
 import yaml
 from adw_modules import agents, git_helper
-from adw_modules.utils import new_id, operator_env
+from adw_modules.utils import new_id, operator_env, uv_cmd
 from pydantic import ValidationError
 
 # ── the Board's vocabulary — owned by apps/ui/server/queue.ts's VALID_STATUSES
@@ -356,7 +356,15 @@ def dispatch(path: Path, *, main_root: Path, config: str, adw_id_override: str |
     print(f"dispatch: {path} -> {script.name} (adw_id={adw_id}, status={RUNNING})")
 
     prompt = request_prompt(header)
-    cmd = ["uv", "run", str(script.relative_to(main_root)), prompt,
+    # `uv` RESOLVED, never bare - the same fix, and the same reason, as
+    # `engine.dispatch_command`. This is the second rung of the identical
+    # chain: the engine spawns THIS process with a resolved uv, but the ADW
+    # below it is a child of this process, launched with `operator_env()` -
+    # which strips the venv bin off PATH, on a service PATH that has no
+    # `~/.local/bin`. Left bare here, the engine's own fix would have bought
+    # nothing under systemd: every dispatch would start, fail to launch its
+    # ADW, and write `blocked` to its card. See `utils.uv_cmd`.
+    cmd = [uv_cmd(), "run", str(script.relative_to(main_root)), prompt,
           "--config", config, "--adw-id", adw_id]
     try:
         returncode = _stream(cmd, cwd=main_root, env=operator_env())

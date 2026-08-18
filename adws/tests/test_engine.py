@@ -28,6 +28,7 @@ import engine
 import pytest
 import yaml
 from adw_modules import git_helper, worktrees
+from adw_modules.utils import uv_cmd
 
 # The stand-in for `uv run adws/dispatch.py` AND the ADW below it: the same
 # card write-backs (ready-for-agent -> running -> done|blocked), the same
@@ -1112,7 +1113,10 @@ def test_the_gate_runs_the_factorys_own_toolchain_pinned_to_the_tree(tmp_path):
     tools = [argv[argv.index("dev") + 1] for argv in commands]
     assert tools == ["ruff", "mypy", "pytest"]
     for argv in commands:
-        assert argv[:4] == ["uv", "run", "--project", str(tmp_path / "wt")]
+        # argv[0] is a RESOLVED uv, not the bare name - the gate's suite runs
+        # under the service PATH, which does not carry ~/.local/bin. See
+        # test_uv_launcher.py.
+        assert argv[:4] == [uv_cmd(), "run", "--project", str(tmp_path / "wt")]
 
 
 def test_the_gate_runs_THIS_PROJECTS_commands_when_its_roster_names_them(tmp_path):
@@ -1141,7 +1145,7 @@ def test_the_gate_runs_THIS_PROJECTS_commands_when_its_roster_names_them(tmp_pat
     assert commands[1] == ["npx", "tsc", "--noEmit"]
     # `{dev}` still expands to the pinned toolchain, resolved against the tree
     # being judged - a project keeps that seam by naming the placeholder.
-    assert commands[2] == ["uv", "run", "--project", str(tmp_path / "wt"),
+    assert commands[2] == [uv_cmd(), "run", "--project", str(tmp_path / "wt"),
                            "--group", "dev", "pytest", "-q", "tests"]
 
 
@@ -1457,6 +1461,78 @@ def test_a_checkout_with_no_origin_runs_local_only(factory, eng, monkeypatch):
     assert eng.pending_push is False
     assert (factory.queue / "done" / "001-first.md").is_file()
     assert "factory: 001-first.md integrated" in _git("log", "--format=%s", cwd=factory.root)
+
+
+def _laptop_edits_readme(factory, text: str) -> None:
+    """The hub moves a tracked file the server also has dirty. That overlap is
+    what makes `git pull --ff-only` REFUSE ("Your local changes to the
+    following files would be overwritten by merge") rather than fast-forward
+    around it - git only objects when the incoming commit touches the same path.
+    """
+    laptop = _laptop(factory)
+    _git("pull", "-q", "--ff-only", cwd=laptop)
+    (laptop / "README.md").write_text(text, encoding="utf-8")
+    _git("commit", "-qam", "operator: edit README at the hub", cwd=laptop)
+    _git("push", "-q", "origin", "integration", cwd=laptop)
+
+
+def test_a_dirty_main_checkout_is_named_with_its_paths_and_its_repair(
+        factory, eng, monkeypatch, capsys):
+    """A stray edit on the box halts EVERY later step of EVERY later cycle -
+    no pull, no integrate, no dispatch - because `git pull --ff-only` refuses
+    to run over it. That used to surface as one anonymous `pull failed,
+    skipping this cycle: ...` line a minute, forever, with no clue which file
+    was in the way or what to do about it."""
+    _use_fake(monkeypatch, factory, mode="done")
+    _publish(factory, "001-first.md", _card())
+    _laptop_edits_readme(factory, "changed at the hub\n")
+    (factory.root / "README.md").write_text("someone was editing this on the box\n",
+                                            encoding="utf-8")
+
+    engine.run_cycle(eng)
+
+    out = capsys.readouterr().out
+    assert "DIRTY MAIN CHECKOUT" in out
+    assert "README.md" in out                          # WHICH file
+    assert "stash --include-untracked" in out          # and the one command that clears it
+    assert eng.children == []                          # nothing was dispatched behind it
+
+
+def test_the_dirty_hold_is_said_once_and_clears_itself_when_repaired(
+        factory, eng, monkeypatch, capsys):
+    """Said once per distinct set of paths, like every other hold - and the
+    moment the tree is clean the pull goes through and the cycle runs, with no
+    restart and no further mention."""
+    _use_fake(monkeypatch, factory, mode="hold")
+    _publish(factory, "001-first.md", _card())
+    _laptop_edits_readme(factory, "changed at the hub\n")
+    (factory.root / "README.md").write_text("someone was editing this on the box\n",
+                                            encoding="utf-8")
+
+    engine.run_cycle(eng)
+    assert "DIRTY MAIN CHECKOUT" in capsys.readouterr().out
+
+    engine.run_cycle(eng)
+    assert "DIRTY MAIN CHECKOUT" not in capsys.readouterr().out   # not once a minute
+
+    _git("checkout", "--", "README.md", cwd=factory.root)
+    engine.run_cycle(eng)
+
+    assert _names(eng) == ["001-first.md"]             # the factory picks straight back up
+
+
+def test_a_queue_write_back_is_not_read_as_a_dirty_checkout(factory, eng):
+    """`queue/` is the engine's OWN dirt and it has a recovery path for it
+    (`adopt_writebacks`, which runs before the pull). Only paths outside
+    `queue/` are the operator's problem to clear."""
+    _publish(factory, "001-first.md", _card())
+    (factory.queue / "001-first.md").write_text(_card(status=dispatch.RUNNING),
+                                                encoding="utf-8")
+
+    assert engine.dirty_outside_queue(eng) == []
+
+    (factory.root / "README.md").write_text("dirty\n", encoding="utf-8")
+    assert engine.dirty_outside_queue(eng) == ["README.md"]
 
 
 # ── the CLI ─────────────────────────────────────────────────────────────────

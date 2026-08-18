@@ -35,8 +35,9 @@ One cycle (~60s), in order:
        mid-service. Then: can git name a committer here? A checkout with no
        identity fails every `git commit` (fresh container, service user with no
        `~/.gitconfig`), so the cycle stops before it can grind on that once a
-       minute forever. And can this box launch `pi` at all? If not, the cycle
-       holds rather than turning every ready card into a blocked one.
+       minute forever. And can this box launch `pi` and resolve `uv` at all? If
+       not, the cycle holds rather than turning every ready card into a blocked
+       one - or, for uv, into a refused one nothing ever retries.
     1. Be on `integration`. Create it (from `main`, published with `push -u`)
        if this checkout has never seen it; plain checkout if it exists but is
        not current. Everything below writes to that branch and no other, so a
@@ -122,7 +123,7 @@ import yaml
 from adw_modules import agent_pi, git_helper, worktrees
 from adw_modules.data_types import QualityConfig
 from adw_modules.quality import resolve_command
-from adw_modules.utils import now_iso, operator_env
+from adw_modules.utils import now_iso, operator_env, uv_bin, uv_cmd
 
 # The hub (MAP.md's two-box model): one remote. Not configurable - a second
 # remote would be a different architecture, not a flag.
@@ -298,9 +299,13 @@ class Engine:
     # integrated. `integrate_candidates` reads `Status: done` off the queue on
     # disk every cycle instead - the only record that survives a restart, an
     # `--once` invocation, or a crash between a run finishing and its merge.)
-    # Cards whose dispatch came back refusing to run them (bad `Adw:`, a
-    # config that will not load, an already-claimed card). Retrying those on a
-    # 60s loop is pure noise, so each is named once and then skipped.
+    # Cards whose dispatch RAN, read the card, and came back refusing to run it
+    # (bad `Adw:`, a config that will not load, an already-claimed card).
+    # Retrying those on a 60s loop is pure noise, so each is named once and then
+    # skipped. A verdict about the CARD, and only ever written by `reap` - a
+    # dispatch that never STARTED (an unresolvable `uv`, a box out of pids) is a
+    # verdict about the box and leaves the card untouched, so a repaired box
+    # picks it straight back up. See `spawn`.
     refused: set[str] = field(default_factory=set)
     # key -> the last line announced for it, so "waiting on X" is logged when
     # it becomes true and when it changes, not 1440 times a day. Keys are
@@ -928,6 +933,49 @@ def pi_launchable(engine: Engine) -> bool:
     return True
 
 
+def uv_launchable(engine: Engine) -> bool:
+    """Can this box resolve `uv` at all? False = do nothing this cycle.
+
+    THE FAILURE THIS EXISTS FOR. Every child argv this engine builds starts
+    with `uv` - the dispatch children (`dispatch_command`) and the integration
+    gate's whole suite (`quality_commands`, where `{dev}` expands to `uv run
+    --project ... --group dev`). A bare `"uv"` is resolved by the OS against the
+    CHILD's PATH, which is `operator_env()`'s: the service PATH with the ADW's
+    own venv bin stripped back off. Under systemd that PATH does not contain
+    `~/.local/bin`, which is exactly where the bootstrap installs uv - so
+    `Popen` raised OSError on every single spawn, `spawn` recorded every card
+    refused, and the gate returned red on its OSError branch. A factory that
+    `systemctl is-active` called `active`, all night, shipping nothing, with
+    every card on the Board burned to a state nothing retries.
+
+    HOLDING is the cheaper failure by a mile, exactly as it is for pi above: a
+    held card is still ready on the Board waiting for one PATH to be right,
+    while a refused one needs a human. So this runs BEFORE anything spawns and
+    before the integrate step, and no card is burned on the way.
+
+    Asked once per CYCLE and never at import (`utils.uv_bin` is deliberately
+    uncached), so an operator who installs uv or fixes the unit is picked up on
+    the next turn with no restart; announced once per reason, so a box left
+    unfixed costs one line and not 1440 a day.
+    """
+    resolved = uv_bin()
+    if resolved:
+        _say_once(engine, "uv", f"uv resolves to {resolved}")
+        return True
+    _say_once(engine, "uv",
+              "UV IS NOT LAUNCHABLE: neither $UV nor this process's PATH names a `uv` "
+              "binary, and every child this engine starts - each dispatch and every "
+              "command of the integration gate's suite - begins with it. Nothing else "
+              "runs until it resolves; no card is dispatched, so none is burned to "
+              "blocked on the way. Under systemd the usual cause is the unit's PATH: it "
+              "does not include ~/.local/bin, where uv installs. Fix it with exactly "
+              "this, then `systemctl daemon-reload && systemctl restart sdl-engine`: "
+              "systemctl edit sdl-engine  ->  [Service] "
+              "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:"
+              "/sbin:/bin:%h/.local/bin")
+    return False
+
+
 def ensure_trunk(engine: Engine) -> bool:
     """Put the main checkout on the factory's working line, creating and
     publishing it if this checkout has never seen it. False = do nothing this
@@ -1038,6 +1086,34 @@ def diverged(engine: Engine) -> bool:
     return ahead > 0 and behind > 0
 
 
+def dirty_outside_queue(engine: Engine) -> list[str]:
+    """Paths the main checkout is dirty on that are NOT the engine's own card
+    write-backs, oldest git order.
+
+    `queue/` is excluded because the engine owns it and already has a recovery
+    path for it: `adopt_writebacks` commits any card write-back sitting on disk
+    at the top of every cycle, before the pull. Anything left dirty outside
+    `queue/` came from somewhere else entirely - a half-finished edit somebody
+    made on the box, a file an agent wrote into the main checkout, a merge
+    somebody started by hand - and nothing in this engine will ever clean it up,
+    because nothing in this engine is willing to throw away work it did not
+    write.
+    """
+    result = git_helper.run("status", "--porcelain", tree=engine.main_root)
+    if result.returncode != 0:
+        return []
+    paths = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        # Porcelain v1: two status columns, a space, then the path. A rename
+        # reads `R  old -> new`; the new name is the one that is dirty.
+        path = line[3:].strip().split(" -> ")[-1].strip('"')
+        if path and not path.startswith("queue/"):
+            paths.append(path)
+    return paths
+
+
 def pull(engine: Engine) -> bool:
     """`git pull --ff-only` in the main checkout: the ONLY way work arrives.
 
@@ -1066,13 +1142,57 @@ def pull(engine: Engine) -> bool:
 
     A checkout with no `origin` is local-only (a laptop trying the engine out):
     nothing to pull, and `push_pending` has nothing to push either.
+
+    A DIRTY MAIN CHECKOUT outside `queue/` is called out by name, ahead of the
+    divergence question, because it defeats the fast-forward AND the replay
+    alike and is the real cause in either case. It is neither a divergence nor
+    a network problem, it never clears by itself, and it halts every later step
+    of every later cycle - so it gets the paths, the repair command, and the
+    same say-once treatment the identity/pi/uv/trunk holds get, instead of one
+    anonymous `pull failed` line a minute.
     """
     if not git_helper.has_remote(REMOTE, engine.main_root):
         return True
     result = git_helper.run("pull", "--ff-only", tree=engine.main_root)
     if result.returncode == 0:
+        engine.waiting.pop("dirty", None)
         return True
     detail = _one_line(result.stderr or result.stdout)
+
+    # A DIRTY MAIN CHECKOUT is checked FIRST, before the divergence question,
+    # because it defeats BOTH ways forward and is the real cause in either. The
+    # fast-forward refuses with "Your local changes to the following files
+    # would be overwritten by merge"; the replay below never even starts
+    # ("cannot rebase: You have unstaged changes"). Both used to flatten into
+    # one anonymous `pull failed` line a minute, forever, naming no file and no
+    # remedy - while every later step of every later cycle (integrate, scan,
+    # dispatch, push) stopped dead behind it. So a stray edit on the box
+    # silently halted the whole factory.
+    #
+    # Said ONCE per distinct set of paths, through the same say-once identity
+    # `identity`, `pi`, `uv` and `trunk` use, so a box left unfixed costs one
+    # line and not 1440 a day - and re-announces if the set changes.
+    #
+    # git's OWN words are deliberately left out of this message. They vary
+    # between cycles for reasons that have nothing to do with the problem (the
+    # first pull enumerates objects and names the remote branch, later ones
+    # have them cached and do not), and `_say_once` compares the whole string -
+    # so including them turned "say it once" back into "say it every minute".
+    # The paths and the repair are the reason; git's transient chatter is not.
+    dirty = dirty_outside_queue(engine)
+    if dirty:
+        shown = ", ".join(dirty[:5])
+        more = f" (+{len(dirty) - 5} more)" if len(dirty) > 5 else ""
+        _say_once(engine, "dirty",
+                  f"DIRTY MAIN CHECKOUT: {len(dirty)} path(s) outside queue/ are uncommitted "
+                  f"in {engine.main_root}, so git will neither fast-forward nor replay onto "
+                  f"{REMOTE}/{engine.trunk} - and NOTHING else runs until it is cleared: no "
+                  f"card is pulled, integrated or dispatched. The paths: {shown}{more}. This "
+                  f"engine never discards work it did not write, so a human decides. Clear it "
+                  f"with exactly this: git -C {engine.main_root} stash --include-untracked "
+                  f"(or commit the paths above if they are wanted).")
+        return False
+
     if not diverged(engine):
         log(f"pull failed, skipping this cycle: {detail}")
         return False
@@ -1101,6 +1221,7 @@ def pull(engine: Engine) -> bool:
     if result.returncode == 0 and not rebase_in_progress(engine.main_root):
         # Whatever survived the replay is, by definition, not at the hub yet.
         engine.pending_push = True
+        engine.waiting.pop("dirty", None)
         log(f"replayed onto {REMOTE}/{engine.trunk}")
         return True
     if rebase_in_progress(engine.main_root):
@@ -1486,8 +1607,14 @@ def integrate(engine: Engine, card: Path) -> None:
         return
     head = git_helper.run("rev-parse", "--abbrev-ref", "HEAD", tree=tree)
     if head.returncode != 0 or head.stdout.strip() != branch:
+        # The repair one-liner rides along, exactly as `reattach`'s message
+        # carries it: this is the same tree in the same wrong state, and the
+        # operator reading the card should not have to reconstruct the command
+        # from the sentence. The usual cause is a gate that was interrupted
+        # between its `checkout --detach` and its `reattach`.
         block_card(engine, card, f"{tree} is on {head.stdout.strip() or '?'}, not {branch} - "
-                                 f"refusing to rebase a branch this run does not own")
+                                 f"refusing to rebase a branch this run does not own. Put the "
+                                 f"tree back with: git -C {tree} checkout {branch}")
         return
 
     detached = git_helper.run("checkout", "--detach", branch, tree=tree)
@@ -1569,9 +1696,18 @@ def dispatch_command(engine: Engine, card: Path, config: str | None = None) -> l
 
     `config` is this run's roster: the derived copy when the router chose a
     builder model for it, and the operator's own roster otherwise.
+
+    `uv` is RESOLVED (`utils.uv_cmd()`), never handed to the OS as a bare name.
+    A bare name is resolved against the CHILD's PATH, and the child's PATH is
+    `operator_env()`'s - the service PATH with the ADW's own venv bin stripped
+    off, which under systemd does not contain `~/.local/bin` where uv is
+    installed. Every spawn raised OSError there, every card was recorded
+    refused, and the factory looked alive while shipping nothing. See
+    `uv_launchable` for the preflight that stops a cycle ever reaching here
+    with no uv at all.
     """
     target = _repo_path(engine, card) or str(card)
-    return ["uv", "run", str(Path("adws") / "dispatch.py"), target,
+    return [uv_cmd(), "run", str(Path("adws") / "dispatch.py"), target,
             "--config", config or engine.config]
 
 
@@ -1589,6 +1725,21 @@ def spawn(engine: Engine, card: Path, plan: Plan | None = None) -> Child | None:
     The child carries the lanes its roster draws on, so the slots it occupies
     are released the moment it is reaped and not one cycle later - and the
     derived roster it was given, so that copy is deleted at the same moment.
+
+    A LAUNCH FAILURE IS NOT A REFUSAL, and that distinction is this function's
+    one piece of policy. `engine.refused` means "dispatch ran, read this card,
+    and said no" (a bad `Adw:`, a roster that will not load, a card already
+    claimed) - a verdict about the CARD, which is why it is never retried. An
+    OSError here is the opposite: no dispatch ever started, nothing read the
+    card, and the verdict is about the BOX. Recording it as a refusal is how an
+    unresolvable `uv` turned every card on the Board into a permanently dead one
+    that survived the repair - the engine would resolve uv again on the next
+    cycle and still skip every card it had already written off. So the card is
+    left exactly as it is: still `ready-for-agent`, still scanned next cycle,
+    dispatched the moment the box can launch it again. The failure is named in
+    the journal every time it happens, because a box that cannot spawn is worth
+    saying out loud; in practice `uv_launchable` holds the cycle before this can
+    be reached at all.
     """
     plan = plan or Plan(engine.config, engine.lanes)
     cmd = dispatch_command(engine, card, plan.config)
@@ -1597,10 +1748,11 @@ def spawn(engine: Engine, card: Path, plan: Plan | None = None) -> Child | None:
     try:
         process = subprocess.Popen(cmd, cwd=engine.main_root, env=env)
     except OSError as error:
-        log(f"could not start {cmd[0]} for {card.name}: {error}")
+        log(f"could not start {cmd[0]} for {card.name}: {error}. The card is left "
+            f"{dispatch.READY} and will be dispatched again as soon as this box can launch "
+            f"it - nothing started, so nothing refused it.")
         if plan.derived is not None:
             plan.derived.unlink(missing_ok=True)
-        engine.refused.add(card.name)
         return None
     child = Child(card=card, process=process, started=time.monotonic(), lanes=plan.lanes,
                   derived_config=plan.derived)
@@ -1717,7 +1869,10 @@ def run_cycle(engine: Engine) -> None:
     because every record this engine keeps is a commit and a checkout that
     cannot commit can only grind; the pi preflight after it, because a cycle
     that dispatches into an unlaunchable coding agent turns every ready card
-    into a blocked one. The branch guard comes next, because every
+    into a blocked one; the uv preflight after THAT, because every child argv
+    this file builds - each dispatch and every command of the integration gate -
+    begins with `uv`, and a cycle that cannot resolve it can neither spawn nor
+    merge anything. The branch guard comes next, because every
     write below belongs on that branch and nowhere else. Everything that CLEARS
     local state runs after that - reap, adopt, push - because that state (an
     uncommitted card, an unpushed commit) is exactly what a pull refuses to run
@@ -1742,6 +1897,9 @@ def run_cycle(engine: Engine) -> None:
         return
 
     if not pi_launchable(engine):
+        return
+
+    if not uv_launchable(engine):
         return
 
     if not ensure_trunk(engine):

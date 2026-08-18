@@ -588,9 +588,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=<owner of the checkout>
-WorkingDirectory=<repo>
-Environment=SSSF_CONFIG=<roster>
-ExecStart=<abs path to uv> run adws/engine.py
+WorkingDirectory="<repo>"
+Environment="SSSF_CONFIG=<roster>"
+Environment="PATH=<home>/.local/bin:<home>/.grok/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart="<abs path to uv>" run adws/engine.py
 Restart=always
 RestartSec=10
 
@@ -603,7 +604,13 @@ Requirements the installer must satisfy for that unit to work:
 - `WorkingDirectory` is the factory checkout itself. The engine derives the repo root from its own
   cwd (`git_helper.repo_root()`), and every child runs with that cwd.
 - `ExecStart` must resolve `uv`. A systemd unit gets no login shell, so the installer writes an
-  absolute path to `uv` (or a `PATH=` in the unit) rather than assuming the operator's profile.
+  absolute path to `uv` AND a `PATH=` line (field lesson 2026-08-18: the absolute `ExecStart` alone
+  starts the engine, but every child it spawns invokes bare `uv` - and `uv run` does not put uv's
+  own directory on the child PATH - so without the `PATH=` line the service reads `active` while
+  every card is refused with "could not start uv"). The line also carries `~/.grok/bin` for the
+  Grok Build binary. Values are rendered quoted with literal `%` doubled: systemd splits unquoted
+  `Environment=`/`ExecStart`/`WorkingDirectory` on whitespace and expands `%` specifiers, so an
+  unquoted path with a space or a `%` silently points the unit somewhere else.
 - **`User=` is mandatory**, and it is the **owner of the checkout** (`installer/steps.py`'s
   `engine_service_user`, which reads it off the directory itself and falls back to `SUDO_USER`).
   Writing `/etc/systemd/system/` needs root, so the wizard runs under sudo; a unit with no `User=`
@@ -630,8 +637,8 @@ Requirements the installer must satisfy for that unit to work:
   it. Hand-editing `ExecStart` is not supported: `detect_engine_service` compares the unit against
   `render_engine_unit` byte for byte and would park the edit. The engine also logs the roster it
   got on its `up:` line, so `journalctl` always names what the server is shipping on.
-- **`SSSF_CONFIG` is the only `Environment=` line the unit carries, and hand-adding another does
-  not survive.** Both converge paths render the unit above byte for byte -
+- **The unit carries exactly two `Environment=` lines - `SSSF_CONFIG` and the `PATH` above - and
+  hand-adding another does not survive.** Both converge paths render the unit above byte for byte -
   `installer/steps.py`'s `render_engine_unit`, and `bootstrap.sh`, which overwrites any unit whose
   bytes differ on every deploy - so an `Environment=SSSF_LANES=...` typed into
   `/etc/systemd/system/sdl-engine.service` is erased by the next converge, exactly as a hand-edited

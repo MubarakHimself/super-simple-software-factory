@@ -23,15 +23,28 @@ Run from the **target repo root** — the cwd is where everything lands. If the 
 | `adws/adw_data/prompt_engineering/{planner,builder,scout,reviewer,documenter}/` | `templates/prompt_engineering/` | yes — **the user-owned home for prompts** |
 | `adws/adw_data/harness_engineering/` | `templates/harness_engineering/` | yes — **the user-owned home for pi extensions** |
 | `justfile` | `templates/justfile` | yes — starter recipes: `just demo`, the workflows, the trace reads, `just obs` |
+| `pyproject.toml` | `templates/pyproject.toml` | yes — the merge gate's toolchain (`dev` group). A project that already has one keeps it and gets the group appended |
+| `queue/TEMPLATE.md` | `templates/queue/TEMPLATE.md` | yes — the card header contract `dispatch.py` parses; the Board and the engine both skip it by name |
 | `adws/adw_data/sessions/`, `adws/adw_data/sssf.db` | created at runtime | no — gitignored |
 
 The two `*_engineering` dirs mirror the two config keys of the same name: `prompt_engineering` is what an agent is told, `harness_engineering` is what its harness can do. Both are yours the moment they are stamped. Edit them in `adws/adw_data/`, never back inside the skill.
 
 `harness_engineering/` ships with `subagents.ts` — the pi extension backing `subagent_create` / `_continue` / `_list` / `_remove`, wired to the planner and scout in the starter roster.
 
-## Idempotency
+## Idempotency — two worlds, one rule each
 
-Re-running is safe. `install.py` skips **every** file that already exists — your config, your prompts, and previously stamped code alike — and reports what it skipped, so a second run doubles as a drift check. To refresh stamped code (`adw_modules/`, the starter `adw_*.py`) to the skill's current version, run with `--force` — but know that `--force` overwrites ALL existing stamped files, including `sssf.config.yaml` and `prompt_engineering/`, so commit or back up user-owned edits first.
+Re-running is safe, and it is how you take a skill upgrade. Every stamped file belongs to exactly one of two worlds:
+
+| World | Paths | What a re-run does |
+|---|---|---|
+| **Factory-owned** — the machinery | `adws/*.py`, `adws/adw_modules/**`, `adws/tests/**`, `queue/TEMPLATE.md` | **Refreshed to the skill's current bytes, every run, no `--force`.** A file that already matches is not rewritten at all (its mtime stays put) and is reported as `current`; one that differs is reported by name under `refreshed`. |
+| **Operator-owned** — your decisions | `adws/adw_sssf_config/sssf.config.yaml`, `adws/adw_data/**` (prompts, harness extensions, runtime state), `pyproject.toml`, `justfile`, `.env.sample`, `.gitignore`, every `queue/` card | **Never overwritten without `--force`** — reported as `kept`. `pyproject.toml` and `.gitignore` additionally get append-only merges: the merge gate's `[dependency-groups]`/`[tool.ruff]` tables and the runtime ignore lines are *added* when absent, and nothing you already wrote is edited. |
+
+`--force` still means overwrite everything, both worlds — including your roster and your prompts. You almost never need it now.
+
+**Why factory code refreshes itself.** On 2026-08-18 a project stamped by an older skill was re-stamped by the current one. Under the old rule ("skip every file that already exists") the new modules landed and the old ones stayed: a brand-new `adw_modules/worktrees.py` importing `RunWorktree` from a `data_types.py` that predated the class. `uv run adws/engine.py --help` died on `ImportError` and the deploy's preflight caught it. The `adws/` tree is one program split across files; it only works at one generation, so the stamp keeps it at one generation.
+
+After a re-stamp that reports refreshed files, read `git diff -- adws/` before committing — that diff is your changelog for the skill upgrade.
 
 ## Post-install checklist
 

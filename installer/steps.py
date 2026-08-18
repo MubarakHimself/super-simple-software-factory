@@ -84,7 +84,17 @@ PI_PACKAGES = ("npm:pi-claude-bridge", "npm:@tintinweb/pi-subagents")
 PI_PACKAGE_DIRS = ("pi-claude-bridge", "@tintinweb/pi-subagents")
 
 UV_FLOOR = (0, 5, 0)
-NODE_FLOOR = (20, 0, 0)
+# Field lesson, 2026-08-18, a real deploy: pi 0.84.1 (see PI_PIN below) needs
+# undici's CacheStorage, which node 20 does not have and crashes on. 22 is
+# the floor, 24 is the version actually installed (see _nodesource_command) -
+# both the laptop's proven combo.
+NODE_FLOOR = (22, 0, 0)
+
+# 0.74.x's `pi install` writes settings.json but MATERIALIZES NOTHING on disk
+# - a no-op that fakes success (apply_pi_packages's on-disk check is what
+# caught it). 0.84.1 is the version proven on the laptop, paired with
+# NODE_FLOOR above.
+PI_PIN = "0.84.1"
 
 NO_MISTAKES_INSTALL_SH = (
     "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh"
@@ -918,11 +928,11 @@ def detect_node(ctx: Ctx) -> Detected:
 
 def _nodesource_command() -> list[str] | None:
     if which("apt-get"):
-        deb_cmd = ("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - "
+        deb_cmd = ("curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - "
                    "&& sudo apt-get install -y nodejs")
         return ["/bin/sh", "-c", deb_cmd]
     if which("dnf"):
-        rpm_cmd = ("curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - "
+        rpm_cmd = ("curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash - "
                    "&& sudo dnf install -y nodejs")
         return ["/bin/sh", "-c", rpm_cmd]
     return None
@@ -949,7 +959,7 @@ def apply_node(ctx: Ctx) -> Result:
     command = _nodesource_command()
     if command is None:
         return Result("needs-operator", "unknown Linux distro (no apt-get or dnf found) - "
-                       "install Node 20 LTS from nodesource.com yourself")
+                       "install Node 24 from nodesource.com yourself")
     if ctx.dry_run:
         return Result("ok", f"[dry-run] would run: {command[-1]}")
     result = run(command, timeout=NETWORK_TIMEOUT, network=True, ctx=ctx)
@@ -985,16 +995,35 @@ def detect_pi(ctx: Ctx) -> Detected:
                      {"cli_js": str(cli_js) if cli_js else ""})
 
 
+def _pi_installed_version(cli_js: Path, ctx: Ctx) -> str:
+    result = probe_version(["node", str(cli_js), "--version"], ctx)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def apply_pi(ctx: Ctx) -> Result:
     detected = detect_pi(ctx)
     outcome: Outcome
-    if not detected.present:
+    pinned_spec = f"@earendil-works/pi-coding-agent@{PI_PIN}"
+    # "present" used to mean "cli.js exists on disk", full stop - which is how
+    # a box kept running pi 0.74.2 forever: every later run saw the file and
+    # skipped straight past it (0.74.x's `pi install` writes settings.json
+    # but materializes nothing, so the box looked done). A version mismatch
+    # now runs the pinned install anyway - `npm install -g` replaces the
+    # global package in place - and only a version match skips it.
+    installed_version = _pi_installed_version(Path(detected.data["cli_js"]), ctx) \
+        if detected.present else ""
+    needs_install = not detected.present or _parse_version(installed_version) != _parse_version(PI_PIN)
+
+    if needs_install:
         if ctx.dry_run:
-            return Result("ok", "[dry-run] would run: npm install -g --ignore-scripts "
-                           "@earendil-works/pi-coding-agent, then derive PI_PATH")
-        result = run(["npm", "install", "-g", "--ignore-scripts",
-                      "@earendil-works/pi-coding-agent"], timeout=NETWORK_TIMEOUT,
-                     network=True, ctx=ctx)
+            if detected.present:
+                return Result("ok", f"[dry-run] pi {installed_version or 'an unknown version'} "
+                               f"present, pinned to {PI_PIN} - would run: npm install -g "
+                               f"--ignore-scripts {pinned_spec}")
+            return Result("ok", f"[dry-run] would run: npm install -g --ignore-scripts "
+                           f"{pinned_spec}, then derive PI_PATH")
+        result = run(["npm", "install", "-g", "--ignore-scripts", pinned_spec],
+                     timeout=NETWORK_TIMEOUT, network=True, ctx=ctx)
         if result.returncode != 0:
             return Result("failed", f"npm install pi exited {result.returncode}: "
                            f"{result.stderr[-300:]}")
@@ -1743,6 +1772,40 @@ def engine_service_user(ctx: Ctx) -> str:
         return os.environ.get("SUDO_USER") or getpass.getuser()
 
 
+def unit_value(value: str) -> str:
+    """One rendered value, made safe for a systemd unit file.
+
+    `%` opens a SPECIFIER there (%i, %H, %n, ...), so a literal percent in a
+    checkout path or a roster name silently becomes something else - or makes
+    systemd refuse the unit outright. `%%` is how a unit file spells one
+    percent, and doubling is the whole of the escaping this rendering needs;
+    whitespace is handled by quoting the values below, not here.
+
+    `apps/ui/server/app/deploy/bootstrap.sh` carries the same helper under the
+    same name, because it renders the same unit and `detect_engine_service`
+    compares the two BYTE FOR BYTE.
+    """
+    return value.replace("%", "%%")
+
+
+def engine_unit_path_value(ctx: Ctx) -> str:
+    """The `PATH` the engine's CHILDREN inherit (specs/engine.md 7).
+
+    A systemd service gets systemd's own default PATH, never a login shell's -
+    so `uv` in ~/.local/bin and `grok` in ~/.grok/bin, which every card's agent
+    turn shells out to, do not exist as far as the engine's children are
+    concerned. `ExecStart` survives that because it is resolved to an absolute
+    path; the children do not, and the box then refuses every card while
+    `systemctl is-active` says `active`. The trailing six entries are systemd's
+    documented default PATH, kept so adding ours takes nothing away.
+    """
+    return ":".join([
+        (ctx.home / ".local" / "bin").as_posix(),
+        (ctx.home / ".grok" / "bin").as_posix(),
+        "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
+    ])
+
+
 def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
     """The exact unit specs/engine.md section 7 documents - `<repo>` filled
     with this converge's real checkout, `uv run adws/engine.py` resolved to
@@ -1751,8 +1814,8 @@ def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
     fail every time systemd itself starts the unit, even though `which uv`
     works fine in the operator's own shell.
 
-    `User=` and `Environment=SSSF_CONFIG=` are part of the contract, not
-    decoration:
+    `User=`, `Environment=SSSF_CONFIG=` and `Environment=PATH=` are part of
+    the contract, not decoration:
       - without `User=`, systemd starts the engine as root (see
         `engine_service_user`).
       - without `SSSF_CONFIG`, the always-on server ships every card on
@@ -1762,6 +1825,13 @@ def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
         `SSSF_CONFIG=<path> installer/install.py` converges the unit to it.
         Hand-editing ExecStart is not - `detect_engine_service` compares this
         rendering byte for byte and the next converge would park the edit.
+      - without `PATH`, the engine's children resolve neither `uv` nor `grok`
+        (see `engine_unit_path_value`).
+
+    Every interpolated value is QUOTED and `%`-escaped (`unit_value`): systemd
+    splits an unquoted value on whitespace and expands `%` specifiers in it, so
+    a checkout at `/home/op/my factory` handed ExecStart an argument nobody
+    wrote and WorkingDirectory a directory that does not exist.
     """
     return (
         "[Unit]\n"
@@ -1771,10 +1841,11 @@ def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        f"User={engine_service_user(ctx)}\n"
-        f"WorkingDirectory={ctx.repo_root.as_posix()}\n"
-        f"Environment=SSSF_CONFIG={ctx.engine_config}\n"
-        f"ExecStart={Path(uv_path).as_posix()} run adws/engine.py\n"
+        f"User={unit_value(engine_service_user(ctx))}\n"
+        f'WorkingDirectory="{unit_value(ctx.repo_root.as_posix())}"\n'
+        f'Environment="SSSF_CONFIG={unit_value(ctx.engine_config)}"\n'
+        f'Environment="PATH={unit_value(engine_unit_path_value(ctx))}"\n'
+        f'ExecStart="{unit_value(Path(uv_path).as_posix())}" run adws/engine.py\n'
         "Restart=always\n"
         "RestartSec=10\n"
         "\n"

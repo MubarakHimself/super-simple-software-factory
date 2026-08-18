@@ -6,12 +6,15 @@ the same answer every time. Agents are for the parts that need reading and
 deciding.
 
 Every block below runs through `uv run --group <name>`, which resolves the
-pinned toolchain in the root pyproject.toml. That is still a BARE-NAME
-invocation — of `uv` — so it obeys the rule that gave this file its original
-banner (call binaries by bare name; never bake a machine path into the trace)
-while guaranteeing the same ruff/mypy/pytest/skylos on every host. These
-blocks inherit the operator's own environment (see utils.operator_env), so
-`uv` resolves exactly as it does in their terminal.
+pinned toolchain in the root pyproject.toml — the same ruff/mypy/pytest/skylos
+on every host. Every other binary is still called by BARE NAME (the rule that
+gave this file its original banner: never bake a machine path into the trace);
+`uv` itself is the one exception, resolved through `utils.uv_cmd()`, because
+these blocks inherit `utils.operator_env()` — which strips the ADW's own venv
+bin back off PATH — and because under systemd the service PATH does not carry
+`~/.local/bin`, where uv is installed. A bare `uv` there resolved to nothing,
+and the gate read RED on the resulting OSError for reasons that had nothing to
+do with the code being judged.
 
 There is no `build` block: this repo is the factory's own Python, and there is
 no bundle step to run. Re-add one the day this repo grows something that is
@@ -38,7 +41,7 @@ from .data_types import (
     QualityStatus,
     VerifyOutput,
 )
-from .utils import now_iso, operator_env
+from .utils import now_iso, operator_env, uv_cmd
 
 # How much of a failing command's output rides back inside the envelope. Enough
 # for a builder to act on without opening the artifact; bounded so a runaway
@@ -63,7 +66,7 @@ TAIL_CHARS = 4_000
 # Kept as named helpers because they are the definition of the prefix and
 # because callers outside this module read them.
 def _dev(run) -> list[str]:
-    return ["uv", "run", "--project", str(run.repo_root), "--group", "dev"]
+    return [uv_cmd(), "run", "--project", str(run.repo_root), "--group", "dev"]
 
 
 # skylos lives in its OWN group (`scan`), never `dev` — see pyproject.toml for
@@ -71,7 +74,7 @@ def _dev(run) -> list[str]:
 # laptop does not have, and a single shared group would take ruff/mypy/pytest
 # down with it on every `uv sync`.
 def _scan(run) -> list[str]:
-    return ["uv", "run", "--project", str(run.repo_root), "--group", "scan"]
+    return [uv_cmd(), "run", "--project", str(run.repo_root), "--group", "scan"]
 
 
 def resolve_command(template: str, repo_root: Path | str) -> list[str]:
@@ -85,9 +88,17 @@ def resolve_command(template: str, repo_root: Path | str) -> list[str]:
     An empty (or whitespace-only) template returns `[]` — "this project has
     decided not to run this check", which every caller treats as skip-and-say-
     so rather than as a command that passed.
+
+    `{dev}`/`{scan}` expand with a RESOLVED uv (`utils.uv_cmd()`), not the bare
+    name. This function is what the engine's integration gate builds its argv
+    with too (`engine.quality_commands`), so this one line is what stops the
+    gate from reading red on "uv is not on the service's PATH" — see the module
+    banner. A token a project wrote itself is never rewritten: only the two
+    placeholders carry the resolved launcher.
     """
-    dev = ["uv", "run", "--project", str(repo_root), "--group", "dev"]
-    scan = ["uv", "run", "--project", str(repo_root), "--group", "scan"]
+    uv = uv_cmd()
+    dev = [uv, "run", "--project", str(repo_root), "--group", "dev"]
+    scan = [uv, "run", "--project", str(repo_root), "--group", "scan"]
     argv: list[str] = []
     for token in shlex.split(template.strip(), posix=True):
         if token == "{dev}":

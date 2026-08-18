@@ -11,6 +11,7 @@ from pathlib import Path
 
 import dispatch
 import pytest
+from adw_modules.utils import uv_cmd
 
 TEMPLATE_BODY = """## Agent Brief
 
@@ -373,7 +374,11 @@ def test_dispatch_success_path_mints_an_id_and_writes_running_then_done(main_roo
 
     assert code == 0
     cmd, cwd = calls[0]
-    assert cmd[0:2] == ["uv", "run"]
+    # argv[0] is a RESOLVED uv (utils.uv_cmd), not the bare name - see
+    # test_uv_launcher.py. Asserted by identity with the resolver rather than
+    # by literal, so this stays true on a box where uv is on PATH and on one
+    # where it is not.
+    assert cmd[0] == uv_cmd() and cmd[1] == "run"
     assert Path(cmd[2]) == Path("adws") / "adw_simple_sdlc.py"
     assert cmd[3].startswith("Add a /health endpoint\n\n")  # title leads -> legible slug
     assert "## Agent Brief" in cmd[3]                        # the body, still present verbatim

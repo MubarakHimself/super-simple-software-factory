@@ -41,8 +41,18 @@ Usage:
     uv run <skill>/scripts/sync_templates.py <path> --dry-run
     uv run <skill>/scripts/sync_templates.py <path> --prune
 
-Exit codes: 0 synced (or already in sync) - 1 refused (unknown extras, no
---prune) - 2 <path> is not a live checkout (no adws/ under it).
+Exit codes: 0 synced (or already in sync) - 1 needs a human: unknown extras
+with no --prune, OR --dry-run found drift - 2 <path> is not a live checkout
+(no adws/ under it).
+
+--dry-run IS THE PARITY GATE, which is why it exits 1 on drift rather than
+reporting it and exiting 0. It used to exit 0 whatever it found, so nothing
+could gate on it: an adws/ edit that skipped the mirror sailed through every
+check and the drift was discovered later, on a stamped project, as a factory
+that would not start. `adws/tests/test_sync_templates.py` shells exactly this
+command, so a missed mirror now goes red in the merge gate on the branch that
+caused it. A real (non-dry) run still exits 0 after syncing - it FIXED the
+drift, so there is nothing left to report.
 """
 
 from __future__ import annotations
@@ -92,7 +102,12 @@ def diff_status(src: Path, dest: Path) -> str:
     return "same" if src.read_bytes() == dest.read_bytes() else "updated"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """`argv=None` reads the real command line, which is what the CLI below
+    does. Passing a list is how the tests drive both exit codes without
+    touching the operator's real templates (`adws/tests/test_sync_templates.py`
+    monkeypatches TEMPLATES_ADWS to a throwaway directory) - the same shape
+    `adws/engine.py`'s own `main(argv)` already uses."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("live_root",
@@ -103,7 +118,7 @@ def main() -> int:
     parser.add_argument("--prune", action="store_true",
                         help="remove template files with no live source, instead "
                              "of refusing")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     live_root = Path(args.live_root).resolve()
     live_adws = live_root / "adws"
@@ -168,6 +183,13 @@ def main() -> int:
             "differs from the live roster file - review the schema by hand"
         print(f"  sssf.config.yaml: {note} (not auto-synced; template is hand-curated)")
 
+    drift = added + updated + removed
+    if args.dry_run and drift:
+        print(f"sync_templates: DRIFT - {len(drift)} file(s) in templates/adws do not match "
+              f"{live_adws}. Nothing was written (--dry-run). Re-run without --dry-run to "
+              f"mirror them, then commit the templates alongside the adws/ change that "
+              f"caused this.")
+        return 1
     return 0
 
 

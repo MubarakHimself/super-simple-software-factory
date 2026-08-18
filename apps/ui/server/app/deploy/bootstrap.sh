@@ -193,6 +193,46 @@ asroot() {
   fi
 }
 
+# A command with a hard ceiling on how long it may sit there. NOBODY IS
+# WATCHING (see the header): a registry or a CDN that accepts the connection and
+# then stops sending leaves npm, uv or a version probe waiting forever, and the
+# deploy reads as hung rather than as failed - the UI's step list simply stops.
+# `timeout` is coreutils and is on every Ubuntu image; where it is somehow
+# absent the command runs exactly as it did before, bare.
+#
+# `timeout` is a BINARY, not a shell builtin, so it can only ever prefix a real
+# command - which is why the root form puts it INSIDE asroot's argument list
+# (asroot is a shell function; `timeout asroot ...` would be "command not
+# found") rather than in front of it.
+timed() {
+  timed_secs="$1"
+  shift
+  if have timeout; then
+    timeout "$timed_secs" "$@"
+  else
+    "$@"
+  fi
+}
+
+asroot_timed() {
+  timed_secs="$1"
+  shift
+  if have timeout; then
+    asroot timeout "$timed_secs" "$@"
+  else
+    asroot "$@"
+  fi
+}
+
+# 124 is timeout's own "I killed it". Said out loud, because a step whose whole
+# reason reads "npm install failed: " with nothing after it is the wrong
+# diagnosis - the same class of lie this script fetches-to-a-file to avoid.
+timed_note() {
+  if [ "$1" = 124 ]; then
+    printf ' (killed by this deploy - it was still running when its timeout ran out)'
+  fi
+}
+
 ok preflight "user=$(id -un) sudo=$SUDO target=$DIR"
 
 if [ -z "$REPO_URL" ]; then
@@ -364,21 +404,30 @@ fi
 # ── 4. node + npm (pi and its extensions are npm packages) ──────────────────
 # Mirrors installer/steps.py `_nodesource_command` - and MIRRORS means the same
 # two things it does, not merely something like them:
-#   * the SAME PINNED script, `setup_20.x`. `setup_lts.x` was here and it is a
-#     moving target: it reads NODE_VERSION="24.x" today, so the installer path
-#     (the sdl-factory box) got node 20 and the inline path (every stamped
-#     project box) got node 24 - one factory, two runtimes, decided by whether
-#     installer/ happened to exist.
+#   * the SAME PINNED script, `setup_24.x`. `setup_lts.x` was here and it is a
+#     moving target - a fixed major is worth the occasional bump.
 #   * fed to BASH. The upstream script is `#!/bin/bash` and NodeSource's own
 #     instruction - and steps.py's command - is `| bash -`. dash parses today's
 #     revision by luck; one upstream `[[ ]]`, array or `local -a` would break
 #     the node step on every fresh box and read as a NodeSource outage.
-# Floor node 20, the same floor steps.py checks.
+#
+# Field lesson, 2026-08-18, a real deploy: a server sat on pi 0.74.2 over node
+# 20 - pi 0.84.1 (the laptop's proven version, see PI_PIN in the pi step
+# below) CRASHES on node 20 because it needs undici's CacheStorage, which
+# node 20 does not have. node 24 is the laptop-proven runtime for pi 0.84.1.
+# steps.py is pinned to the same setup_24.x and the same floor in this same
+# change, so the installer path and this inline path still agree.
 #
 # The setup script runs apt itself, which is why `apt_wait` runs first and why
 # the drop-in above exists - its internal apt-get inherits neither of this
 # script's -o flags.
-NODE_SETUP_URL="https://deb.nodesource.com/setup_20.x"
+NODE_SETUP_URL="https://deb.nodesource.com/setup_24.x"
+
+# pi 0.74.x's `pi install` writes settings.json but MATERIALIZES NOTHING on
+# disk - a no-op that fakes success (the pi-packages step below is what
+# caught it, by checking the disk, not just settings.json). 0.84.1 is the
+# version proven on the laptop, paired with node 24 above.
+PI_PIN="0.84.1"
 
 NODE_MAJOR=0
 if have node; then
@@ -388,7 +437,7 @@ if have node; then
   esac
 fi
 
-if [ "$NODE_MAJOR" -ge 20 ] && have npm; then
+if [ "$NODE_MAJOR" -ge 22 ] && have npm; then
   ok node "already present: node $(node --version 2>&1) npm $(npm --version 2>&1)"
 else
   have bash ||
@@ -602,8 +651,10 @@ ok stamp "adws/engine.py, adws/adw_modules, pyproject.toml (dev group) and adws/
 # entirely. This is for `uv run --project <tree> --group dev ...` and the engine
 # warm below, and nothing else.
 
-if ! out=$(cd "$DIR" && uv sync 2>&1); then
-  fail uv-sync "uv sync failed in $DIR: $(tail_of "$out")"
+UV_SYNC_RC=0
+out=$(cd "$DIR" && timed 600 uv sync 2>&1) || UV_SYNC_RC=$?
+if [ "$UV_SYNC_RC" -ne 0 ]; then
+  fail uv-sync "uv sync failed in $DIR$(timed_note "$UV_SYNC_RC"): $(tail_of "$out")"
 fi
 ok uv-sync "environment synced from $DIR/pyproject.toml - the merge gate's ruff/mypy/pytest resolve here"
 
@@ -695,6 +746,12 @@ fi
 # The three .env values are DERIVED per host and merged into $DIR/.env, never
 # baked into anything tracked: sssf.shipping.config.yaml writes
 # `${PI_BRIDGE_PATH}/src/index.ts` and agents.py expands it at run time.
+#
+# "already present" used to mean "cli.js exists on disk", full stop - which is
+# how a box kept running pi 0.74.2 forever: every later deploy saw the file
+# and skipped straight past it. Now presence also has to match PI_PIN; a
+# mismatch runs the pinned `npm install -g` anyway, which replaces the global
+# package in place, and only a version match skips the install.
 
 PI_CLI=""
 pi_cli_path() {
@@ -707,14 +764,25 @@ pi_cli_path() {
 
 if [ "$USED_INSTALLER" = no ]; then
   PI_CLI=$(pi_cli_path) || PI_CLI=""
-  PI_NOTE="already present"
-  if [ -z "$PI_CLI" ]; then
-    if ! out=$(asroot npm install -g --ignore-scripts --no-fund --no-audit --loglevel=error @earendil-works/pi-coding-agent 2>&1); then
-      fail pi "npm install -g @earendil-works/pi-coding-agent failed: $(tail_of "$out")"
+  PI_INSTALLED_VERSION=""
+  if [ -n "$PI_CLI" ]; then
+    PI_INSTALLED_VERSION=$(node "$PI_CLI" --version 2>/dev/null | tr -d '[:space:]')
+  fi
+  if [ -n "$PI_CLI" ] && [ "$PI_INSTALLED_VERSION" = "$PI_PIN" ]; then
+    PI_NOTE="already present"
+  else
+    if [ -z "$PI_CLI" ]; then
+      PI_NOTE="installed"
+    else
+      PI_NOTE="upgraded from ${PI_INSTALLED_VERSION:-an unknown version} to $PI_PIN"
+    fi
+    PI_NPM_RC=0
+    out=$(asroot_timed 600 npm install -g --ignore-scripts --no-fund --no-audit --loglevel=error "@earendil-works/pi-coding-agent@$PI_PIN" 2>&1) || PI_NPM_RC=$?
+    if [ "$PI_NPM_RC" -ne 0 ]; then
+      fail pi "npm install -g @earendil-works/pi-coding-agent@$PI_PIN failed$(timed_note "$PI_NPM_RC"): $(tail_of "$out")"
     fi
     PI_CLI=$(pi_cli_path) || PI_CLI=""
     [ -n "$PI_CLI" ] || fail pi "npm install reported success but cli.js is still not under $(npm root -g 2>/dev/null) - the global npm prefix root sees is not the one this user reads"
-    PI_NOTE="installed"
   fi
 
   # The same three values steps.py writes, derived the same way.
@@ -785,7 +853,15 @@ PY
   ); then
     fail pi "could not merge PI_PATH/PI_MODELS_PATH/PI_BRIDGE_PATH into $DIR/.env: $(tail_of "$ENV_RESULT")"
   fi
-  ok pi "$PI_NOTE - PI_PATH='node $PI_CLI', PI_BRIDGE_PATH='$SDL_PI_BRIDGE_PATH' ($ENV_RESULT in $DIR/.env)"
+  # OWNER-ONLY, always. This file is the channel every provider key arrives on
+  # (the engine reads .env from WorkingDirectory through load_dotenv), and a
+  # file created with the process umask is world-readable on a stock Ubuntu box
+  # - every account on the server could read the operator's keys.
+  ENV_PERM_NOTE=""
+  if [ -f "$SDL_ENV_PATH" ] && ! chmod 600 "$SDL_ENV_PATH" 2>/dev/null; then
+    ENV_PERM_NOTE=" - NOTE: could not chmod 600 it, and it carries the provider keys"
+  fi
+  ok pi "$PI_NOTE - PI_PATH='node $PI_CLI', PI_BRIDGE_PATH='$SDL_PI_BRIDGE_PATH' ($ENV_RESULT in $DIR/.env, mode 600)$ENV_PERM_NOTE"
 fi
 
 # ── 12. pi packages: the bridge and the subagents ────────────────────────────
@@ -864,8 +940,10 @@ PY
     [ -n "$PI_CLI" ] || PI_CLI=$(pi_cli_path) || PI_CLI=""
     [ -n "$PI_CLI" ] || fail pi-packages "pi cli.js not found - the pi step must run (and succeed) before this one"
     for pkg in npm:pi-claude-bridge npm:@tintinweb/pi-subagents; do
-      if ! out=$(node "$PI_CLI" install "$pkg" 2>&1); then
-        fail pi-packages "pi install $pkg failed: $(tail_of "$out")"
+      PI_PKG_RC=0
+      out=$(timed 600 node "$PI_CLI" install "$pkg" 2>&1) || PI_PKG_RC=$?
+      if [ "$PI_PKG_RC" -ne 0 ]; then
+        fail pi-packages "pi install $pkg failed$(timed_note "$PI_PKG_RC"): $(tail_of "$out")"
       fi
     done
     for dir_name in pi-claude-bridge @tintinweb/pi-subagents; do
@@ -887,17 +965,21 @@ fi
 # on an OK line that names the consequence instead of ending the run.
 
 if [ "$USED_INSTALLER" = no ]; then
+  # `claude --version` is a network-capable CLI being asked a local question,
+  # and it is being asked only to DECORATE an OK line - so it gets ten seconds
+  # and no more. A detail is never worth hanging the deploy for.
   if have claude; then
-    ok claude-cli "already present: $(claude --version 2>&1 | head -n 1)"
+    ok claude-cli "already present: $(timed 10 claude --version 2>&1 | head -n 1)"
   else
-    if out=$(asroot npm install -g --no-fund --no-audit --loglevel=error @anthropic-ai/claude-code 2>&1); then
+    if out=$(asroot_timed 600 npm install -g --no-fund --no-audit --loglevel=error @anthropic-ai/claude-code 2>&1); then
       if have claude; then
-        ok claude-cli "installed $(claude --version 2>&1 | head -n 1)"
+        ok claude-cli "installed $(timed 10 claude --version 2>&1 | head -n 1)"
       else
         ok claude-cli "npm installed @anthropic-ai/claude-code but 'claude' is not on PATH - the pi-claude-bridge lane cannot run until it is"
       fi
     else
-      ok claude-cli "NOT installed: npm install -g @anthropic-ai/claude-code failed ($(tail_of "$out")) - the pi-claude-bridge lane cannot run until it is"
+      CLAUDE_NPM_RC=$?
+      ok claude-cli "NOT installed: npm install -g @anthropic-ai/claude-code failed$(timed_note "$CLAUDE_NPM_RC") ($(tail_of "$out")) - the pi-claude-bridge lane cannot run until it is"
     fi
   fi
 fi
@@ -908,16 +990,17 @@ fi
 
 if [ "$USED_INSTALLER" = no ]; then
   if have codex; then
-    ok codex-cli "already present: $(codex --version 2>&1 | head -n 1)"
+    ok codex-cli "already present: $(timed 10 codex --version 2>&1 | head -n 1)"
   else
-    if out=$(asroot npm install -g --no-fund --no-audit --loglevel=error @openai/codex 2>&1); then
+    if out=$(asroot_timed 600 npm install -g --no-fund --no-audit --loglevel=error @openai/codex 2>&1); then
       if have codex; then
-        ok codex-cli "installed $(codex --version 2>&1 | head -n 1)"
+        ok codex-cli "installed $(timed 10 codex --version 2>&1 | head -n 1)"
       else
         ok codex-cli "npm installed @openai/codex but 'codex' is not on PATH - the codex lane cannot run until it is"
       fi
     else
-      ok codex-cli "NOT installed: npm install -g @openai/codex failed ($(tail_of "$out")) - the codex lane cannot run until it is"
+      CODEX_NPM_RC=$?
+      ok codex-cli "NOT installed: npm install -g @openai/codex failed$(timed_note "$CODEX_NPM_RC") ($(tail_of "$out")) - the codex lane cannot run until it is"
     fi
   fi
 fi
@@ -932,6 +1015,18 @@ fi
 #
 #     curl -fsSL https://x.ai/cli/install.sh | bash
 #
+# FETCHED TO A FILE, THEN RUN, exactly as the uv, node and just steps above are
+# and for exactly the reason step 3 spells out - the published one-liner is a
+# PIPELINE, and POSIX sh reports only its LAST command's status. Written as
+# `if out=$(curl ... | bash 2>&1)` it swallowed a curl failure twice over: the
+# `if` read bash's status, not curl's, and the `2>&1` bound to bash, not to the
+# pipeline, so curl's own error text went to the deploy log and never into
+# `$out`. A box with no DNS therefore reported rc=0 and an empty reason, and
+# this step printed the one diagnosis that was certainly wrong - "the installer
+# ran but left no binary ()". Two commands, two honest exit codes, and the
+# fetch's own --connect-timeout/--max-time so a hanging CDN is not a hanging
+# deploy either.
+#
 # The product is called Grok Build; the binary it installs is still `grok`, a
 # self-updating native binary that lands in `~/.grok/bin/grok` (`installer =
 # "internal"` in its own config.toml). Same non-required treatment as steps 13
@@ -943,21 +1038,36 @@ fi
 # CLI either, so the question is the same on both kinds of box.
 
 grok_on_path_note="A non-login 'ssh <host> <command>' sources no .profile, so the app runs its logins with $HOME/.grok/bin, $HOME/.local/bin and /usr/local/bin prepended - that covers the app's own Grok row. Anything else you run over ssh needs $HOME/.grok/bin on PATH itself"
+grok_absent_note="the app's Grok sign-in row exits 127 here until it is installed. Note also that the roster's xai lane runs through pi, whose own xai credential is filled by 'pi' -> '/login xai' on the box, not by Grok Build"
+# `grok` is a SELF-UPDATING binary (installer = "internal"), so `grok --version`
+# is one of the probes most able to reach the network while a status line waits
+# on it: ten seconds, like the claude/codex probes above.
 if have grok; then
-  ok grok-cli "already present: $(command -v grok) ($(grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
+  ok grok-cli "already present: $(command -v grok) ($(timed 10 grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
 elif [ -x "$HOME/.grok/bin/grok" ]; then
   ok grok-cli "Grok Build is at $HOME/.grok/bin/grok but not on this box's PATH. $grok_on_path_note"
+elif ! have bash; then
+  # The same guard the node and just steps carry, for the same reason: x.ai's
+  # install.sh is genuinely `#!/bin/bash`, so a box without bash cannot run it
+  # and saying so beats an exec failure quoted as an installer failure.
+  ok grok-cli "NOT installed: this box has no bash and x.ai's install.sh is a bash script - $grok_absent_note"
 else
-  if out=$(curl -fsSL https://x.ai/cli/install.sh | bash 2>&1); then
+  GROK_SETUP=$(mktemp 2>/dev/null) || GROK_SETUP="/tmp/grok-install.$$"
+  if ! out=$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$GROK_SETUP" https://x.ai/cli/install.sh 2>&1); then
+    rm -f "$GROK_SETUP"
+    ok grok-cli "NOT installed: could not fetch https://x.ai/cli/install.sh ($(tail_of "$out")) - $grok_absent_note"
+  elif ! out=$(bash "$GROK_SETUP" 2>&1); then
+    rm -f "$GROK_SETUP"
+    ok grok-cli "NOT installed: x.ai's install.sh was fetched but failed while running ($(tail_of "$out")) - $grok_absent_note"
+  else
+    rm -f "$GROK_SETUP"
     if have grok; then
-      ok grok-cli "installed Grok Build via x.ai/cli/install.sh ($(grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
+      ok grok-cli "installed Grok Build via x.ai/cli/install.sh ($(timed 10 grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
     elif [ -x "$HOME/.grok/bin/grok" ]; then
       ok grok-cli "installed Grok Build via x.ai/cli/install.sh into $HOME/.grok/bin. $grok_on_path_note"
     else
       ok grok-cli "NEEDS YOU: x.ai/cli/install.sh ran but left no grok binary at $HOME/.grok/bin or on PATH ($(tail_of "$out")) - install it on the box yourself, then click the Grok row again"
     fi
-  else
-    ok grok-cli "NOT installed: 'curl -fsSL https://x.ai/cli/install.sh | bash' failed ($(tail_of "$out")) - the app's Grok sign-in row exits 127 here until it is installed. Note also that the roster's xai lane runs through pi, whose own xai credential is filled by 'pi' -> '/login xai' on the box, not by Grok Build"
   fi
 fi
 
@@ -982,7 +1092,14 @@ fi
 if [ "$USED_INSTALLER" = no ]; then
   SDL_MODELS_PATH="$HOME/.pi/agent/models.json"
   export SDL_MODELS_PATH
-  PROVIDERS=$(python3 - <<'PY' 2>/dev/null
+  # THE PROBE'S OWN FAILURE IS NOT AN ANSWER. `2>/dev/null` on this heredoc made
+  # "python3 is missing / the probe crashed" print exactly the same sentence as
+  # "the file registers no provider", and those are different jobs for the
+  # operator: one is a broken box, the other is a credential to place. So stderr
+  # is kept, the exit code is read, and the two cases are said separately below.
+  PROBE_ERR=$(mktemp 2>/dev/null) || PROBE_ERR="/tmp/sdl-providers-probe.$$"
+  PROBE_RC=0
+  PROVIDERS=$(python3 - 2>"$PROBE_ERR" <<'PY'
 import json, os
 
 try:
@@ -1000,9 +1117,13 @@ if isinstance(providers, dict):
             named.append("%s(%d models)" % (name, count))
 print(" ".join(named))
 PY
-  ) || PROVIDERS=""
+  ) || PROBE_RC=$?
+  PROBE_ERR_TEXT=$(cat "$PROBE_ERR" 2>/dev/null)
+  rm -f "$PROBE_ERR"
 
-  if [ -z "$PROVIDERS" ]; then
+  if [ "$PROBE_RC" -ne 0 ]; then
+    ok providers "NEEDS YOU: the probe itself failed (python3 exited $PROBE_RC reading $SDL_MODELS_PATH: $(tail_of "$PROBE_ERR_TEXT")) - this deploy therefore cannot say whether a provider with models is registered, which is not the same as saying none is. Read that file on the box yourself before you queue a card"
+  elif [ -z "$PROVIDERS" ]; then
     ok providers "NEEDS YOU: no provider with models is registered in $SDL_MODELS_PATH, so pi cannot make a single model call and every card this box picks up dies at its first agent turn. This path cannot converge it - installer/steps.py does it from installer/assets/, which a stamped project does not carry. Register the provider your roster names (adws/adw_sssf_config/sssf.config.yaml, defaults.model) in that file and place its key on this box. skylos is not installed by this path either, so the AI-defect scan reads 'incomplete', never a pass"
   else
     ok providers "$SDL_MODELS_PATH registers $PROVIDERS - confirm they cover the roster's defaults.model in adws/adw_sssf_config/sssf.config.yaml. skylos is not installed by this path, so the AI-defect scan reads 'incomplete', never a pass"
@@ -1047,7 +1168,12 @@ fi
 SKILLS_DIR="$HOME/.claude/skills"
 if [ -d "$SKILLS_DIR" ]; then
   REMOVED=""
-  for entry in "$SKILLS_DIR"/*; do
+  # `*` alone never matches a DOTTED entry, so a `.planning-skill` under
+  # ~/.claude/skills survived every deploy that claimed to have stripped it.
+  # `.[!.]*` is the POSIX spelling of "dotted, but not . or ..", and the -e
+  # guard below is what an unmatched glob (which arrives as the pattern itself)
+  # falls out on - the normal case for both patterns on most boxes.
+  for entry in "$SKILLS_DIR"/* "$SKILLS_DIR"/.[!.]*; do
     [ -e "$entry" ] || continue
     name=$(basename "$entry")
     [ "$name" = "sssf" ] && continue
@@ -1072,6 +1198,9 @@ fi
 #     dubious ownership in repository at ...", while is-active says `active`.
 #   * Environment=SSSF_CONFIG names the roster out loud. Without it the
 #     always-on server ships every card on whatever engine.py defaults to.
+#   * Environment=PATH puts ~/.local/bin and ~/.grok/bin in front of systemd's
+#     default PATH, because the engine's CHILDREN (uv, grok, the agent CLIs a
+#     card's turn shells out to) inherit only what the unit hands them.
 # Last on purpose: the whole factory is converged by the time a live service
 # starts pulling, dispatching and pushing against it.
 
@@ -1129,6 +1258,38 @@ if [ "$USED_INSTALLER" = no ]; then
   # ssh exec with no environment of its own.
   UNIT_PATH="${SDL_ENGINE_UNIT_PATH:-/etc/systemd/system/sdl-engine.service}"
   UNIT_TMP=$(mktemp 2>/dev/null) || UNIT_TMP="/tmp/sdl-engine.service.$$"
+
+  # A UNIT VALUE IS NOT A SHELL WORD, and systemd is not a shell:
+  #   * `%` opens a SPECIFIER (%i, %H, %n, ...), so a literal percent in a
+  #     checkout path or a roster name silently becomes something else - or
+  #     makes systemd refuse the unit outright. `%%` is how a unit file spells
+  #     one percent, and that is the only escaping this rendering needs.
+  #   * an unquoted value is SPLIT ON WHITESPACE. A checkout at
+  #     `/home/op/my factory` gave ExecStart an argument nobody wrote and
+  #     WorkingDirectory a directory that does not exist, and the service then
+  #     crash-looped behind Restart=always with is-active saying `activating`.
+  # installer/steps.py's `unit_value` does exactly this, character for
+  # character, because `detect_engine_service` compares the two renderings BYTE
+  # FOR BYTE and would otherwise park this file on every converge.
+  unit_value() {
+    printf '%s' "$1" | sed 's/%/%%/g'
+  }
+  UNIT_USER=$(unit_value "$SERVICE_USER")
+  UNIT_DIR=$(unit_value "$DIR")
+  UNIT_CONFIG=$(unit_value "$ENGINE_CONFIG")
+  UNIT_UV=$(unit_value "$UV_BIN")
+
+  # THE ENGINE'S CHILDREN INHERIT THIS PATH AND NOTHING ELSE. A systemd service
+  # gets systemd's own default PATH, never a login shell's - so `uv` in
+  # ~/.local/bin and `grok` in ~/.grok/bin, which every card's agent turn shells
+  # out to, do not exist as far as the engine's children are concerned. ExecStart
+  # survives that because it is resolved to an absolute path above; the children
+  # do not, and the box then refuses every card while `systemctl is-active`
+  # cheerfully says `active` - the exact failure shape this step's own comments
+  # keep naming. The trailing six are systemd's documented default PATH, kept so
+  # adding ours takes nothing away.
+  UNIT_ENV_PATH=$(unit_value "$HOME/.local/bin:$HOME/.grok/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
   cat >"$UNIT_TMP" <<UNIT
 [Unit]
 Description=SDL factory engine - runs the Kanban
@@ -1137,10 +1298,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$DIR
-Environment=SSSF_CONFIG=$ENGINE_CONFIG
-ExecStart=$UV_BIN run adws/engine.py
+User=$UNIT_USER
+WorkingDirectory="$UNIT_DIR"
+Environment="SSSF_CONFIG=$UNIT_CONFIG"
+Environment="PATH=$UNIT_ENV_PATH"
+ExecStart="$UNIT_UV" run adws/engine.py
 Restart=always
 RestartSec=10
 
@@ -1181,7 +1343,7 @@ UNIT
       RESTART_NOTE=", but systemctl try-restart failed ($(tail_of "$out")) - the RUNNING process may still be the previous unit"
     fi
   fi
-  ok engine-service "$UNIT_PATH $UNIT_STATE (User=$SERVICE_USER, WorkingDirectory=$DIR, SSSF_CONFIG=$ENGINE_CONFIG, ExecStart=$UV_BIN run adws/engine.py), daemon-reload'd, enabled --now$RESTART_NOTE"
+  ok engine-service "$UNIT_PATH $UNIT_STATE (User=$SERVICE_USER, WorkingDirectory=$DIR, SSSF_CONFIG=$ENGINE_CONFIG, ExecStart=$UV_BIN run adws/engine.py, PATH=$UNIT_ENV_PATH so the engine's children find uv and grok), daemon-reload'd, enabled --now$RESTART_NOTE"
 fi
 
 # ── 18. the engine is actually running ───────────────────────────────────────
@@ -1194,10 +1356,33 @@ if ! have systemctl; then
 fi
 
 sleep 3
-ENGINE_STATE=$(systemctl is-active sdl-engine 2>&1)
-if [ "$ENGINE_STATE" = "active" ]; then
+# is-active's STDERR IS NOT ITS ANSWER. Folded in with 2>&1, one warning line
+# ("Failed to connect to bus...", "Unit could not be found") became the value
+# compared against `active`, and the step then quoted the engine as being in a
+# state systemd never named. Its stdout is the answer - it prints the state and
+# exits non-zero for every state that is not `active`, so that non-zero is
+# expected (hence `|| true`) and only a SILENT is-active needs a fallback.
+ENGINE_STATE=$(systemctl is-active sdl-engine 2>/dev/null) || true
+[ -n "$ENGINE_STATE" ] || ENGINE_STATE="unknown (systemctl is-active printed nothing)"
+
+# ACTIVE IS NOT ALIVE. Restart=always means a unit that dies every ten seconds
+# is `active` again by the time anyone looks - the engine boots, hits the thing
+# it cannot resolve, exits, and systemd brings it back forever while this step
+# congratulates the operator. NRestarts is systemd's own count of exactly that,
+# and it is reset by an explicit start (which `enable --now` and `try-restart`
+# above both are), so on a converged box it reads 0. Non-zero here is the box
+# telling us it is looping, and step 18's whole job is to answer "is this box a
+# factory now?" honestly - so it fails, the same as a dead service does.
+ENGINE_RESTARTS=$(systemctl show sdl-engine --property=NRestarts --value 2>/dev/null)
+case "$ENGINE_RESTARTS" in
+  ''|*[!0-9]*) ENGINE_RESTARTS=0 ;;
+esac
+
+if [ "$ENGINE_STATE" = "active" ] && [ "$ENGINE_RESTARTS" -eq 0 ]; then
   ENGINE_SINCE=$(systemctl show sdl-engine --property=ActiveEnterTimestamp --value 2>/dev/null)
-  ok engine "sdl-engine is active since ${ENGINE_SINCE:-unknown}"
+  ok engine "sdl-engine is active since ${ENGINE_SINCE:-unknown}, with no restarts"
+elif [ "$ENGINE_STATE" = "active" ]; then
+  fail engine "sdl-engine says 'active' but systemd has already restarted it $ENGINE_RESTARTS time(s) - it is exiting and being restarted behind Restart=always, so it ships nothing while every status reads healthy. The reason is in its own log: $(tail_of "$(systemctl status sdl-engine --no-pager --lines=5 2>&1)")"
 else
   fail engine "sdl-engine is '$ENGINE_STATE' - $(tail_of "$(systemctl status sdl-engine --no-pager --lines=5 2>&1)")"
 fi

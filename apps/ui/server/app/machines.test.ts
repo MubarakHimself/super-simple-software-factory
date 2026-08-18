@@ -1555,14 +1555,18 @@ describe("deploy/bootstrap.sh", () => {
     // npm: no confirmation, no funding/audit chatter to page through. Same
     // rule as apt above - a failure message that quotes the command is not the
     // command, and every real install goes through `asroot`.
-    const npmInstalls = code.filter((line) => line.includes("asroot npm install"));
+    // `asroot_timed <secs>` is asroot with a ceiling on it (a registry that
+    // accepts the connection and then stops sending is a hang, not a failure),
+    // so it is the same root path and counts as one here.
+    const asrootNpm = /asroot(_timed \d+)? npm install/;
+    const npmInstalls = code.filter((line) => asrootNpm.test(line));
     expect(npmInstalls.length).toBeGreaterThan(0);
     for (const call of npmInstalls) {
       expect(call).toContain("--no-fund");
       expect(call).toContain("--no-audit");
     }
     const strayNpm = code.filter(
-      (line) => line.includes("npm install") && !line.includes("asroot npm install") && !isMessage(line),
+      (line) => line.includes("npm install") && !asrootNpm.test(line) && !isMessage(line),
     );
     expect(strayNpm).toEqual([]);
     expect(joined).toContain("npm_config_yes=true");
@@ -1656,10 +1660,17 @@ describe("deploy/bootstrap.sh", () => {
     const steps = await readFile(stepsPath, "utf-8");
     const script = await readFile(bootstrapPath(), "utf-8");
 
-    // pi's own npm package and the cli.js under it.
-    const piPackage = /"npm", "install", "-g", "--ignore-scripts",\s*"([^"]+)"/.exec(steps)?.[1];
+    // pi's own npm package and the cli.js under it - pinned since 2026-08-18
+    // (0.74.x's `pi install` faked success), so the guard now also holds the
+    // PIN itself equal across the two writers: a box must converge to the
+    // same pi whichever path deployed it.
+    const piPackage = /pinned_spec = f"(.+)@\{PI_PIN\}"/.exec(steps)?.[1];
     expect(piPackage).toBe("@earendil-works/pi-coding-agent");
     expect(script).toContain(`${piPackage}`);
+    const pyPin = /PI_PIN = "([^"]+)"/.exec(steps)?.[1];
+    const shPin = /PI_PIN="([^"]+)"/.exec(script)?.[1];
+    expect(pyPin).toBeTruthy();
+    expect(shPin).toBe(pyPin);
     expect(script).toContain("@earendil-works/pi-coding-agent/dist/cli.js");
     expect(script).toContain(".pi/agent/npm/node_modules");
 
@@ -1716,14 +1727,31 @@ describe("deploy/bootstrap.sh", () => {
       expect(steps).toContain(line);
     }
 
-    // Templated lines: the same four keys, filled from this host.
-    expect(unit).toContain("User=$SERVICE_USER");
-    expect(unit).toContain("WorkingDirectory=$DIR");
-    expect(unit).toContain("Environment=SSSF_CONFIG=$ENGINE_CONFIG");
-    expect(unit).toContain("ExecStart=$UV_BIN run adws/engine.py");
-    for (const key of ["User=", "WorkingDirectory=", "Environment=SSSF_CONFIG=", "run adws/engine.py"]) {
+    // Templated lines: the same five keys, filled from this host - and QUOTED
+    // and %-escaped on both sides, because systemd splits an unquoted value on
+    // whitespace and expands % specifiers in it (a checkout at
+    // `/home/op/my factory` gave ExecStart an argument nobody wrote).
+    expect(unit).toContain("User=$UNIT_USER");
+    expect(unit).toContain('WorkingDirectory="$UNIT_DIR"');
+    expect(unit).toContain('Environment="SSSF_CONFIG=$UNIT_CONFIG"');
+    expect(unit).toContain('Environment="PATH=$UNIT_ENV_PATH"');
+    expect(unit).toContain('ExecStart="$UNIT_UV" run adws/engine.py');
+    for (const key of ["User=", 'WorkingDirectory="', 'Environment="SSSF_CONFIG=',
+                       'Environment="PATH=', "run adws/engine.py"]) {
       expect(steps).toContain(key);
     }
+    // Both writers escape a literal percent the one way a unit file spells it.
+    expect(script).toContain("unit_value()");
+    expect(steps).toContain("def unit_value");
+
+    // The engine's CHILDREN inherit only what the unit hands them: a service
+    // gets systemd's default PATH, so without this line `uv` (~/.local/bin) and
+    // `grok` (~/.grok/bin) do not exist for anything the engine shells out to,
+    // and every card is refused while is-active says `active`.
+    expect(unit).toContain('Environment="PATH=');
+    expect(script).toContain('"$HOME/.local/bin:$HOME/.grok/bin:');
+    expect(steps).toContain('".local" / "bin"');
+    expect(steps).toContain('".grok" / "bin"');
 
     // `User=` is the checkout's owner, not whoever ran the deploy - without it
     // systemd starts the engine as root and every git call dies on "dubious

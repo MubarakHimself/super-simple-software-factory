@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import git_helper
 from .data_types import RunWorktree, WorktreeRow, WorktreesConfig, WorktreeState
-from .utils import minutes_since, operator_env
+from .utils import minutes_since, operator_env, uv_cmd
 
 
 class ReconciliationError(RuntimeError):
@@ -52,8 +52,15 @@ def _sync_toolchain(path: Path) -> None:
     if not (path / "pyproject.toml").is_file():
         return
     env = {**operator_env(), "UV_PROJECT_ENVIRONMENT": str(path / ".venv")}
+    # `uv` RESOLVED, never bare - the same fix as `engine.dispatch_command`,
+    # `dispatch.py` and `quality.resolve_command`. This is the site with the
+    # least forgiving failure of the four: the env it launches under is
+    # `operator_env()` (venv bin stripped) on a service PATH with no
+    # `~/.local/bin`, and a missing binary here raises FileNotFoundError, which
+    # nothing below catches - so it escapes `ensure_run_worktree` and blocks the
+    # card before a single agent has run. See `utils.uv_cmd`.
     result = subprocess.run(
-        ["uv", "sync", "--project", str(path), "--group", "dev"],
+        [uv_cmd(), "sync", "--project", str(path), "--group", "dev"],
         cwd=path, env=env, capture_output=True, text=True, encoding="utf-8",
         timeout=300, check=False)
     if result.returncode != 0:

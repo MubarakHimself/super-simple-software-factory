@@ -229,7 +229,13 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # What the tree looked like before this agent got its hands on it. Every
     # send in this phase — first prompt, JSON retries, gate corrections — is
     # measured against this one baseline.
+    #
+    # The refs are recorded beside it, and they are the half that does not go
+    # blind: `tree_before` is a diff against HEAD, so an agent that commits
+    # moves its own work behind the baseline and the content comparison reports
+    # nothing at all. `ref_before` catches exactly that (permissions.enforce_refs).
     tree_before = permissions.snapshot(run)
+    ref_before = permissions.snapshot_refs(run)
 
     result = send(user_text)
     envelope, attempt = _parse_with_retries(run, phase, call, result, send)
@@ -265,7 +271,12 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # Permission is checked after every send is done, and before the envelope is
     # accepted: an agent does not get to report success on a phase in which it
     # wrote somewhere it was not allowed to.
+    #
+    # Refs FIRST, then content. A commit made during the phase is what makes
+    # the content comparison meaningless, so checking it second would mean
+    # reporting "touched nothing" about a run that rewrote the repo.
     try:
+        permissions.enforce_refs(run, agent, ref_before)
         touched = permissions.enforce(run, phase, agent, tree_before)
     except permissions.PermissionBreach as breach:
         run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,

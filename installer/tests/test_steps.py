@@ -493,8 +493,11 @@ def test_apply_pi_is_a_full_no_op_when_env_already_has_the_quoted_values(tmp_pat
     def fake_run(argv, **kwargs):
         if argv[:3] == ["npm", "root", "-g"]:
             return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
-        raise AssertionError(f"apply_pi must not shell out beyond `npm root -g` when the "
-                              f".env is already correct - got {argv}")
+        if argv[0] == "node" and argv[-1] == "--version":
+            return steps.RunResult(argv, 0, steps.PI_PIN, "", 0.01)
+        raise AssertionError(f"apply_pi must not shell out beyond `npm root -g` and the "
+                              f"version check when the .env is already correct and pi "
+                              f"matches PI_PIN - got {argv}")
     monkeypatch.setattr(steps, "run", fake_run)
 
     pi_path_value = f"node {cli_js.as_posix()}"
@@ -525,6 +528,8 @@ def test_apply_pi_parks_and_rewrites_only_when_the_env_value_actually_changed(tm
     def fake_run(argv, **kwargs):
         if argv[:3] == ["npm", "root", "-g"]:
             return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
+        if argv[0] == "node" and argv[-1] == "--version":
+            return steps.RunResult(argv, 0, steps.PI_PIN, "", 0.01)
         raise AssertionError(f"unexpected run() call: {argv}")
     monkeypatch.setattr(steps, "run", fake_run)
 
@@ -564,6 +569,8 @@ def test_apply_pi_writes_pi_bridge_path_derived_from_home_not_from_the_cli_js_lo
     def fake_run(argv, **kwargs):
         if argv[:3] == ["npm", "root", "-g"]:
             return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
+        if argv[0] == "node" and argv[-1] == "--version":
+            return steps.RunResult(argv, 0, steps.PI_PIN, "", 0.01)
         raise AssertionError(f"unexpected run() call: {argv}")
     monkeypatch.setattr(steps, "run", fake_run)
 
@@ -576,6 +583,64 @@ def test_apply_pi_writes_pi_bridge_path_derived_from_home_not_from_the_cli_js_lo
     new_text = ctx.env_path.read_text(encoding="utf-8")
     assert f'PI_BRIDGE_PATH="{bridge_path_value}"' in new_text
     assert str(npm_root) not in bridge_path_value  # independent of npm's own root
+
+
+def test_apply_pi_upgrades_in_place_when_the_installed_version_does_not_match_the_pin(
+        tmp_path, monkeypatch):
+    """The field incident this pin exists for: 0.74.x's `pi install` writes
+    settings.json but materializes nothing on disk, so a box that already had
+    cli.js on disk looked "done" forever. `present` must mean present AND
+    pinned - a version mismatch has to run the pinned npm install again, not
+    skip it."""
+    ctx = _make_ctx(tmp_path)
+    npm_root = tmp_path / "npmroot"
+    cli_js = npm_root / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
+    cli_js.parent.mkdir(parents=True)
+    cli_js.write_text("// pi cli\n", encoding="utf-8")
+
+    install_calls = []
+
+    def fake_run(argv, **kwargs):
+        if argv[:3] == ["npm", "root", "-g"]:
+            return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
+        if argv[0] == "node" and argv[-1] == "--version":
+            return steps.RunResult(argv, 0, "0.74.2", "", 0.01)   # the stale field version
+        if argv[:3] == ["npm", "install", "-g"]:
+            install_calls.append(argv)
+            return steps.RunResult(argv, 0, "", "", 0.01)
+        raise AssertionError(f"unexpected run() call: {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_pi(ctx)
+
+    assert len(install_calls) == 1, "a version mismatch must run the pinned npm install exactly once"
+    assert install_calls[0][-1] == f"@earendil-works/pi-coding-agent@{steps.PI_PIN}"
+    assert "--ignore-scripts" in install_calls[0]
+    assert result.outcome == "installed"
+
+
+def test_apply_pi_dry_run_reports_the_pin_mismatch_without_shelling_out_to_npm_install(
+        tmp_path, monkeypatch):
+    ctx = _make_ctx(tmp_path)
+    ctx.dry_run = True
+    npm_root = tmp_path / "npmroot"
+    cli_js = npm_root / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
+    cli_js.parent.mkdir(parents=True)
+    cli_js.write_text("// pi cli\n", encoding="utf-8")
+
+    def fake_run(argv, **kwargs):
+        if argv[:3] == ["npm", "root", "-g"]:
+            return steps.RunResult(argv, 0, str(npm_root), "", 0.01)
+        if argv[0] == "node" and argv[-1] == "--version":
+            return steps.RunResult(argv, 0, "0.74.2", "", 0.01)
+        raise AssertionError(f"dry-run must never shell out to npm install - got {argv}")
+    monkeypatch.setattr(steps, "run", fake_run)
+
+    result = steps.apply_pi(ctx)
+
+    assert result.outcome == "ok"
+    assert steps.PI_PIN in result.message
+    assert "0.74.2" in result.message
 
 
 def test_apply_pi_packages_is_a_full_no_op_when_already_wired(tmp_path, monkeypatch):
@@ -889,15 +954,60 @@ def test_render_engine_unit_matches_the_specs_engine_md_contract(tmp_path, monke
         "[Service]\n"
         "Type=simple\n"
         "User=operator\n"
-        f"WorkingDirectory={ctx.repo_root.as_posix()}\n"
-        "Environment=SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml\n"
-        "ExecStart=/usr/local/bin/uv run adws/engine.py\n"
+        f'WorkingDirectory="{ctx.repo_root.as_posix()}"\n'
+        'Environment="SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml"\n'
+        f'Environment="PATH={(ctx.home / ".local" / "bin").as_posix()}:'
+        f'{(ctx.home / ".grok" / "bin").as_posix()}:'
+        '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
+        'ExecStart="/usr/local/bin/uv" run adws/engine.py\n'
         "Restart=always\n"
         "RestartSec=10\n"
         "\n"
         "[Install]\n"
         "WantedBy=multi-user.target\n"
     )
+
+
+def test_the_unit_hands_the_engines_children_a_path_that_finds_uv_and_grok(
+        tmp_path, monkeypatch):
+    """A systemd service inherits systemd's default PATH, not a login shell's -
+    so without this line the engine's children resolve neither `uv`
+    (~/.local/bin) nor `grok` (~/.grok/bin) and every card is refused while
+    `systemctl is-active` says `active`. ExecStart survives it (it is absolute);
+    the children do not."""
+    ctx = _make_ctx(tmp_path, target="server")
+    monkeypatch.setattr(steps, "engine_service_user", lambda _ctx: "operator")
+
+    unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
+
+    path_line = next(line for line in unit.splitlines() if line.startswith('Environment="PATH='))
+    # Not split on ":" - these tests run on a Windows laptop, where `ctx.home`
+    # posix-renders with a drive letter and a colon of its own.
+    value = path_line[len('Environment="PATH='):-1]
+    assert value.startswith((ctx.home / ".local" / "bin").as_posix() + ":"
+                            + (ctx.home / ".grok" / "bin").as_posix() + ":")
+    # systemd's own default PATH is kept behind ours: adding entries must never
+    # take any away.
+    assert value.endswith("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+
+def test_unit_values_are_quoted_and_percent_escaped(tmp_path, monkeypatch):
+    """systemd splits an unquoted value on whitespace and expands `%`
+    specifiers in it: a checkout at `/srv/100% mine` handed ExecStart an
+    argument nobody wrote, WorkingDirectory a directory that does not exist,
+    and `%m` a machine id."""
+    ctx = _make_ctx(tmp_path, target="server")
+    ctx.repo_root = tmp_path / "100% mine"
+    ctx.engine_config = "adws/rosters/100% ship.yaml"
+    monkeypatch.setattr(steps, "engine_service_user", lambda _ctx: "operator")
+
+    unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv 2")
+
+    escaped_root = ctx.repo_root.as_posix().replace("%", "%%")
+    assert f'WorkingDirectory="{escaped_root}"\n' in unit
+    assert 'Environment="SSSF_CONFIG=adws/rosters/100%% ship.yaml"\n' in unit
+    assert 'ExecStart="/usr/local/bin/uv 2" run adws/engine.py\n' in unit
+    assert steps.unit_value("100%") == "100%%"
 
 
 def test_render_engine_unit_never_leaves_the_service_running_as_root_by_default(
@@ -938,7 +1048,7 @@ def test_the_unit_names_the_roster_so_the_service_is_not_silently_on_the_test_la
 
     unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv")
 
-    assert ("Environment=SSSF_CONFIG=adws/adw_sssf_config/sssf.shipping.config.yaml\n"
+    assert ('Environment="SSSF_CONFIG=adws/adw_sssf_config/sssf.shipping.config.yaml"\n'
             in unit)
 
 
@@ -999,8 +1109,8 @@ def test_apply_engine_service_converges_a_fresh_host(tmp_path, monkeypatch):
 
     assert result.outcome == "installed"
     text = ctx.engine_unit_path.read_text(encoding="utf-8")
-    assert f"WorkingDirectory={ctx.repo_root.as_posix()}" in text
-    assert "ExecStart=/usr/local/bin/uv run adws/engine.py" in text
+    assert f'WorkingDirectory="{ctx.repo_root.as_posix()}"' in text
+    assert 'ExecStart="/usr/local/bin/uv" run adws/engine.py' in text
     assert "Restart=always" in text
     # identity checked BEFORE the unit is written (a service that cannot commit
     # is `active` and useless), unit written BEFORE daemon-reload, daemon-reload

@@ -20,6 +20,11 @@ Comparing change-sets, rather than watching for writes, is what catches the
 afterwards has been reverted, and a reversion is a modification. Appearing,
 disappearing, and changing all count.
 
+A change-set is measured against HEAD, though, so it goes blind the moment the
+agent MOVES HEAD — `git commit` hides an agent's whole diff behind it. So the
+refs are recorded too (`snapshot_refs`/`enforce_refs`), and any movement of
+HEAD or the branch across an agent phase is the same kind of breach.
+
 A breach is NOT a gate violation. Gates are for work an agent can be asked to
 redo; a breach cannot be corrected by re-prompting, because the write already
 happened. It aborts the phase and names every offending path.
@@ -72,6 +77,90 @@ def snapshot(run) -> dict[str, str]:
     """Fingerprint the RUN's own tree — `run.repo_root`, the worktree once
     one has been entered."""
     return _snapshot_tree(run.repo_root)
+
+
+# ── the ref tripwire: what the content snapshot cannot see ───────────────────
+#
+# THE HOLE THIS CLOSES. Everything above compares the WORKING TREE against
+# HEAD. An agent that COMMITS erases its own evidence from that comparison:
+# `git diff HEAD --numstat` after `git commit -am` reports nothing, the
+# untracked list is empty, and `enforce()` concludes the agent touched no path
+# at all. The same is true of `git checkout <branch>`, `git reset --hard`, and
+# `git stash` — each one moves HEAD or the branch out from under the very
+# baseline the content check is measured against, and every one of them is
+# reachable from the `bash` tool the builder legitimately needs to run a test
+# suite.
+#
+# So the refs are recorded too, before and after every agent phase, and any
+# movement is a breach. It is deliberately absolute rather than clever: within
+# ONE agent phase the runner never commits and never switches branches. Branch
+# creation happens in `Run.enter_worktree()`, before any agent runs; commits
+# happen in a `code` phase of their own (`git_helper.commit_all`), never inside
+# an agent phase. So "HEAD moved during an agent phase" has exactly one
+# author — the agent — and needs no bookkeeping to attribute.
+#
+# Two `rev-parse` answers from ONE git call per boundary, which is nothing
+# beside the coding-agent turn it brackets.
+
+
+def _snapshot_refs(cwd) -> tuple[str, str]:
+    """`(HEAD sha, branch name)` for `cwd` — one `git rev-parse` for both.
+
+    A non-git directory (the four read-only ADWs run fine in one) answers
+    `("", "")` for both the before and the after, which compares equal and
+    trips nothing. A detached HEAD answers `"HEAD"` for the branch, which is a
+    perfectly good value to compare — it changing means the tree was
+    reattached under the agent.
+    """
+    out = _git(["rev-parse", "HEAD", "--abbrev-ref", "HEAD"], cwd).splitlines()
+    head = out[0].strip() if out else ""
+    branch = out[1].strip() if len(out) > 1 else ""
+    return head, branch
+
+
+def snapshot_refs(run) -> tuple[str, str]:
+    """Record the RUN's own tree refs — the other half of `snapshot()`'s
+    baseline, taken at the same moment and compared by `enforce_refs()`."""
+    return _snapshot_refs(run.repo_root)
+
+
+def enforce_refs(run, agent: AgentConfig, before: tuple[str, str]) -> None:
+    """Fail the phase if HEAD or the branch moved while the agent was working.
+
+    Checked BEFORE the content comparison in `enforce()`, and that order is the
+    whole point: a commit is what BLINDS the content comparison, so discovering
+    it afterwards would mean reporting "this agent touched nothing" about a run
+    that rewrote the repo. Raising the same `PermissionBreach` means the caller
+    needs no new branch — a breach already aborts the phase and is already
+    traced, because it cannot be corrected by re-prompting (the write has
+    happened).
+
+    One honest caveat, named in the message rather than papered over: for the
+    read-only ADWs `repo_root` IS the main checkout, where the operator is a
+    legitimate second author. An operator committing there during a long
+    `adw_scout` run trips this. That is the right trade — the alternative is a
+    tripwire that is silent in exactly the checkout where an agent's commit
+    would be least expected and hardest to spot — and the message says which
+    two things it could be, so a human is never left guessing.
+    """
+    after = _snapshot_refs(run.repo_root)
+    if after == before:
+        return
+    moved = []
+    if after[0] != before[0]:
+        moved.append(f"HEAD {before[0][:12] or '(none)'} -> {after[0][:12] or '(none)'}")
+    if after[1] != before[1]:
+        moved.append(f"branch {before[1] or '(none)'} -> {after[1] or '(none)'}")
+    raise PermissionBreach(
+        f"{agent.name} moved this run's git refs in {run.repo_root}: {'; '.join(moved)}. "
+        f"The runner does not commit, branch or check out inside an agent phase - branches "
+        f"are cut before any agent runs and commits happen in their own code phase - so "
+        f"this came from the agent itself (a `git commit`, `checkout`, `reset` or `stash` "
+        f"through its bash tool), or from a person working in this same checkout while the "
+        f"run was in flight. Either way the content check below is now blind: a commit "
+        f"moves the agent's edits behind HEAD, where `git diff HEAD` cannot see them. "
+        f"Nothing was rolled back - this factory does not rewrite history it did not "
+        f"write. Inspect it with: git -C {run.repo_root} log --stat -3")
 
 
 def snapshot_main(run) -> dict[str, str]:
