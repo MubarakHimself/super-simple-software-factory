@@ -1727,16 +1727,19 @@ describe("deploy/bootstrap.sh", () => {
       expect(steps).toContain(line);
     }
 
-    // Templated lines: the same five keys, filled from this host - and QUOTED
-    // and %-escaped on both sides, because systemd splits an unquoted value on
-    // whitespace and expands % specifiers in it (a checkout at
-    // `/home/op/my factory` gave ExecStart an argument nobody wrote).
+    // Templated lines: the same five keys, filled from this host. Environment=
+    // and ExecStart= are QUOTED and %-escaped (systemd splits unquoted values
+    // on whitespace and expands % specifiers). WorkingDirectory= is NOT quoted:
+    // it is a path setting systemd does no quote-stripping on, and a quoted
+    // value read as a relative path made the unit a fatal error on a live box
+    // (2026-08-18: 'WorkingDirectory= path is not absolute: "/root/hardware"').
     expect(unit).toContain("User=$UNIT_USER");
-    expect(unit).toContain('WorkingDirectory="$UNIT_DIR"');
+    expect(unit).toContain("WorkingDirectory=$UNIT_DIR");
+    expect(unit).not.toContain('WorkingDirectory="');
     expect(unit).toContain('Environment="SSSF_CONFIG=$UNIT_CONFIG"');
     expect(unit).toContain('Environment="PATH=$UNIT_ENV_PATH"');
     expect(unit).toContain('ExecStart="$UNIT_UV" run adws/engine.py');
-    for (const key of ["User=", 'WorkingDirectory="', 'Environment="SSSF_CONFIG=',
+    for (const key of ["User=", "WorkingDirectory=", 'Environment="SSSF_CONFIG=',
                        'Environment="PATH=', "run adws/engine.py"]) {
       expect(steps).toContain(key);
     }

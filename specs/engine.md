@@ -588,7 +588,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=<owner of the checkout>
-WorkingDirectory="<repo>"
+WorkingDirectory=<repo>
 Environment="SSSF_CONFIG=<roster>"
 Environment="PATH=<home>/.local/bin:<home>/.grok/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart="<abs path to uv>" run adws/engine.py
@@ -608,9 +608,10 @@ Requirements the installer must satisfy for that unit to work:
   starts the engine, but every child it spawns invokes bare `uv` - and `uv run` does not put uv's
   own directory on the child PATH - so without the `PATH=` line the service reads `active` while
   every card is refused with "could not start uv"). The line also carries `~/.grok/bin` for the
-  Grok Build binary. Values are rendered quoted with literal `%` doubled: systemd splits unquoted
-  `Environment=`/`ExecStart`/`WorkingDirectory` on whitespace and expands `%` specifiers, so an
-  unquoted path with a space or a `%` silently points the unit somewhere else.
+  Grok Build binary. `Environment=` and `ExecStart` values are rendered quoted with literal `%`
+  doubled: systemd splits them unquoted on whitespace and expands `%` specifiers. `WorkingDirectory`
+  is deliberately NOT quoted - it is a path setting systemd does no quote-stripping on, so a quoted
+  value reads as a relative path and the unit is a fatal error (proven live, 2026-08-18).
 - **`User=` is mandatory**, and it is the **owner of the checkout** (`installer/steps.py`'s
   `engine_service_user`, which reads it off the directory itself and falls back to `SUDO_USER`).
   Writing `/etc/systemd/system/` needs root, so the wizard runs under sudo; a unit with no `User=`

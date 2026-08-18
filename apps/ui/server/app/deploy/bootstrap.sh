@@ -1299,7 +1299,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$UNIT_USER
-WorkingDirectory="$UNIT_DIR"
+WorkingDirectory=$UNIT_DIR
 Environment="SSSF_CONFIG=$UNIT_CONFIG"
 Environment="PATH=$UNIT_ENV_PATH"
 ExecStart="$UNIT_UV" run adws/engine.py

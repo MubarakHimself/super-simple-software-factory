@@ -1842,7 +1842,12 @@ def render_engine_unit(ctx: Ctx, uv_path: str) -> str:
         "[Service]\n"
         "Type=simple\n"
         f"User={unit_value(engine_service_user(ctx))}\n"
-        f'WorkingDirectory="{unit_value(ctx.repo_root.as_posix())}"\n'
+        # WorkingDirectory= is a PATH setting, not a command line: systemd does
+        # no quote-stripping on it, so a quoted value reads as a relative path
+        # and the unit is a fatal error (field lesson 2026-08-18, live box:
+        # 'WorkingDirectory= path is not absolute: "/root/hardware"').
+        # Environment= and ExecStart= DO strip quotes; only they get them.
+        f"WorkingDirectory={unit_value(ctx.repo_root.as_posix())}\n"
         f'Environment="SSSF_CONFIG={unit_value(ctx.engine_config)}"\n'
         f'Environment="PATH={unit_value(engine_unit_path_value(ctx))}"\n'
         f'ExecStart="{unit_value(Path(uv_path).as_posix())}" run adws/engine.py\n'

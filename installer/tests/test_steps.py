@@ -954,7 +954,7 @@ def test_render_engine_unit_matches_the_specs_engine_md_contract(tmp_path, monke
         "[Service]\n"
         "Type=simple\n"
         "User=operator\n"
-        f'WorkingDirectory="{ctx.repo_root.as_posix()}"\n'
+        f"WorkingDirectory={ctx.repo_root.as_posix()}\n"
         'Environment="SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml"\n'
         f'Environment="PATH={(ctx.home / ".local" / "bin").as_posix()}:'
         f'{(ctx.home / ".grok" / "bin").as_posix()}:'
@@ -1004,7 +1004,7 @@ def test_unit_values_are_quoted_and_percent_escaped(tmp_path, monkeypatch):
     unit = steps.render_engine_unit(ctx, "/usr/local/bin/uv 2")
 
     escaped_root = ctx.repo_root.as_posix().replace("%", "%%")
-    assert f'WorkingDirectory="{escaped_root}"\n' in unit
+    assert f"WorkingDirectory={escaped_root}\n" in unit
     assert 'Environment="SSSF_CONFIG=adws/rosters/100%% ship.yaml"\n' in unit
     assert 'ExecStart="/usr/local/bin/uv 2" run adws/engine.py\n' in unit
     assert steps.unit_value("100%") == "100%%"
@@ -1109,7 +1109,7 @@ def test_apply_engine_service_converges_a_fresh_host(tmp_path, monkeypatch):
 
     assert result.outcome == "installed"
     text = ctx.engine_unit_path.read_text(encoding="utf-8")
-    assert f'WorkingDirectory="{ctx.repo_root.as_posix()}"' in text
+    assert f"WorkingDirectory={ctx.repo_root.as_posix()}" in text
     assert 'ExecStart="/usr/local/bin/uv" run adws/engine.py' in text
     assert "Restart=always" in text
     # identity checked BEFORE the unit is written (a service that cannot commit
