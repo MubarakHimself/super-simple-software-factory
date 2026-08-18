@@ -149,8 +149,8 @@ function probeAnswerFor(command: string, box: FakeBox): string | null {
   if (lane !== null) return lane;
   if (command.includes(".grok/auth.json")) {
     return box.signedIn.has("grok")
-      ? "SIGNEDIN the grok CLI has an auth.x.ai entry in /root/.grok/auth.json\n"
-      : "NO the machine has no /root/.grok/auth.json - the grok CLI has never signed in there\n";
+      ? "SIGNEDIN Grok Build has an auth.x.ai entry in /root/.grok/auth.json\n"
+      : "NO the machine has no /root/.grok/auth.json - Grok Build has never signed in there\n";
   }
   if (command.includes('"openai-codex"')) {
     return box.signedIn.has("pi-codex")

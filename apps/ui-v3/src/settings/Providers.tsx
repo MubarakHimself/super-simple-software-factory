@@ -300,7 +300,7 @@ const SIGNIN_WORD: Record<AuthSessionView["state"], string> = {
  * there, so this list never has to be kept in sync with a command.
  */
 const AUTH_LANE_ROWS: { id: string; lane: string; aside: string }[] = [
-  { id: "pi-xai", lane: "xai", aside: "the grok CLI and this lane are two stores" },
+  { id: "pi-xai", lane: "xai", aside: "Grok Build and this lane are two stores" },
   { id: "pi-codex", lane: "openai-codex", aside: "the codex login and this lane are two stores" },
   { id: "opencode-go", lane: "opencode-go", aside: "key is minted in a browser at opencode.ai/auth" },
   { id: "ollama-cloud", lane: "ollama-cloud", aside: "key comes from OpenCode's own auth, via a script" },
@@ -1012,7 +1012,7 @@ export function Providers({
               <div className="pr-icon">X</div>
               <div className="pr-body">
                 <div className="pr-name">
-                  {flow.label} <span className="pr-tag">grok CLI</span>
+                  {flow.label} <span className="pr-tag">grok binary</span>
                   {checkTag("grok")}
                 </div>
                 <div className="pr-auth" title={flow.note}>

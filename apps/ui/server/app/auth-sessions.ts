@@ -198,8 +198,8 @@ const PI_CODEX_PROBE = [
  * without printing a byte of it.
  */
 const GROK_PROBE = [
-  `if [ ! -f "$HOME/.grok/auth.json" ]; then printf 'NO %s\\n' "the machine has no $HOME/.grok/auth.json - the grok CLI has never signed in there"`,
-  `elif grep -q 'auth\\.x\\.ai' "$HOME/.grok/auth.json"; then printf 'SIGNEDIN %s\\n' "the grok CLI has an auth.x.ai entry in $HOME/.grok/auth.json"`,
+  `if [ ! -f "$HOME/.grok/auth.json" ]; then printf 'NO %s\\n' "the machine has no $HOME/.grok/auth.json - Grok Build has never signed in there"`,
+  `elif grep -q 'auth\\.x\\.ai' "$HOME/.grok/auth.json"; then printf 'SIGNEDIN %s\\n' "Grok Build has an auth.x.ai entry in $HOME/.grok/auth.json"`,
   `else printf 'NO %s\\n' "$HOME/.grok/auth.json is on the machine but carries no auth.x.ai entry"; fi`,
 ].join("; ");
 
@@ -258,7 +258,9 @@ export const AUTH_FLOWS: AuthFlow[] = [
   // shipped a login built for exactly this shape of remote sign-in.
   {
     id: "grok",
-    label: "Grok (xAI)",
+    // xAI's product name is Grok Build (grok.com, 2026-08-18); the binary it
+    // installs is still `grok`.
+    label: "Grok Build (xAI)",
     // `grok login --help`, read on the operator's own machine: `--device-auth`
     // is *"device-code authentication for headless/remote environments"*. The
     // sibling `--oauth` is the browser-redirect flow and would need a callback
@@ -280,7 +282,7 @@ export const AUTH_FLOWS: AuthFlow[] = [
     // CLI). The pi-xai row below is the one that fills the lane the engine
     // runs on; saying so here is the difference between a green row and a
     // working workhorse.
-    note: "Runs `grok login --device-auth` on the machine - the flag xAI ships for headless and remote boxes. It prints a link and a short code: open the link here, type the code, and the grok CLI writes its own credential into that machine's ~/.grok/auth.json. Nothing is copied from this laptop and there is no port to forward. TWO THINGS TO KNOW: the deploy does NOT install the grok CLI (only claude and codex), so on a fresh box this exits 127 until you install it there; and this credential drives the grok CLI only - the roster's xai/grok-4.5 builder lane runs through pi, whose own xai store is filled by the \"pi lane: xai\" row below.",
+    note: "Runs `grok login --device-auth` on the machine - the flag xAI ships for headless and remote boxes. It prints a link and a short code: open the link here, type the code, and Grok Build writes its own credential into that machine's ~/.grok/auth.json. Nothing is copied from this laptop and there is no port to forward. ONE THING TO KNOW: this credential drives Grok Build only - the roster's xai builder lane runs through pi, whose own xai store is filled by the \"pi lane: xai\" row below. (The deploy installs Grok Build itself, with xAI's own installer from x.ai/cli/install.sh.)",
   },
   {
     id: "claude",
@@ -324,7 +326,7 @@ export const AUTH_FLOWS: AuthFlow[] = [
     // pi's own docs/providers.md, verbatim: "Run `/login xai`, then select
     // **Use a subscription**". The grok CLI's login above does NOT fill this
     // in - they are two separate credential stores on the same box.
-    note: "The grok CLI's sign-in and pi's xai lane are two different stores, and signing into one does not sign into the other. pi has no non-TUI login, so to fill this one: run `pi` on the machine, type `/login xai`, and choose \"Use a subscription\". This row only checks.",
+    note: "Grok Build's sign-in and pi's xai lane are two different stores, and signing into one does not sign into the other. pi has no non-TUI login, so to fill this one: run `pi` on the machine, type `/login xai`, and choose \"Use a subscription\". This row only checks.",
   },
   {
     id: "pi-codex",

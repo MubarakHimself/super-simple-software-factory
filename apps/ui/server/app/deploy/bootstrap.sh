@@ -922,31 +922,43 @@ if [ "$USED_INSTALLER" = no ]; then
   fi
 fi
 
-# ── 14a. the Grok (xAI) CLI: reported, never invented ────────────────────────
+# ── 14a. Grok Build (the xAI CLI): installed by xAI's own installer ──────────
 # The app's Providers pane puts the Grok row FIRST, "because it is first in the
-# operator's morning" - and on a bare Ubuntu box that click ends in exit 127,
-# because nothing installs the grok CLI. Steps 13 and 14 can install theirs
-# (`claude` and `codex` are npm packages this script already knows by name);
-# the xAI CLI is not one. It is a self-updating NATIVE binary that lives in
-# `~/.grok/bin/grok` (`installer = "internal"` in its own config.toml), and
-# this script will not guess at an install URL it has never verified - an
-# invented `curl | sh` is exactly the kind of unverified command that ends a
-# deploy in a way nobody can debug.
+# operator's morning" - and on a bare Ubuntu box that click used to end in exit
+# 127, because nothing installed the CLI. An earlier revision of this step
+# refused to guess an install URL; the guess is no longer needed. The command
+# below is the one xAI publishes on the Grok Build page itself
+# (grok.com, read by the operator 2026-08-18):
 #
-# So this step does the honest half: it says whether the machine has the CLI,
-# whether it is on the PATH a non-login `ssh <host> '<cmd>'` actually sees, and
-# what that means for the app's first click. It never fails the deploy - a box
-# with no grok CLI is still a working factory for every other lane.
+#     curl -fsSL https://x.ai/cli/install.sh | bash
+#
+# The product is called Grok Build; the binary it installs is still `grok`, a
+# self-updating native binary that lands in `~/.grok/bin/grok` (`installer =
+# "internal"` in its own config.toml). Same non-required treatment as steps 13
+# and 14: a failed install is reported with its consequence, never a dead
+# deploy - a box with no Grok Build is still a working factory for every other
+# lane.
 #
 # NOT SKIPPED on the installer path: installer/steps.py does not install this
 # CLI either, so the question is the same on both kinds of box.
 
+grok_on_path_note="A non-login 'ssh <host> <command>' sources no .profile, so the app runs its logins with $HOME/.grok/bin, $HOME/.local/bin and /usr/local/bin prepended - that covers the app's own Grok row. Anything else you run over ssh needs $HOME/.grok/bin on PATH itself"
 if have grok; then
   ok grok-cli "already present: $(command -v grok) ($(grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
 elif [ -x "$HOME/.grok/bin/grok" ]; then
-  ok grok-cli "NEEDS YOU: $HOME/.grok/bin/grok exists but is not on this box's PATH. A non-login 'ssh <host> <command>' sources no .profile, so the app runs its logins with $HOME/.grok/bin, $HOME/.local/bin and /usr/local/bin prepended - that covers the app's own Grok row. Anything else you run over ssh needs $HOME/.grok/bin on PATH itself"
+  ok grok-cli "Grok Build is at $HOME/.grok/bin/grok but not on this box's PATH. $grok_on_path_note"
 else
-  ok grok-cli "NEEDS YOU: no grok CLI on this box, so the app's Grok sign-in row exits 127 here ('command not found'). This deploy installs the claude and codex CLIs (npm) and does not install this one - it is a self-updating native binary and this script will not guess its install command. Install it on the box yourself (it lands in $HOME/.grok/bin), then click the Grok row again. Note also that the roster's xai/grok-4.5 lane runs through pi, whose own xai credential is filled by 'pi' -> '/login xai' on the box, not by the grok CLI"
+  if out=$(curl -fsSL https://x.ai/cli/install.sh | bash 2>&1); then
+    if have grok; then
+      ok grok-cli "installed Grok Build via x.ai/cli/install.sh ($(grok --version 2>&1 | head -n 1)) - the app's Grok row can run 'grok login --device-auth' here"
+    elif [ -x "$HOME/.grok/bin/grok" ]; then
+      ok grok-cli "installed Grok Build via x.ai/cli/install.sh into $HOME/.grok/bin. $grok_on_path_note"
+    else
+      ok grok-cli "NEEDS YOU: x.ai/cli/install.sh ran but left no grok binary at $HOME/.grok/bin or on PATH ($(tail_of "$out")) - install it on the box yourself, then click the Grok row again"
+    fi
+  else
+    ok grok-cli "NOT installed: 'curl -fsSL https://x.ai/cli/install.sh | bash' failed ($(tail_of "$out")) - the app's Grok sign-in row exits 127 here until it is installed. Note also that the roster's xai lane runs through pi, whose own xai credential is filled by 'pi' -> '/login xai' on the box, not by Grok Build"
+  fi
 fi
 
 # ── 14b. what this path does NOT converge, said out loud ─────────────────────
