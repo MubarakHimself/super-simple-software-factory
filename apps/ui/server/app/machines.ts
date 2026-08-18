@@ -48,6 +48,12 @@
  * `manifest.ts`'s own read/write so that file needs no edit.
  *
  * ── The deploy ──────────────────────────────────────────────────────────────
+ * A deploy has TWO phases, and the first one happens on this laptop: `adopt.ts`
+ * gives the project's own origin the `integration` branch the server is about
+ * to clone, cutting it losslessly from wherever the newest work lives, because
+ * the operator does not run git commands. Only then does the second phase open
+ * an SSH connection. Both phases print into the same stream.
+ *
  * `deploy/bootstrap.sh` is pushed over SFTP and executed with `sh`. It prints
  * `STEP <name> OK|FAIL <reason>` lines; this file parses those into a step list
  * the UI streams, and keeps the raw output beneath it. The job record follows
@@ -87,6 +93,7 @@ import type {
   NewMachineRequest,
   ProviderSyncRun,
 } from "../../shared/types.ts";
+import { adoptIntegrationBranch, branchNameProblem, type AdoptOutcome } from "./adopt.ts";
 import { appError, appJson, appSafely, csrfGuard } from "./guard.ts";
 import { appHome, findProject, readManifest, writeManifest, type ManifestProject } from "./manifest.ts";
 import { param } from "./scoped.ts";
@@ -679,6 +686,13 @@ export interface DeployInput {
   /** the script's text; injected so a test can run a stand-in and so a missing
    * script file is one honest error rather than a mystery */
   script: string;
+  /**
+   * The project's checkout on THIS laptop - the repository the adoption phase
+   * works in before any SSH happens (see `adopt.ts`). `null` says there is
+   * nothing local to adopt and the job goes straight to provisioning; the only
+   * callers that pass `null` are tests exercising the SSH phase on its own.
+   */
+  projectRoot: string | null;
 }
 
 /**
@@ -731,6 +745,38 @@ export function startDeploy(record: MachineRecord, input: DeployInput): DeployJo
       cancelDeploy(record.id, `nothing finished this deploy within ${Math.round(DEPLOY_TIMEOUT_MS / 60_000)} minutes, so it was stopped`);
     }, DEPLOY_TIMEOUT_MS);
     try {
+      // ── the local phase, before one byte leaves this laptop ──────────────
+      // A project that has never had an `integration` branch gets one here,
+      // cut from wherever its newest work actually lives and pushed - the
+      // operator runs no git command, and if this cannot be done honestly the
+      // job fails with git's own words BEFORE anything is provisioned, so
+      // there is never a half-deploy to explain. See `adopt.ts`.
+      let adopted: AdoptOutcome | null = null;
+      if (input.projectRoot) {
+        // Cancel is threaded IN rather than only checked afterwards. A git
+        // subprocess already in flight cannot be taken back, so the honest
+        // guarantee is narrower than "Cancel undoes this": adoption asks
+        // between its steps and stops before the push, which is the only point
+        // where "origin was not touched" is still true.
+        adopted = await adoptIntegrationBranch(input.projectRoot, input.branch, append, () =>
+          job.cancelled ? (job.cancel_reason ?? "you cancelled this deploy") : null,
+        );
+        if (!adopted.ok) {
+          throw new Error(adopted.error ?? `could not prepare '${input.branch}' in ${input.projectRoot}`);
+        }
+      }
+      // Cancelled after the adoption finished. NOTHING HERE IS ROLLED BACK, and
+      // the operator is told so rather than left to assume Cancel meant undo:
+      // if the push landed, `<branch>` is on his real origin now. That is safe
+      // (it only ever ADDS a branch, never rewrites one) and the next deploy
+      // reads it as row 1 of the decision table - already there, nothing to do.
+      if (job.cancelled) {
+        const landed = adopted?.pushed
+          ? ` - '${input.branch}' had already reached origin by then and was left in place; the next deploy will use it`
+          : "";
+        throw new Error(`${job.cancel_reason ?? "this deploy was cancelled"}${landed}`);
+      }
+
       const privateKey = await readFile(record.key_path, "utf-8");
       append(`connecting to ${record.user}@${record.host}:${record.port}`);
       const seen = { fingerprint: null as string | null };
@@ -1189,48 +1235,11 @@ export async function originUrl(root: string): Promise<string | null> {
 }
 
 /**
- * Does the project's own origin carry `branch`, asked from the laptop?
- *
- * WHY IT IS ASKED HERE. `bootstrap.sh` step 7 stops when the remote has no
- * `integration` branch, and it is right to - creating one on the operator's hub
- * is not a deploy's business. But that stop happens SIX STEPS and several
- * minutes into a run, on the far end, after apt, uv, node and just have already
- * been installed; and the only component that ever creates `integration` is the
- * engine, which this deploy refuses to install until the branch exists. On
- * every fresh project the operator therefore paid for a full provisioning run
- * to be told, in a status line, about a chicken-and-egg he has to break on the
- * laptop. Asking first costs one `git ls-remote` and turns that into a refusal
- * he can act on before anything is touched.
- *
- * THREE ANSWERS, not two. `true`/`false` are only returned when git actually
- * answered; `null` means the question could not be asked (offline, a private
- * remote with no credentials on this laptop, no git). A `null` NEVER blocks the
- * deploy - a pre-flight that guesses "missing" on a flaky network would refuse
- * a deploy that would have worked, and bootstrap.sh still asks the same
- * question authoritatively on the machine itself.
- *
- * `GIT_TERMINAL_PROMPT=0` for the same reason bootstrap.sh exports it: an
- * unauthenticated remote must fail immediately, never sit on a credential
- * prompt inside a request handler.
+ * "Does origin have this branch?" lives in `adopt.ts` now, beside the code that
+ * ACTS on the answer, and is re-exported here because this module's own tests
+ * (and any future caller of the machines plane) ask it by this name.
  */
-export async function remoteHasBranch(root: string, branch: string): Promise<boolean | null> {
-  try {
-    const proc = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch], {
-      cwd: root,
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: "ignore",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
-    });
-    const timer = setTimeout(() => proc.kill(), 15_000);
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    clearTimeout(timer);
-    if (code !== 0) return null; // could not ask - not the same as "not there"
-    return stdout.split("\n").some((line) => line.trim().endsWith(`refs/heads/${branch}`));
-  } catch {
-    return null;
-  }
-}
+export { remoteHasBranch } from "./adopt.ts";
 
 /** `https://host/owner/repo.git` -> `repo`; used for the remote checkout dir so
  * two projects on one box do not collide. */
@@ -1278,21 +1287,32 @@ async function postDeploy(req: Request): Promise<Response> {
   const script = await readFile(scriptPath, "utf-8");
 
   const branch = (body.branch ?? "").trim() || "integration";
+  // The one thing about `branch` that IS refused here, at the door. It is a
+  // freeform string from a request body that ends up in git's argv, and git
+  // reads a leading '-' as an option: `branch: "-f"` would turn the adoption's
+  // `git push -u origin <branch>` into `git push -u origin --force` of the
+  // current branch - a rewrite of the operator's own remote history, which is
+  // the exact loss this whole module exists to prevent. `adopt.ts` also puts
+  // `--` in front of every ref it hands git, so this is the second lock, not
+  // the only one; it is here because a request refused in milliseconds with a
+  // reason beats a job that fails a minute later with git's confusion.
+  const badBranch = branchNameProblem(branch);
+  if (badBranch) return appError(badBranch);
 
-  // The pre-flight: refuse the chicken-and-egg here, on the laptop, where the
-  // operator can fix it - rather than after a full provisioning run dies at
-  // bootstrap.sh step 7 with the same news. `null` (could not ask) never
-  // blocks; only a definite "the remote does not have it" does.
-  if ((await remoteHasBranch(project.root, branch)) === false) {
-    return appError(
-      `${repoUrl} has no '${branch}' branch, so there is nothing for the server to check out. ` +
-        `Nothing on this laptop creates it for you - the engine does, and the deploy will not install the engine ` +
-        `before the branch exists. Break that loop here, in ${project.root}: ` +
-        `1) git add -A && git commit -m "stamp the factory"  2) git push -u origin main  ` +
-        `3) git switch -c ${branch}  4) git push -u origin ${branch}  - then deploy again.`,
-      409,
-    );
-  }
+  // NOTHING IS REFUSED HERE FOR A MISSING BRANCH ANY MORE. This handler used
+  // to answer 409 with four git commands for the operator to type when origin
+  // had no `integration`; the operator never opens a terminal, so that refusal
+  // was a dead end dressed as help. The deploy job now ADOPTS the repository
+  // itself (`adopt.ts`): it commits whatever is uncommitted, cuts the branch
+  // from the newest work it can find, and pushes - streamed as STEP lines he
+  // watches. The two states adoption genuinely cannot fix (no `origin` at all,
+  // an `origin` that is a local path no server could clone) are the two
+  // refusals above, and they stay.
+  //
+  // It also has to happen in the JOB and not here: a fetch plus a push can run
+  // longer than `Bun.serve`'s 10s idleTimeout, and this response must return in
+  // milliseconds with a job id the pane can poll.
+
   // An explicitly requested directory wins. The default is derived from the
   // user because root's home is `/root`, not `/home/root` - and a deploy that
   // cloned into a directory nobody owns would fail on the first write.
@@ -1300,7 +1320,7 @@ async function postDeploy(req: Request): Promise<Response> {
     (body.dir ?? "").trim() ||
     (record.user === "root" ? `/root/${repoDirName(repoUrl)}` : `/home/${record.user}/${repoDirName(repoUrl)}`);
 
-  const job = startDeploy(record, { repoUrl, branch, dir: remoteDir, script });
+  const job = startDeploy(record, { repoUrl, branch, dir: remoteDir, script, projectRoot: project.root });
 
   // Remember where the checkout lives so the probe can read its HEAD later.
   if (record.repo_dir !== remoteDir) {

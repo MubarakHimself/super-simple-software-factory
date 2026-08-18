@@ -33,7 +33,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Server, utils, type Connection } from "ssh2";
@@ -75,6 +75,9 @@ const {
   toRow,
   writeRegistry,
 } = await import("./machines.ts");
+
+/** The deploy's laptop-side phase, tested here beside the job that runs it. */
+const { adoptIntegrationBranch, branchNameProblem } = await import("./adopt.ts");
 
 /** The providers plane's own writer, used only to prove that the file this
  * module reads is the file that module writes. Nothing here syncs anything. */
@@ -668,50 +671,480 @@ describe("the host key", () => {
   );
 });
 
-/* ── the deploy's pre-flight: is the branch even there? ────────────────────
-   bootstrap.sh stops at step 7 when the remote has no `integration`, six steps
-   and several minutes into a run, on the far end - and the only thing that ever
-   CREATES that branch is the engine, which the deploy refuses to install until
-   the branch exists. On every fresh project the operator paid for a full
-   provisioning run to be told about a chicken-and-egg he has to break on the
-   laptop. `postDeploy` asks first, so the refusal names the commands. */
-describe("the deploy pre-flight", () => {
-  async function git(cwd: string, argv: string[]): Promise<void> {
-    const proc = Bun.spawn(["git", ...argv], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
-    if (code !== 0) throw new Error(`git ${argv.join(" ")} exited ${code}: ${stderr}`);
+/* ── real git fixtures ─────────────────────────────────────────────────────
+   Everything below this line runs against REAL repositories in temp
+   directories, with a real (bare, local) "origin" to push to. Adoption is a
+   sequence of git decisions; emulating git to test it would only prove the
+   emulator. Nothing here reads the operator's own `~/.sdl-factory` or any
+   repository on this laptop. */
+
+/** git in a fixture repo, loud on failure, stdout trimmed. Every fixture commit
+ * passes `-c user.*` explicitly: a Windows laptop or a CI runner may have no
+ * identity configured at all, and `commit` would abort rather than fail the
+ * assertion the test is actually about. */
+async function runGit(cwd: string, argv: string[], env: Record<string, string> = {}): Promise<string> {
+  const proc = Bun.spawn(["git", ...argv], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "ignore",
+    env: { ...process.env, ...env },
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`git ${argv.join(" ")} exited ${code}: ${stderr}`);
+  return stdout.trim();
+}
+
+const IDENT = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.com"];
+
+/** A bare "origin" and a working checkout wired to it. No commits yet. */
+async function repoPair(): Promise<{ work: string; origin: string }> {
+  const origin = await mkdtemp(join(tmpdir(), "sdl-adopt-origin-"));
+  const work = await mkdtemp(join(tmpdir(), "sdl-adopt-work-"));
+  tempDirs.push(origin, work);
+  await runGit(origin, ["init", "--bare", "-b", "main"]);
+  await runGit(work, ["init", "-b", "main"]);
+  await runGit(work, ["remote", "add", "origin", origin]);
+  return { work, origin };
+}
+
+/** Write files and commit them at a FIXED date, so `--sort=-committerdate` has
+ * an order the test decided rather than one the clock did. */
+async function commitAt(work: string, date: string, files: Record<string, string>, message: string): Promise<string> {
+  for (const [name, body] of Object.entries(files)) await writeFile(join(work, name), body, "utf-8");
+  await runGit(work, ["add", "-A"]);
+  await runGit(work, [...IDENT, "commit", "-m", message], {
+    GIT_AUTHOR_DATE: date,
+    GIT_COMMITTER_DATE: date,
+  });
+  return runGit(work, ["rev-parse", "HEAD"]);
+}
+
+/** The branch HEAD is on, or "(detached)" - the assertion every adoption test
+ * makes, because adoption may never move the operator's checkout. */
+async function branchOf(work: string): Promise<string> {
+  try {
+    return await runGit(work, ["symbolic-ref", "--short", "HEAD"]);
+  } catch {
+    return "(detached)";
   }
+}
 
+/** The branches a bare origin actually has, sorted. */
+async function originBranches(origin: string): Promise<string[]> {
+  const out = await runGit(origin, ["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"]);
+  return out === "" ? [] : out.split(/\r?\n/).sort();
+}
+
+/* ── the deploy's pre-flight: is the branch even there? ────────────────────
+   `remoteHasBranch` no longer refuses a deploy - `adopt.ts` acts on the answer
+   instead of handing the operator four git commands. It is still the question
+   asked when a `fetch` could not run, so its THREE answers still matter: a
+   `null` ("could not ask") must never be read as "not there". */
+describe("the deploy pre-flight", () => {
   test("answers true, false and 'could not ask' - and never confuses the last two", async () => {
-    const origin = await mkdtemp(join(tmpdir(), "sdl-origin-"));
-    const work = await mkdtemp(join(tmpdir(), "sdl-work-"));
-    tempDirs.push(origin, work);
-
-    await git(origin, ["init", "--bare", "-b", "main"]);
-    await git(work, ["init", "-b", "main"]);
-    await git(work, ["config", "user.email", "test@example.com"]);
-    await git(work, ["config", "user.name", "test"]);
-    await writeFile(join(work, "README.md"), "fixture\n", "utf-8");
-    await git(work, ["add", "-A"]);
-    await git(work, ["commit", "-m", "first"]);
-    await git(work, ["remote", "add", "origin", origin]);
-    await git(work, ["push", "-u", "origin", "main"]);
+    const { work } = await repoPair();
+    await commitAt(work, "2026-01-02T10:00:00 +0000", { "README.md": "fixture\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
 
     // The exact state a freshly stamped project is in: pushed, but no
-    // `integration` anywhere. This is what the pre-flight has to catch.
+    // `integration` anywhere. This is what adoption has to fix.
     expect(await remoteHasBranch(work, "integration")).toBe(false);
     expect(await remoteHasBranch(work, "main")).toBe(true);
 
-    await git(work, ["switch", "-c", "integration"]);
-    await git(work, ["push", "-u", "origin", "integration"]);
+    await runGit(work, ["switch", "-c", "integration"]);
+    await runGit(work, ["push", "-u", "origin", "integration"]);
     expect(await remoteHasBranch(work, "integration")).toBe(true);
 
     // A directory that is not a repository cannot answer - and "could not ask"
-    // is NOT "not there". A pre-flight that guessed would refuse deploys that
-    // would have worked; only a definite `false` may block one.
+    // is NOT "not there". Guessing in that direction would have adoption create
+    // a branch that already exists on the hub, and be rejected on the push.
     const notARepo = await mkdtemp(join(tmpdir(), "sdl-norepo-"));
     tempDirs.push(notARepo);
     expect(await remoteHasBranch(notARepo, "integration")).toBeNull();
+  }, 60_000);
+});
+
+/* ── adopting a project that was never prepared for the factory ────────────
+   THE RULING THIS PINS (2026-08-18): deploying onto a pre-existing project used
+   to end in a 409 telling the operator to run four git commands by hand. He
+   never runs commands. So the deploy adopts the repository itself - and must do
+   it WITHOUT LOSING A BYTE: no checkout, no switch, no reset, no rebase, no
+   force, no deletion. Every test below asserts the branch HEAD sits on is the
+   same one it sat on before, because that is the property the operator would
+   notice being broken. */
+describe("adopting a project the operator never prepared", () => {
+  async function adopt(
+    work: string,
+    branch = "integration",
+    hooks: { onLine?: (line: string) => void; stopped?: () => string | null } = {},
+  ) {
+    const lines: string[] = [];
+    const outcome = await adoptIntegrationBranch(
+      work,
+      branch,
+      (line) => {
+        lines.push(line);
+        hooks.onLine?.(line);
+      },
+      hooks.stopped,
+    );
+    return { outcome, lines, said: lines.join("\n") };
+  }
+
+  test("a project with only main: integration is cut from main and reaches origin", async () => {
+    const { work, origin } = await repoPair();
+    const head = await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "only main\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.action).toBe("created-from-tip");
+    expect(outcome.base).toBe("main");
+    expect(await originBranches(origin)).toEqual(["integration", "main"]);
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(head);
+    expect(said).toContain("integration created from main");
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("the newest work wins: a stale main loses to codex/feature", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-01-02T10:00:00 +0000", { "README.md": "stale main\n" }, "main work");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    await runGit(work, ["switch", "-c", "codex/feature"]);
+    const newest = await commitAt(work, "2026-06-14T10:00:00 +0000", { "feature.ts": "newest\n" }, "feature work");
+    await runGit(work, ["switch", "main"]);
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.base).toBe("codex/feature");
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(newest);
+    // The operator has to be able to READ what the app decided, and when.
+    expect(said).toContain("integration created from codex/feature");
+    expect(said).toContain("2026-06-14");
+    // The feature's file is in what the server will clone; main's is too.
+    expect(await runGit(work, ["ls-tree", "-r", "--name-only", "integration"])).toContain("feature.ts");
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("only origin/codex/feature exists remotely, with no local branch for it", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-01-02T10:00:00 +0000", { "README.md": "stale main\n" }, "main work");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    await runGit(work, ["switch", "-c", "codex/feature"]);
+    const newest = await commitAt(work, "2026-06-14T10:00:00 +0000", { "feature.ts": "newest\n" }, "feature work");
+    await runGit(work, ["push", "-u", "origin", "codex/feature"]);
+    await runGit(work, ["switch", "main"]);
+    // The state a laptop is really in months later: the branch is on the hub,
+    // and this checkout has nothing but a remote-tracking ref for it.
+    await runGit(work, ["branch", "-D", "codex/feature"]);
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.base).toBe("origin/codex/feature");
+    expect(said).toContain("integration created from origin/codex/feature");
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(newest);
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("a dirty working tree is committed, never stashed - and every file survives", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    // Tracked edit + a brand new untracked file: both are work the server would
+    // otherwise never see.
+    await writeFile(join(work, "README.md"), "edited by hand\n", "utf-8");
+    await writeFile(join(work, "notes.md"), "keep me\n", "utf-8");
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.stamped).not.toBeNull();
+    expect(said).toContain("committed 2 pending change(s) on main");
+    // NOT ONE BYTE LOST: the files are still on disk with their contents, the
+    // tree is clean afterwards, and both are inside what the server will clone.
+    expect(await readFile(join(work, "README.md"), "utf-8")).toBe("edited by hand\n");
+    expect(await readFile(join(work, "notes.md"), "utf-8")).toBe("keep me\n");
+    expect(await runGit(work, ["status", "--porcelain"])).toBe("");
+    const tree = await runGit(origin, ["ls-tree", "-r", "--name-only", "refs/heads/integration"]);
+    expect(tree).toContain("notes.md");
+    expect(await runGit(origin, ["show", "refs/heads/integration:README.md"])).toContain("edited by hand");
+    // The stamp landed on the operator's own branch, and he is still on it.
+    expect(await runGit(work, ["rev-parse", "main"])).toBe(await runGit(work, ["rev-parse", "integration"]));
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("a repository with no commits at all: the files become the first commit", async () => {
+    const { work, origin } = await repoPair();
+    await writeFile(join(work, "main.py"), "print('hello')\n", "utf-8");
+    await writeFile(join(work, "README.md"), "zero commits\n", "utf-8");
+
+    const { outcome } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.stamped).not.toBeNull();
+    expect(await originBranches(origin)).toEqual(["integration"]);
+    const tree = await runGit(origin, ["ls-tree", "-r", "--name-only", "refs/heads/integration"]);
+    expect(tree.split(/\r?\n/).sort()).toEqual(["README.md", "main.py"]);
+    expect(await runGit(work, ["status", "--porcelain"])).toBe("");
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("a truly empty project fails honestly, and nothing is pushed", async () => {
+    const { work, origin } = await repoPair();
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.action).toBe("failed");
+    expect(outcome.error).toContain("nothing to adopt");
+    expect(said).toContain("STEP adopt FAIL");
+    expect(await originBranches(origin)).toEqual([]);
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("a local integration that was never pushed is pushed as it stands", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    await runGit(work, ["switch", "-c", "integration"]);
+    const tip = await commitAt(work, "2026-03-01T10:00:00 +0000", { "engine.txt": "engine work\n" }, "engine work");
+    await runGit(work, ["switch", "main"]);
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.action).toBe("pushed-local-branch");
+    // Never recreated, never moved: the tip the operator (or an engine run)
+    // built is the tip that reached origin.
+    expect(await runGit(work, ["rev-parse", "integration"])).toBe(tip);
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(tip);
+    expect(said).toContain("its tip was not moved");
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("origin already has integration: adoption is a no-op", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    await runGit(work, ["switch", "-c", "integration"]);
+    const tip = await commitAt(work, "2026-03-01T10:00:00 +0000", { "engine.txt": "engine\n" }, "engine work");
+    await runGit(work, ["push", "-u", "origin", "integration"]);
+    await runGit(work, ["switch", "main"]);
+    await runGit(work, ["branch", "-D", "integration"]); // the branch lives on the hub, not here
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.action).toBe("already-on-remote");
+    expect(said).toContain("nothing to adopt");
+    expect(said).not.toContain("adopt-branch");
+    expect(said).not.toContain("adopt-push");
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(tip);
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("a detached HEAD with uncommitted work is committed where it stands", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    await runGit(work, ["checkout", "--detach"]);
+    await writeFile(join(work, "wip.txt"), "work in progress\n", "utf-8");
+
+    const { outcome, said } = await adopt(work);
+
+    expect(outcome.ok).toBe(true);
+    expect(said).toContain("detached HEAD");
+    expect(await readFile(join(work, "wip.txt"), "utf-8")).toBe("work in progress\n");
+    expect(await runGit(origin, ["ls-tree", "-r", "--name-only", "refs/heads/integration"])).toContain("wip.txt");
+    // Still detached: adoption did not "helpfully" put him back on a branch.
+    expect(await branchOf(work)).toBe("(detached)");
+    expect(await runGit(work, ["rev-parse", "HEAD"])).toBe(await runGit(work, ["rev-parse", "integration"]));
+  }, 60_000);
+
+  test("a laptop with no git identity still gets its stamp commit, borrowed not written", async () => {
+    const { work, origin } = await repoPair();
+    await writeFile(join(work, "app.py"), "print('hi')\n", "utf-8");
+
+    // No identity ANYWHERE: no local config, and the global/system files
+    // pointed at paths that do not exist. Without the borrowed identity
+    // `git commit` would abort with "please tell me who you are" and the deploy
+    // would be the old refusal wearing a new hat.
+    const saved = { ...process.env };
+    process.env["GIT_CONFIG_GLOBAL"] = join(work, "does-not-exist-global");
+    process.env["GIT_CONFIG_SYSTEM"] = join(work, "does-not-exist-system");
+    process.env["GIT_CONFIG_NOSYSTEM"] = "1";
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) {
+      delete process.env[key];
+    }
+    let run: Awaited<ReturnType<typeof adopt>> | null = null;
+    try {
+      run = await adopt(work);
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+    }
+
+    expect(run?.outcome.ok).toBe(true);
+    expect(await originBranches(origin)).toEqual(["integration"]);
+    expect(await runGit(origin, ["log", "-1", "--format=%an <%ae>", "refs/heads/integration"])).toBe(
+      "SDL Factory <factory@sdl.local>",
+    );
+    // Borrowed for that one commit - never written into the operator's config.
+    const written = await runGit(work, ["config", "--local", "--get-regexp", "^user\\."]).catch(() => "");
+    expect(written).toBe("");
+  }, 60_000);
+
+  test("a half-configured identity keeps the operator's own name and borrows only what is missing", async () => {
+    const { work, origin } = await repoPair();
+    await writeFile(join(work, "app.py"), "print('hi')\n", "utf-8");
+    // The real state of plenty of laptops: a name was set once, an address never
+    // was. Replacing BOTH halves would sign his commit with a name that is not
+    // his, when only the address was missing.
+    await runGit(work, ["config", "--local", "user.name", "Mubarak"]);
+
+    const saved = { ...process.env };
+    process.env["GIT_CONFIG_GLOBAL"] = join(work, "does-not-exist-global");
+    process.env["GIT_CONFIG_SYSTEM"] = join(work, "does-not-exist-system");
+    process.env["GIT_CONFIG_NOSYSTEM"] = "1";
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) {
+      delete process.env[key];
+    }
+    let run: Awaited<ReturnType<typeof adopt>> | null = null;
+    try {
+      run = await adopt(work);
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+    }
+
+    expect(run?.outcome.ok).toBe(true);
+    expect(await runGit(origin, ["log", "-1", "--format=%an <%ae>", "refs/heads/integration"])).toBe(
+      "Mubarak <factory@sdl.local>",
+    );
+  }, 60_000);
+
+  test("a project git is ignoring entirely says THAT, not that it has no files", async () => {
+    const { work, origin } = await repoPair();
+    // The rule lives in .git/info/exclude rather than a .gitignore, because a
+    // .gitignore is itself an untracked file and would make the tree dirty -
+    // this test needs the state where `status --porcelain` genuinely prints
+    // nothing while the directory is full of code.
+    await mkdir(join(work, "node_modules"), { recursive: true });
+    await writeFile(join(work, "node_modules", "x.js"), "module.exports = 1\n", "utf-8");
+    await mkdir(join(work, ".git", "info"), { recursive: true });
+    await writeFile(join(work, ".git", "info", "exclude"), "node_modules/\n", "utf-8");
+    expect(await runGit(work, ["status", "--porcelain"])).toBe("");
+
+    const { outcome } = await adopt(work);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("git is ignoring every file in it");
+    // The old wording claimed "no files to commit", which sent the operator
+    // looking for files that are sitting right there.
+    expect(outcome.error).not.toContain("no files to commit");
+    expect(await originBranches(origin)).toEqual([]);
+  }, 60_000);
+
+  /* ── the branch name is git ARGV, and git reads a leading '-' as an option ──
+     `branch` arrives from a request body. Sent as "-f" it lands in the option
+     slot of `git push -u origin <branch>`, which git reads as `push -u --force
+     origin` - a force-push of the CURRENT branch, with no refspec. `git branch
+     -f <ref>` does not even error on the way there (it exits 0), so nothing
+     downstream notices before origin's history is gone. */
+  test("a branch name git would read as an option is refused, and origin's history survives", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    const onlyOnOrigin = await commitAt(work, "2026-02-02T10:00:00 +0000", { "README.md": "second\n" }, "second");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+    // The laptop now DIVERGES from origin: that second commit exists only on the
+    // hub. A force-push would delete it for everyone who has ever cloned this.
+    await runGit(work, ["reset", "--hard", "HEAD~1"]);
+    await commitAt(work, "2026-02-03T10:00:00 +0000", { "README.md": "local rewrite\n" }, "alt second");
+
+    for (const hostile of ["-f", "--force", "--mirror"]) {
+      const { outcome, said } = await adopt(work, hostile);
+      expect(outcome.ok).toBe(false);
+      expect(outcome.pushed).toBe(false);
+      expect(outcome.error).toContain("option");
+      expect(said).toContain("STEP adopt FAIL");
+      // THE PROPERTY: the commit only origin had is still the commit origin has.
+      expect(await runGit(origin, ["rev-parse", "refs/heads/main"])).toBe(onlyOnOrigin);
+      expect(await originBranches(origin)).toEqual(["main"]);
+    }
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("the names git itself refuses are refused here, by the same rules", () => {
+    for (const ok of ["integration", "main", "codex/feature", "release/1.0", "v2.1-rc"]) {
+      expect(branchNameProblem(ok)).toBeNull();
+    }
+    for (const bad of ["", "-f", "--force", "a b", "has~tilde", "has^caret", "has:colon", "a..b", "x@{0}", "@", "/lead", "trail/", "a//b", "ends.lock", ".hidden", "feat/.hidden", "back\\slash"]) {
+      expect(branchNameProblem(bad)).toBeTruthy();
+    }
+  });
+
+  test("a name with slashes still deploys - the '--' guard did not break ordinary branches", async () => {
+    const { work, origin } = await repoPair();
+    const head = await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+
+    const { outcome } = await adopt(work, "release/1.0");
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.pushed).toBe(true);
+    expect(await runGit(origin, ["rev-parse", "refs/heads/release/1.0"])).toBe(head);
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  /* ── Cancel, and the exact promise it can keep ─────────────────────────────
+     A git subprocess already in flight cannot be taken back, so "Cancel undoes
+     the adoption" would be a lie. What IS true, and what this pins: adoption
+     asks whether the operator cancelled BEFORE it pushes, so a cancel arriving
+     during the long fetch stops it while origin is still untouched. */
+  test("Cancel during the fetch stops adoption before the push, and origin is untouched", async () => {
+    const { work, origin } = await repoPair();
+    await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+
+    // The button is pressed while the fetch line is still being written.
+    let pressed = false;
+    const { outcome, said } = await adopt(work, "integration", {
+      onLine: (line) => {
+        if (line.includes("adopt-fetch")) pressed = true;
+      },
+      stopped: () => (pressed ? "you cancelled this deploy" : null),
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.action).toBe("cancelled");
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.error).toContain("you cancelled this deploy");
+    expect(said).toContain("origin was not touched");
+    // Nothing was created anywhere - not on the hub, and not here either.
+    expect(await originBranches(origin)).toEqual(["main"]);
+    expect(await runGit(work, ["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"])).toBe("main");
+    expect(await branchOf(work)).toBe("main");
+  }, 60_000);
+
+  test("no cancel means the callback changes nothing about a normal adoption", async () => {
+    const { work, origin } = await repoPair();
+    const head = await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "first\n" }, "first");
+    await runGit(work, ["push", "-u", "origin", "main"]);
+
+    const { outcome } = await adopt(work, "integration", { stopped: () => null });
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.action).toBe("created-from-tip");
+    expect(outcome.pushed).toBe(true);
+    expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(head);
   }, 60_000);
 });
 
@@ -747,6 +1180,7 @@ describe("the one-click deploy", () => {
         branch: "integration",
         dir: "/root/sdl-factory",
         script,
+        projectRoot: null,
       });
       expect(job.state).toBe("running");
 
@@ -792,6 +1226,7 @@ describe("the one-click deploy", () => {
         branch: "integration",
         dir: "/root/x",
         script: await readFile(bootstrapPath(), "utf-8"),
+        projectRoot: null,
       });
       await waitFor(() => job.state !== "running");
 
@@ -841,6 +1276,7 @@ describe("the one-click deploy", () => {
         branch: "integration",
         dir: "/root/hardware",
         script: await readFile(bootstrapPath(), "utf-8"),
+        projectRoot: null,
       });
       await waitFor(() => job.state !== "running");
 
@@ -887,12 +1323,84 @@ describe("the one-click deploy", () => {
         branch: "integration",
         dir: "/root/x",
         script: "#!/bin/sh\n",
+        projectRoot: null,
       });
       await waitFor(() => job.state !== "running");
       expect(job.state).toBe("failed");
       expect(job.error).toContain("DEPLOY COMPLETE");
     },
     40_000,
+  );
+
+  // ── the two phases, in order ──────────────────────────────────────────────
+  // The adoption is part of the JOB, not of `postDeploy`: a fetch plus a push
+  // can outlast `Bun.serve`'s 10s idleTimeout, and the operator should WATCH it
+  // as ordinary STEP lines. These two tests pin both halves of that.
+
+  test(
+    "the deploy adopts the project first, streams it as steps, and only then connects",
+    async () => {
+      const vps = await box({ password: "pw-adopt" });
+      const added = await addOrFail({ host: "127.0.0.1", port: vps.port, user: "root", password: "pw-adopt" });
+      vps.deploy.lines = ["STEP preflight OK user=root", "STEP clone OK cloned", "DEPLOY COMPLETE"];
+      vps.deploy.code = 0;
+
+      // A pre-existing project in the state the ruling names: only `main`, and
+      // origin has never heard of `integration`.
+      const { work, origin } = await repoPair();
+      const head = await commitAt(work, "2026-02-01T10:00:00 +0000", { "README.md": "a real project\n" }, "first");
+      await runGit(work, ["push", "-u", "origin", "main"]);
+
+      const job = startDeploy(added, {
+        repoUrl: "https://example.com/x.git",
+        branch: "integration",
+        dir: "/root/x",
+        script: "#!/bin/sh\n",
+        projectRoot: work,
+      });
+      await waitFor(() => job.state !== "running", 60_000);
+
+      expect(job.state).toBe("done");
+      // The adoption steps come FIRST, in the same list as the bootstrap's.
+      expect(job.steps.map((step) => step.name)).toEqual([
+        "adopt-fetch",
+        "adopt-branch",
+        "adopt-push",
+        "preflight",
+        "clone",
+      ]);
+      expect(job.steps.every((step) => step.state === "ok")).toBe(true);
+      expect(job.steps.find((step) => step.name === "adopt-branch")?.detail).toContain("created from main");
+      // And the remote really has the branch the server was told to check out.
+      expect(await runGit(origin, ["rev-parse", "refs/heads/integration"])).toBe(head);
+      expect(await branchOf(work)).toBe("main");
+    },
+    90_000,
+  );
+
+  test(
+    "a local phase that cannot finish fails the deploy before one byte is uploaded",
+    async () => {
+      const vps = await box({ password: "pw-adopt-fail" });
+      const added = await addOrFail({ host: "127.0.0.1", port: vps.port, user: "root", password: "pw-adopt-fail" });
+      const { work } = await repoPair(); // no commits, no files: nothing to adopt
+
+      const job = startDeploy(added, {
+        repoUrl: "https://example.com/x.git",
+        branch: "integration",
+        dir: "/root/x",
+        script: "#!/bin/sh\n",
+        projectRoot: work,
+      });
+      await waitFor(() => job.state !== "running", 60_000);
+
+      expect(job.state).toBe("failed");
+      expect(job.error).toContain("nothing to adopt");
+      // Never a half-deploy: no script was uploaded and no bootstrap was run.
+      expect(vps.uploads.has(".sdl-factory-bootstrap.sh")).toBe(false);
+      expect(vps.commands.some((command) => command.startsWith("sh "))).toBe(false);
+    },
+    90_000,
   );
 });
 

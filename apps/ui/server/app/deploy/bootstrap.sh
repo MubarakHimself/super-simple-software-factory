@@ -494,16 +494,14 @@ fi
 # and nothing else: a server that is AHEAD of origin is reported as ahead and
 # left alone.
 
-# THE REMEDY HAS TO BE TRUE. This step used to say "the laptop creates and
-# pushes it when the project is initialized", and nothing does: `Initialize
-# factory` runs `git init` plus the sssf stamp and neither commits, branches nor
-# pushes. The one component that CREATES `integration` is the engine itself
-# (adws/engine.py's cycle cuts it from main and `push -u`s it) - which this
-# deploy refuses to install until the branch exists. Following the old message
-# (re-run Initialize, push, redeploy) failed identically, forever, on every
-# fresh repo. So the message now names the three commands that actually break
-# the loop, and prints what the remote DOES have so the operator can see
-# whether he is one `push -u` away or looking at an empty hub.
+# THIS IS A BACKSTOP AND SHOULD NOW BE UNREACHABLE FROM THE APP. The app's own
+# deploy runs a laptop-side adoption phase first (apps/ui/server/app/adopt.ts):
+# it commits whatever is uncommitted, cuts `$BRANCH` from the newest work in the
+# checkout, and pushes it - so by the time this script runs, origin has the
+# branch. Reaching this line therefore means the deploy was started OUTSIDE the
+# app (this script run by hand, or against a remote nobody adopted). The message
+# says exactly that, and prints what the remote DOES have, because that list is
+# the difference between "the wrong branch name was passed" and "an empty hub".
 if ! git -C "$DIR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
   # `grep -vx HEAD` rather than an anchored end-of-line pattern: a dollar sign
   # immediately followed by a single quote is an ANSI-C quote, a bashism this
@@ -511,7 +509,7 @@ if ! git -C "$DIR" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/de
   # to say "match the whole line" and spells none of it.
   REMOTE_HEADS=$(git -C "$DIR" for-each-ref --format='%(refname:strip=3)' refs/remotes/origin 2>/dev/null | grep -vx HEAD | tr '\n' ' ')
   [ -n "$REMOTE_HEADS" ] || REMOTE_HEADS="(none - the remote has no branches at all yet)"
-  fail checkout "branch '$BRANCH' does not exist on the remote. origin has: $REMOTE_HEADS. Nothing on the laptop creates this branch for you - the engine does, and this deploy will not install the engine before the branch exists. Break the loop on the LAPTOP, in the project checkout: 1) git add -A && git commit -m 'stamp the factory'  2) git push -u origin main  3) git switch -c $BRANCH  4) git push -u origin $BRANCH  - then deploy again"
+  fail checkout "branch '$BRANCH' does not exist on the remote. origin has: $REMOTE_HEADS. The app's Deploy creates and pushes this branch for you before it ever connects here, so this state means the deploy was started outside the app - run Deploy from the app against this project and it will adopt the repository first"
 fi
 
 if git -C "$DIR" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null 2>&1; then
