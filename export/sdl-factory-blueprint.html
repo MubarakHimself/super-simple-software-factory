@@ -1,0 +1,829 @@
+<title>SDL Factory Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface2: #eceff2;
+    --ink: #1b2228;
+    --muted: #5b6570;
+    --line: #d7dde3;
+    --accent: #0f62fe;
+    --accent-soft: #dbe7ff;
+    --good: #0e7a3d;
+    --warn: #b45309;
+    --bad: #b42318;
+    --code-bg: #eef1f4;
+    /* the factory's own lane colors, from sssf.config.yaml */
+    --planner: #a78bfa;
+    --builder: #22d3ee;
+    --scout: #fbbf24;
+    --reviewer: #fb7185;
+    --documenter: #e879f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181c;
+      --surface: #1b2127;
+      --surface2: #232a31;
+      --ink: #e5e9ec;
+      --muted: #98a2ad;
+      --line: #2d353d;
+      --accent: #78a9ff;
+      --accent-soft: #1e2c47;
+      --good: #4ade80;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --code-bg: #232a31;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181c;
+    --surface: #1b2127;
+    --surface2: #232a31;
+    --ink: #e5e9ec;
+    --muted: #98a2ad;
+    --line: #2d353d;
+    --accent: #78a9ff;
+    --accent-soft: #1e2c47;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --code-bg: #232a31;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  header.masthead {
+    padding: 3.5rem 0 2rem;
+    border-bottom: 2px solid var(--ink);
+    margin-bottom: 2.5rem;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 0.75rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+  .lede { font-size: 1.1rem; max-width: 46rem; color: var(--muted); margin: 0; }
+  .lede strong { color: var(--ink); }
+
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.8rem;
+    padding: 1rem 0 0; margin-top: 1.5rem;
+    border-top: 1px solid var(--line);
+  }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a b { color: var(--accent); font-weight: 600; margin-right: 0.3em; }
+
+  section { margin: 3.5rem 0; }
+  h2 {
+    font-size: 1.55rem; font-weight: 700; letter-spacing: -0.01em;
+    margin: 0 0 0.35rem; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 0.6rem;
+  }
+  h2 .num {
+    font-family: "IBM Plex Mono", monospace; font-size: 1rem;
+    color: var(--accent); font-weight: 600;
+  }
+  .kicker { color: var(--muted); margin: 0 0 1.4rem; max-width: 46rem; }
+  h3 { font-size: 1.12rem; font-weight: 600; margin: 2rem 0 0.6rem; }
+  p { max-width: 46rem; margin: 0.8rem 0; }
+  ul, ol { max-width: 46rem; padding-left: 1.3rem; }
+  li { margin: 0.35rem 0; }
+  li::marker { color: var(--muted); }
+  a { color: var(--accent); }
+
+  code {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.85em;
+    background: var(--code-bg); border-radius: 3px; padding: 0.1em 0.35em;
+  }
+  pre.code {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; line-height: 1.55;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 0.9rem 1.1rem; overflow-x: auto; max-width: 100%;
+  }
+  pre.code code { background: none; padding: 0; }
+
+  table {
+    border-collapse: collapse; width: 100%; margin: 1.2rem 0;
+    font-size: 0.9rem;
+  }
+  .tablewrap { overflow-x: auto; margin: 1.2rem 0; }
+  .tablewrap table { margin: 0; }
+  th {
+    text-align: left; font-weight: 600; font-size: 0.78rem;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    border-bottom: 2px solid var(--ink); padding: 0.5rem 0.9rem 0.5rem 0;
+    white-space: nowrap;
+  }
+  td {
+    border-bottom: 1px solid var(--line); padding: 0.55rem 0.9rem 0.55rem 0;
+    vertical-align: top;
+  }
+  td code, th code { white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+
+  figure { margin: 1.6rem 0; }
+  figure .diagram {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 1rem; overflow-x: auto;
+  }
+  pre.mermaid { margin: 0; display: flex; justify-content: center; background: transparent; }
+  figcaption {
+    font-size: 0.85rem; color: var(--muted); margin-top: 0.6rem; max-width: 46rem;
+  }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    border-radius: 0 8px 8px 0; padding: 0.9rem 1.2rem; margin: 1.4rem 0;
+    max-width: 52rem;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout p { margin: 0.3rem 0; max-width: none; }
+  .callout .label {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.72rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+  }
+
+  .chip {
+    display: inline-block; width: 0.7em; height: 0.7em; border-radius: 2px;
+    margin-right: 0.45em; vertical-align: baseline;
+    border: 1px solid rgba(0,0,0,0.25);
+  }
+  .scopecard {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem; margin: 1.5rem 0;
+  }
+  .scopecard > div {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 1rem 1.2rem;
+  }
+  .scopecard .label {
+    font-family: "IBM Plex Mono", monospace; font-size: 0.72rem;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem;
+  }
+  .scopecard .in .label { color: var(--good); }
+  .scopecard .out .label { color: var(--bad); }
+  .scopecard ul { margin: 0; padding-left: 1.1rem; font-size: 0.92rem; }
+
+  .rulegrid { counter-reset: rule; max-width: 52rem; padding: 0; margin: 1.2rem 0; }
+  .rulegrid li {
+    list-style: none; counter-increment: rule; position: relative;
+    padding: 0.55rem 0 0.55rem 3rem; border-bottom: 1px solid var(--line);
+    margin: 0; max-width: none;
+  }
+  .rulegrid li::before {
+    content: counter(rule, decimal-leading-zero);
+    position: absolute; left: 0; top: 0.6rem;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.85rem;
+    color: var(--accent); font-weight: 600;
+  }
+  .rulegrid b { font-weight: 600; }
+
+  footer {
+    margin-top: 4rem; padding-top: 1.2rem; border-top: 2px solid var(--ink);
+    font-size: 0.85rem; color: var(--muted); max-width: 52rem;
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Rebuild dossier &middot; for on-prem reimplementation on your own coding harness</p>
+  <h1>SDL Factory Blueprint</h1>
+  <p class="lede">A software factory: <strong>deterministic Python workflows drive coding agents</strong> through plan &rarr; build &rarr; test &rarr; review &rarr; document, with a human at exactly two gates. This document carries every contract you need to rebuild it &mdash; the orchestration core, the model roster, the queue, the merge machinery &mdash; and marks precisely which parts are harness-specific so you can swap in your own.</p>
+
+  <div class="scopecard">
+    <div class="in">
+      <div class="label">In this dossier</div>
+      <ul>
+        <li>The orchestration core: phases, envelopes, gates, permissions, trace</li>
+        <li>The 12 pipelines and how they compose</li>
+        <li>The model setup: roster config, roles, lanes, review rules</li>
+        <li>The queue, dispatcher, engine, and worktree layer</li>
+        <li>The porting map: what to replace vs. keep</li>
+      </ul>
+    </div>
+    <div class="out">
+      <div class="label">Deliberately excluded</div>
+      <ul>
+        <li>The dashboard / desktop app (<code>apps/</code>) &mdash; the trace database is the read surface; bring your own observer</li>
+        <li>Server deployment (systemd unit, SSH provisioning, installer server target)</li>
+        <li>The operator's laptop-side planning skill chain internals</li>
+      </ul>
+    </div>
+  </div>
+
+  <nav class="toc">
+    <a href="#idea"><b>01</b>The idea</a>
+    <a href="#core"><b>02</b>The core</a>
+    <a href="#pipelines"><b>03</b>Pipelines</a>
+    <a href="#models"><b>04</b>Model setup</a>
+    <a href="#ops"><b>05</b>Queue &amp; engine</a>
+    <a href="#setup"><b>06</b>Machine setup</a>
+    <a href="#porting"><b>07</b>Porting map</a>
+    <a href="#rules"><b>08</b>The rules</a>
+  </nav>
+</header>
+
+<!-- ============================================================ -->
+<section id="idea">
+  <h2><span class="num">01</span>The idea</h2>
+  <p class="kicker">One sentence governs every design decision: <b>agent proposes, code disposes.</b></p>
+
+  <p>Deterministic Python owns sequencing, retries, and acceptance. Coding agents are bounded nodes inside named phases &mdash; they never decide what happens next. Every agent hands back a typed JSON envelope; code verifies every claim in it against the actual filesystem and git state before accepting it. Everything streams to SQLite. The core pattern is disler's <a href="https://github.com/disler/super-simple-software-factory">Super Simple Software Factory</a> (MIT), kept untouched; this project adds a Kanban queue, an always-on engine, worktree parallelism, and an integration-branch merge gate.</p>
+
+  <p>A human appears at exactly two moments, never in the middle:</p>
+  <ul>
+    <li><b>Gate 1 &mdash; ratify.</b> The plan (decision ledger, feature inventory, cards) is approved before any code exists.</li>
+    <li><b>Gate 2 &mdash; merge.</b> A finished, integrated chunk lands on <code>main</code> only by the operator's own squash-merge click. Nothing in the factory ever merges to <code>main</code> or pushes it.</li>
+  </ul>
+
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph PLAN["Planning side (any harness)"]
+    direction TB
+    P1["documentation-factory:\ningest &rarr; ledger &rarr; ratify (Gate 1)\n&rarr; feature inventory"] --> P2["/to-kanban:\nbatch-publish cards\nwith Needs: edges"]
+    P2 --> P3["git push\ncards + docs together"]
+  end
+  subgraph FACTORY["The factory (this dossier)"]
+    direction TB
+    Q["queue/*.md\nagent-brief cards"] -->|"engine scans ~60s\nNeeds: satisfied?"| E["engine.py\nalways-on loop"]
+    E -->|"spawns"| D["dispatch.py\none card &rarr; one ADW"]
+    D --> A["ADW run\nown branch + worktree"]
+    A -->|"pushes adw/* branch\nStatus: done"| E
+    E -->|"rebase + quality gate\n+ ff-merge + park card"| I[("integration\nbranch")]
+  end
+  P3 -->|"git push"| Q
+  I -->|"morning brief +\noperator squash click\n(Gate 2)"| M[("main")]
+  A -.->|"every event"| T[("sssf.db\nSQLite trace")]
+  E -.-> T
+  classDef human fill:#fde68a,color:#1c1917,stroke:#b45309
+  class P1,M human
+</pre>
+    </div>
+    <figcaption>The whole system. Planning happens wherever the operator works; cards travel by git; the factory works them autonomously up to the <code>integration</code> branch; only a human moves <code>main</code>. Amber marks the two human gates.</figcaption>
+  </figure>
+
+  <p>The daily loop, compressed: <b>documentation-factory</b> ingests everything once, builds the decision ledger the operator ratifies (Gate&nbsp;1), and emits the feature inventory &mdash; scoped, ordered, dependencies declared &rarr; <b>/to-kanban</b> batch-publishes the inventory as queue cards, one per feature, with <code>Needs:</code> edges carrying the blocking order (a git push is the whole handoff) &rarr; the engine dispatches each ready card on its own branch and worktree &rarr; it integrates autonomously after deterministic checks &rarr; a morning brief narrates each run &rarr; the operator's click ships the chunk. These two supply-line skills are the factory's own; they replaced the earlier spec&rarr;tickets&rarr;triage chain.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="core">
+  <h2><span class="num">02</span>The core: one agent call, fully verified</h2>
+  <p class="kicker">Everything lives in <code>adws/adw_modules/</code> (~17 modules). The unit of composition is the <b>phase</b>; the unit of trust is the <b>envelope</b>; the unit of proof is the <b>gate</b>.</p>
+
+  <h3>2.1 The phase model</h3>
+  <p>An ADW is a plain Python script that opens phases through one primitive, <code>run.phase(PhaseParams(...))</code> &mdash; a context manager (<code>runner.py:135</code>). Any exception marks the phase failed and closes the trace; a clean exit marks success. Status defaults to <code>fail</code>: <em>success must be earned</em>.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>Phase kind</th><th>Owner</th><th>What runs</th></tr>
+    <tr><td><code>engineer</code></td><td>the human's name</td><td>Captures the request into the trace. No execution.</td></tr>
+    <tr><td><code>agent</code></td><td>a roster agent name</td><td><code>ph.call(AgentCall(...))</code> &rarr; one verified agent invocation (below).</td></tr>
+    <tr><td><code>code</code></td><td><code>git</code> / <code>quality</code></td><td>Deterministic Python: worktree cut, git commit, diff capture, lint/typecheck/test/scan.</td></tr>
+  </table></div>
+
+  <p>Every <code>PhaseParams</code> requires a <code>description</code> that a Pydantic validator rejects if blank <em>or if it merely restates the name</em> (<code>data_types.py:32</code>) &mdash; it is the one sentence the trace and console ever show about intent. Phase ids are <code>{adw_id}_{seq:02d}_{name}</code>; a rejoined run continues the sequence counter instead of colliding.</p>
+
+  <h3>2.2 One agent call, end to end</h3>
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  participant ADW as ADW script
+  participant EX as agents.execute()
+  participant PERM as permissions
+  participant H as harness adapter<br/>(agent_pi.py)
+  participant M as model
+  ADW->>EX: ph.call(AgentCall{output_type, prompt, previous, gates})
+  EX->>EX: render system.md + user.md<br/>({{prompt}}, {{previous_envelope}}, {{context_handoff_dir}})
+  EX->>PERM: snapshot tree + snapshot refs (BEFORE)
+  EX->>H: send(request)  — session created or continued
+  H->>M: non-interactive call, streamed events
+  M-->>H: final text + usage
+  H-->>EX: Result{text, tokens, cost}
+  loop invalid JSON, max 2 retries
+    EX->>H: correction prompt, SAME session
+  end
+  EX->>EX: validate JSON against output_type (Pydantic)
+  loop gate violations, max phase.retries
+    EX->>EX: run gates(envelope, run)
+    EX->>H: correction prompt, SAME session
+  end
+  EX->>PERM: enforce_refs (did HEAD/branch move? &rarr; breach, abort)
+  EX->>PERM: enforce (diff tree vs snapshot; unauthorized path &rarr; rollback + breach)
+  EX->>ADW: typed envelope + trace rows persisted
+</pre>
+    </div>
+    <figcaption>The verified agent call (<code>agents.py:168-317</code>). Corrections always re-prompt the <em>same session</em> so the agent keeps its context &mdash; a hard requirement on any replacement harness. Refs are checked before content because a <code>git commit</code> during the phase would blind the content diff.</figcaption>
+  </figure>
+
+  <h3>2.3 The envelope contract</h3>
+  <p>Every agent's final message must be JSON parsing into an <code>EnvelopeBase</code> subclass (<code>data_types.py</code>). Extraction is deliberately permissive: first fenced <code>```json```</code> block, else the outermost <code>{...}</code>. Base fields on every envelope: <code>status: "success"|"fail"</code>, <code>summary</code>, <code>artifacts: []</code>, <code>notes_for_next_agent</code>.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>Envelope</th><th>Extra fields</th><th>Produced by</th></tr>
+    <tr><td><code>PlanOutput</code></td><td><code>commit_message</code> (for the plan file itself)</td><td>planner</td></tr>
+    <tr><td><code>BuildOutput</code></td><td><code>changed_files: []</code>, <code>commit_message</code></td><td>builder</td></tr>
+    <tr><td><code>ScoutOutput</code></td><td><code>findings: [{file, note}]</code></td><td>scout</td></tr>
+    <tr><td><code>ReviewOutput</code></td><td><code>approved: bool</code>, <code>findings: [{requirement, met, evidence}]</code>, <code>blocking: []</code></td><td>reviewer</td></tr>
+    <tr><td><code>DocumentOutput</code></td><td><code>document_path</code>, <code>documented_files: []</code>, <code>commit_message</code></td><td>documenter</td></tr>
+    <tr><td><code>GenericOutput</code></td><td>&mdash;</td><td>any (free-form ADW)</td></tr>
+    <tr><td><code>VerifyOutput</code></td><td><code>passed</code>, <code>failures: []</code></td><td><b>code</b> &mdash; quality results adapted into envelope shape</td></tr>
+    <tr><td><code>ChangesOutput</code></td><td><code>base</code>, <code>changed_files</code>, <code>stat</code>, <code>diff_path</code>, +/&minus; counts</td><td><b>code</b> &mdash; git diff capture adapted for the documenter</td></tr>
+  </table></div>
+
+  <div class="callout">
+    <p class="label">Adapter trick worth copying</p>
+    <p><code>VerifyOutput</code> and <code>ChangesOutput</code> let deterministic code hand results through <em>the same door</em> agents use. A failing test run flows back to the builder exactly like a tester agent's report would &mdash; the builder's repair loop cannot tell the difference, so replacing an agent with code (or back) never touches the loop.</p>
+  </div>
+
+  <div class="callout warn">
+    <p class="label">Hand-synced, nothing checks it</p>
+    <p>The JSON example in each role's <code>user.md</code> prompt is <b>hand-written</b>, not generated from the Pydantic model. <code>prompts.render</code> is a plain <code>{{key}}</code> string replace of exactly three variables. If you change an envelope class, you must update its prompt template by hand &mdash; consider generating the schema into the prompt in your rebuild.</p>
+  </div>
+
+  <h3>2.4 Gates: verify claims, never judge quality</h3>
+  <p>A gate is a pure function <code>gate(envelope, run) &rarr; GateReport</code> (<code>gates.py</code>). Gates check only what is mechanically decidable; judgement stays with the one reviewer agent.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Gate</th><th>Checks</th></tr>
+    <tr><td><code>artifacts_exist</code></td><td>every declared artifact path exists under the run's own tree</td></tr>
+    <tr><td><code>files_non_empty</code></td><td>declared artifacts are not zero-byte</td></tr>
+    <tr><td><code>json_parses</code></td><td>declared JSON artifacts actually parse</td></tr>
+    <tr><td><code>diff_matches_claims</code></td><td>every <code>changed_files</code> entry exists on disk</td></tr>
+    <tr><td><code>verdict_consistent</code></td><td>a review's <code>approved</code> flag cannot coexist with blocking items or unmet findings</td></tr>
+    <tr><td><code>tests_pass(cmd)</code></td><td>factory: any shell command, gated on exit 0, cwd = run's tree</td></tr>
+  </table></div>
+
+  <h3>2.5 Permissions: enforced after the fact, in code</h3>
+  <p>A tool allowlist cannot express write boundaries (<code>bash</code> reaches everything), so enforcement is a <b>snapshot-diff, not a sandbox</b> (<code>permissions.py</code>). Three mechanisms, all armed per agent phase:</p>
+  <ol>
+    <li><b>Content diff</b> &mdash; fingerprint the tree before, re-fingerprint after; any changed path failing <code>permitted()</code> is rolled back (<code>git checkout --</code> / delete) and raises <code>PermissionBreach</code>.</li>
+    <li><b>Refs tripwire</b> &mdash; HEAD sha + branch name snapshotted; any movement (an agent hiding its diff behind a commit/reset/stash) is a breach checked <em>first</em>, with no rollback attempted.</li>
+    <li><b>Main-checkout tripwire</b> &mdash; once a worktree exists, the operator's own checkout is snapshotted too; an agent reaching into it by absolute path is caught. Protected-path hits are breaches; anything else is traced as drift.</li>
+  </ol>
+  <p><code>writes:</code> semantics per agent: <code>None</code> = unrestricted (builder only), <code>[]</code> = read-only in the repo, a list = allowlist (trailing <code>/</code> = directory, <code>*</code> = glob). <code>protected_files</code> (the factory's own machinery: <code>adws/adw_modules/</code>, <code>adws/adw_sssf_config/</code>, <code>adws/adw_*.py</code>) blocks every agent that hasn't explicitly named those paths &mdash; <em>the factory never builds the factory</em>. A breach is not a gate violation: gates re-prompt, breaches abort the phase.</p>
+  <div class="callout warn">
+    <p class="label">Known nuance to fix in a rebuild</p>
+    <p><code>data_dir</code> (<code>adws/adw_data/</code>) is always writable for every agent &mdash; it is the session runtime. But it also holds the checked-in prompt templates and harness extensions, which <code>protected_files</code> does not name. An agent could rewrite its own system prompt and pass enforcement. Carve the templates out of the always-writable set when you rebuild.</p>
+  </div>
+
+  <h3>2.6 Quality: three states, fail-closed</h3>
+  <p>Deterministic checks return <code>pass | fail | incomplete</code> &mdash; never a bare boolean (<code>data_types.py:149</code>). <code>incomplete</code> means the tool never ran (missing toolchain, provisioning failure): it keeps the aggregate red (nothing merges unverified) but is <em>never</em> handed to the builder as something to fix &mdash; a repair loop must never receive an unwinnable round. Commands come from the roster's <code>quality:</code> block, one shell string per check with <code>{dev}</code>/<code>{scan}</code> expanding to the pinned-toolchain prefix resolved against the tree being judged:</p>
+  <pre class="code"><code>quality:
+  lint:      "{dev} ruff check ."        # or "npm run lint" — any command, any stack
+  typecheck: "{dev} mypy adws"           # empty string = check disabled, visibly
+  test:      "{dev} pytest -q adws/tests"
+  scan:      "{scan} skylos . --ai-defects --format concise"   # AI-defect scan, diff-scoped</code></pre>
+  <p>The scan runs diff-scoped against the merge-base so a builder is never handed pre-existing repo-wide findings as its own repair spec.</p>
+
+  <h3>2.7 The trace: SQLite + JSONL, written synchronously</h3>
+  <p>Every event lands in <code>adws/adw_data/sssf.db</code> (WAL mode, <code>busy_timeout</code> 5s, so any UI can poll it live) and as a raw line in <code>events.jsonl</code>. Schema migrations are additive-only <code>ALTER TABLE</code>s from an explicit list.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Table</th><th>Carries</th></tr>
+    <tr><td><code>sessions</code></td><td>one row per run: <code>adw_id</code> (8 hex chars), adw name, request, status, engineer, timestamps, total tokens/cost</td></tr>
+    <tr><td><code>phases</code></td><td>phase id/seq/name/kind/owner/description, status, attempt, error, timestamps</td></tr>
+    <tr><td><code>events</code></td><td>typed rows: <code>phase_start | agent_start | tool_call | handoff | gate_pass | gate_fail | log | agent_end | phase_end | error</code>, payload JSON, tokens, spans</td></tr>
+    <tr><td><code>envelopes</code></td><td>every parsed envelope, its output type, validity, attempt</td></tr>
+    <tr><td><code>gate_results</code></td><td>per gate per attempt: passed, violations, checks</td></tr>
+    <tr><td><code>processes</code></td><td>pids of the ADW and agent children &mdash; <code>ended_at NULL</code> = believed alive (find/kill hung runs)</td></tr>
+    <tr><td><code>agent_sessions</code></td><td>per agent per run: harness session id, model, context tokens/window &mdash; what makes resume possible</td></tr>
+  </table></div>
+  <p>One contract worth preserving: the worktree phase writes a trace event <code>type="log", name="branch"</code> with <code>{branch, path, title}</code> &mdash; downstream collectors (the morning brief) query exactly that shape.</p>
+
+  <h3>2.8 Sessions, resume, and the final verdict</h3>
+  <ul>
+    <li><code>session.ensure(cfg, adw_id)</code> mints a fresh id or <b>rejoins</b> a pinned one. Rejoining a session still marked <code>running</code> is refused while its newest event is younger than <code>stale_after_minutes</code> (30) &mdash; two processes in one worktree is the one unrecoverable state.</li>
+    <li>SIGTERM/SIGINT converts to a clean <code>session_finish(ok=False)</code> &mdash; a killed run never leaves <code>running</code> forever.</li>
+    <li><code>agent_map.json</code> persists each agent's live harness session id, so a rejoined run continues each agent's context window.</li>
+    <li><code>run.finish(accepted, reason)</code> settles the verdict in one place: <code>ok = all phases succeeded AND accepted</code> &mdash; the ADW's own domain test (suite green, review approved). A phase that <em>ran</em> a red suite still succeeded as a phase. Exit code 0/1; the run's branch is best-effort pushed.</li>
+  </ul>
+
+  <div class="tablewrap"><table>
+    <tr><th>Exception</th><th>Meaning</th></tr>
+    <tr><td><code>GateFailure</code></td><td>gates still red after <code>retries + 1</code> attempts (distinct from plain envelope <code>status: fail</code>)</td></tr>
+    <tr><td><code>PermissionBreach</code></td><td>write-scope or refs violation; aborts the phase, never re-prompts</td></tr>
+    <tr><td><code>ReconciliationError</code></td><td>two branches sharing one adw_id (worktree layer), exit 2</td></tr>
+    <tr><td><code>DispatchError</code></td><td>dispatcher refusal, exit 2, card untouched</td></tr>
+  </table></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="pipelines">
+  <h2><span class="num">03</span>The pipelines</h2>
+  <p class="kicker">Twelve entry-point scripts, one skeleton: load + validate config &rarr; <code>session.ensure</code> &rarr; request phase &rarr; the chain &rarr; <code>run.finish(accepted)</code>. Loops are plain bounded <code>for</code> loops in Python &mdash; there is no framework retry primitive across phases.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>ADW</th><th>Chain</th><th>Accepted when</th></tr>
+    <tr><td><code>adw_prompt</code></td><td>one agent call (<code>--agent</code> picks the role), no gates</td><td>envelope success</td></tr>
+    <tr><td><code>adw_scout</code></td><td>scout only, read-only</td><td>envelope success</td></tr>
+    <tr><td><code>adw_plan</code></td><td>planner only (plan lands in <code>specs/</code>)</td><td>envelope success</td></tr>
+    <tr><td><code>adw_quality</code></td><td>deterministic quality block only &mdash; zero agents</td><td>quality green</td></tr>
+    <tr><td><code>adw_build</code></td><td>worktree &rarr; builder</td><td>envelope success</td></tr>
+    <tr><td><code>adw_build_test</code></td><td>worktree &rarr; builder &rarr; loop[test<sub>i</sub> &rarr; fix<sub>i</sub>] &times;3</td><td><code>test.passed</code></td></tr>
+    <tr><td><code>adw_build_review</code></td><td>worktree &rarr; builder &rarr; loop[review<sub>i</sub> &rarr; revise<sub>i</sub>] &times;3</td><td><code>review.approved</code></td></tr>
+    <tr><td><code>adw_plan_build</code></td><td>worktree &rarr; planner &rarr; builder &rarr; commit</td><td>envelope success</td></tr>
+    <tr><td><code>adw_plan_build_test</code></td><td>+ loop[test<sub>i</sub> &rarr; fix<sub>i</sub>] &times;3, commit only if green</td><td><code>test.passed</code></td></tr>
+    <tr><td><code>adw_plan_build_test_quality</code></td><td>same, loop phase is <code>verify_i</code> = full lint+typecheck+scan+test</td><td>strict quality pass</td></tr>
+    <tr><td><code>adw_simple_sdlc</code></td><td>the full graph below &mdash; all four roles, three commits</td><td><code>test.passed AND review.approved</code></td></tr>
+    <tr><td><code>adw_document</code></td><td>worktree &rarr; diff capture (vs <code>--base</code>) &rarr; documenter</td><td>envelope success</td></tr>
+  </table></div>
+
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  R["request (engineer)"] --> W["worktree (code/git)\npins baseline = HEAD of run's own tree"]
+  W --> PL["plan (planner)"]
+  PL --> C1["commit_plan (code)\nuses plan.commit_message"]
+  C1 --> B["build (builder)"]
+  B --> T{"test_i (code)\nquality.run_tests"}
+  T -->|red, i &lt; 3| F["fix_i (builder, retries=1)\nfed VerifyOutput"] --> T
+  T -->|green| RV{"review_i (reviewer)\napproved?"}
+  RV -->|no, i &lt; 2| RE["revise_i (builder)"] --> RV
+  RV -->|yes, and revised| RT["retest (code)\nonly if code changed after last green"]
+  RV -->|yes| C2
+  RT --> C2["commit_build (code)\nuses build.commit_message"]
+  C2 --> CH["changes (code)\ndiff vs baseline"]
+  CH --> DOC["document (documenter)"]
+  DOC --> C3["commit_docs (code)\nuses document.commit_message"]
+  C3 --> FIN["finish(accepted = tests AND approved)\npush adw/* branch"]
+  T -->|"still red after 3"| FIN
+  RV -->|"unapproved after 2"| FIN
+  classDef agent fill:#cffafe,color:#164e63,stroke:#0891b2
+  classDef codep fill:#dcfce7,color:#14532d,stroke:#16a34a
+  classDef eng fill:#e2e8f0,color:#1e293b,stroke:#64748b
+  class PL,B,F,RE,DOC agent
+  class RV agent
+  class W,C1,C2,C3,CH,RT,FIN codep
+  class T codep
+  class R eng
+</pre>
+    </div>
+    <figcaption><code>adw_simple_sdlc</code>, the fullest pipeline. Cyan = agent phases, green = deterministic code phases. Three separate commits, each carrying its own author-agent's commit message. Failure paths still reach <code>finish</code> &mdash; a run either merges or leaves a visible, named record of why not.</figcaption>
+  </figure>
+
+  <p>Design notes that generalize:</p>
+  <ul>
+    <li><b>Testing is code, never an agent.</b> Running a known command is a <code>code</code> phase over <code>quality.py</code>. There is no tester in the roster at all.</li>
+    <li><b>Exactly one agent reviewer</b>, narrowed to the one question no predicate can answer: <em>does this do what the ticket asked?</em> Its self-consistency is gate-checked; its verdict is never second-guessed by code.</li>
+    <li><b>The quality loop breaks early once <code>failures</code> is empty</b> even if <code>incomplete</code> checks remain (an unavailable tool is not fixable by an agent) &mdash; but the commit stays gated on the strict verdict.</li>
+    <li><b><code>ship_report.py</code> is not an ADW</b> &mdash; a pure read-only script that assembles the squash-commit/PR body for everything on <code>integration</code> that <code>main</code> lacks, walking parked cards and answering acceptance checkboxes mechanically (<code>confirmed-by-record</code> / <code>cannot-confirm-from-record</code>), never semantically.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="models">
+  <h2><span class="num">04</span>The model setup</h2>
+  <p class="kicker">One YAML file is the whole roster: five single-purpose agents, the model each runs on, its thinking level, tool allowlist, and write boundary. Swap the file, swap the factory's brain &mdash; no code change.</p>
+
+  <h3>4.1 The five roles</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Agent</th><th>Purpose (verbatim from config)</th><th>Writes</th><th>Thinking</th><th>Notable tools</th></tr>
+    <tr><td><span class="chip" style="background:var(--planner)"></span><b>planner</b></td><td>Turn a request into a plan the builder can implement without asking questions.</td><td><code>specs/</code> only</td><td>high</td><td>no <code>edit</code>; subagent fan-out tools</td></tr>
+    <tr><td><span class="chip" style="background:var(--builder)"></span><b>builder</b></td><td>Implement the plan exactly; report every changed file in the envelope.</td><td>unrestricted (the only one)</td><td>medium</td><td>full set incl. <code>edit</code></td></tr>
+    <tr><td><span class="chip" style="background:var(--scout)"></span><b>scout</b></td><td>Find and report where things live; change nothing.</td><td><code>[]</code> read-only</td><td>medium</td><td>subagent fan-out tools</td></tr>
+    <tr><td><span class="chip" style="background:var(--reviewer)"></span><b>reviewer</b></td><td>Confirm that what was built is what was asked for; change nothing.</td><td><code>[]</code> &mdash; &ldquo;a reviewer that cannot fix cannot quietly fix&rdquo;</td><td>high</td><td>no <code>edit</code></td></tr>
+    <tr><td><span class="chip" style="background:var(--documenter)"></span><b>documenter</b></td><td>Write up the change that was just made, from the diff; document only.</td><td><code>docs/</code>, <code>app_docs/</code>, <code>**/*.md</code></td><td>medium</td><td><code>write</code> + <code>edit</code></td></tr>
+  </table></div>
+  <p>Each role has a short <code>system.md</code> (identity + standing instructions) and a <code>user.md</code> (task shape + the literal JSON report example), rendered with three variables: <code>{{prompt}}</code>, <code>{{previous_envelope}}</code>, <code>{{context_handoff_dir}}</code>. Identity lives in the config; task shape lives at the call site.</p>
+
+  <h3>4.2 The config schema</h3>
+  <pre class="code"><code>defaults:
+  coding_agent: pi              # the harness seam — 'claude_code' accepted by schema, stub only
+  model: provider/model-id      # inherited by any agent without its own model:
+  thinking: medium              # off | minimal | low | medium | high | xhigh | max
+  harness_engineering: []       # harness extensions — MERGES into each agent's list (union)
+  tools: [read, bash, edit, write, grep, find, ls]   # allowlist; plain replace per agent
+  protected_files: [adws/adw_modules/, adws/adw_sssf_config/, adws/adw_*.py]
+  data_dir: adws/adw_data
+observability: { db: adws/adw_data/sssf.db, poll_ms: 500 }
+worktrees:     { enabled: true, root: "", trunk: integration, stale_after_minutes: 30 }
+quality:       { lint: "...", typecheck: "...", test: "...", scan: "..." }
+agents:
+  - name: planner
+    model: ...                  # per-agent override
+    writes: [specs/]
+    prompt_engineering: { system: .../system.md, user: .../user.md }
+    tools: [...]                # an agent naming tools REPLACES the default list wholesale</code></pre>
+  <p>Two loader rules earned by pain: <code>harness_engineering</code> <b>merges</b> (union, order-stable) so a roster-wide extension never silently vanishes for an agent with its own list; and an extension-registered tool <b>must be named in the agent's <code>tools:</code> list</b> or it loads but gets filtered out. Validation fail-fasts the whole roster before any phase opens: prompt files exist, every model resolves in the harness catalog (a free listing probe, never a generation).</p>
+
+  <h3>4.3 The two rosters that ship</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Role</th><th>Test lane (default: <code>sssf.config.yaml</code>)</th><th>Shipping roster (<code>sssf.shipping.config.yaml</code>)</th></tr>
+    <tr><td>planner</td><td rowspan="5"><code>ollama-cloud/kimi-k2.7-code</code><br>&mdash; one verified lane for everything, set via <code>defaults.model</code> with zero per-agent overrides</td><td><code>claude-bridge/claude-opus-5</code></td></tr>
+    <tr><td>builder</td><td><code>xai/grok-4.5</code> &nbsp;(fallback: <code>opencode-go/grok-4.5</code> &mdash; same weights, second quota pool)</td></tr>
+    <tr><td>scout</td><td><code>ollama-cloud/kimi-k2.7-code</code> (the proven recon lane)</td></tr>
+    <tr><td>reviewer</td><td><code>claude-bridge/claude-opus-4-8</code> (Opus 5 acceptable alternate)</td></tr>
+    <tr><td>documenter</td><td><code>opencode-go/minimax-m3</code> (&ldquo;a model we don't lean on&rdquo;)</td></tr>
+  </table></div>
+
+  <p>The rules behind the picks &mdash; these are the durable part, the models will change:</p>
+  <ul>
+    <li><b>Cross-family review.</b> The family that writes the code never reviews it. Builder is xAI; reviewer is Anthropic. The planner sharing the reviewer's family is fine &mdash; the rule binds writer vs. reviewer.</li>
+    <li><b>No premium models for testing.</b> Smoke tests and lane checks run on the cheap lanes only; the expensive family appears in the shipping roster alone, and even config validation uses a cost-free catalog listing.</li>
+    <li><b>Context engineering over model choice.</b> &ldquo;99% of 2026 models can code; the problem is the context you give them.&rdquo; Effort goes into briefs, pinned skills, and deterministic self-checks &mdash; model selection is the operator's alone; agents do no model research.</li>
+    <li><b>Flat-rate subscriptions only.</b> Zero marginal token spend is a hard constraint: no per-token APIs.</li>
+  </ul>
+
+  <h3>4.4 Lanes: quota, not routing magic</h3>
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph ROLES["Roster roles"]
+    PL["planner"]; BU["builder"]; SC["scout"]; RV["reviewer"]; DC["documenter"]
+  end
+  subgraph LANES["Lanes — one provider account = one quota pool"]
+    CB["claude-bridge"]
+    XAI["xai"]
+    OC["opencode-go"]
+    OL["ollama-cloud"]
+  end
+  PL -->|opus-5| CB
+  RV -->|opus-4-8| CB
+  BU -->|grok-4.5| XAI
+  BU -.->|"same model,\nsecond pool (fallback)"| OC
+  DC -->|minimax-m3| OC
+  SC -->|kimi-k2.7-code| OL
+  OC <-->|"shared quota\n(one auth store)"| OL
+  classDef lane fill:#dbe7ff,color:#172554,stroke:#3b82f6
+  class CB,XAI,OC,OL lane
+</pre>
+    </div>
+    <figcaption>The lane model. A lane is the provider prefix of every <code>provider/model</code> string. The same model on two lanes is a natural fallback pair. Scheduling knows lanes; agents never do.</figcaption>
+  </figure>
+  <ul>
+    <li>A lane has N <b>slots</b> (default 2) = concurrent runs that may draw on it. The engine holds a card rather than dispatching when a needed lane is full.</li>
+    <li>A lane is picked <b>per phase and pinned through that phase's correction rounds</b> &mdash; per-call balancing would turn every fix into a cold start.</li>
+    <li>Sub-agent fan-out counts against the parent's lane.</li>
+    <li>Optional <code>router.builder_pool</code>: candidate models for the builder only; the engine picks the lane with most free slots, writes a derived per-run copy of the roster, and dispatches with it. Absent = pinned builder, byte-identical behavior.</li>
+  </ul>
+  <div class="callout">
+    <p class="label">Schema subtlety</p>
+    <p><code>lanes:</code> and <code>router:</code> are <em>not</em> part of the validated config schema. The engine reads them through its own raw YAML reader, deliberately, so scheduling still answers even when a roster fails agent-validation. One file, two readers, two schemas.</p>
+  </div>
+  <div class="callout warn">
+    <p class="label">Activation reach</p>
+    <p><code>SSSF_CONFIG</code> swaps the roster per run &mdash; but it is honored only by <code>just</code> recipes, <code>dispatch.py</code>, and <code>engine.py</code>. Every <code>adw_*.py</code> hardcodes the default path; invoking one directly with only the env var set silently runs the test roster. Pass <code>--config</code> explicitly.</p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ops">
+  <h2><span class="num">05</span>Queue, dispatcher, engine, worktrees</h2>
+  <p class="kicker">The operational layer turns a written card into merged code with no human in it until Gate&nbsp;2. Three pieces, cleanly separated; git itself is the only lock.</p>
+
+  <h3>5.1 The card contract</h3>
+  <p>A card is one markdown file, <code>queue/NNN-slug.md</code>. Only the header block under the H1 is machine-parsed; the body is the agent's brief, passed through verbatim.</p>
+  <pre class="code"><code># Title of the change          &larr; leads the prompt; names the branch slug
+Status: ready-for-agent        &larr; ready-for-agent | running | blocked | done
+Adw: simple-sdlc               &larr; routes to one of the 8 writing ADWs
+Adw-Id:                        &larr; empty until a run claims it; then pinned forever
+Created: 2026-08-12
+Context:
+Needs:                         &larr; comma-separated card basenames this is blocked on
+
+## Agent Brief
+Category / Summary / Current behavior / Desired behavior / Key interfaces /
+Acceptance criteria (checkboxes) / Out of scope
+&mdash; durable, behavioral, written for an agent with no other context.</code></pre>
+
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> ready : card published (git push)
+  ready --> running : dispatch claims — writes Adw-Id + Status
+  running --> done : ADW exits 0, branch pushed
+  running --> blocked : ADW exits non-zero
+  done --> parked : engine integrates — rebase + quality gate + ff-merge, card moved to queue/done/
+  done --> blocked : rebase conflict or red gate (+ Blocked-reason in header)
+  blocked --> ready : human decision only
+  parked --> [*] : satisfies other cards' Needs edges
+</pre>
+    </div>
+    <figcaption>Card lifecycle. The load-bearing subtlety: a <code>Needs:</code> edge is satisfied only when the named card is <em>physically parked in <code>queue/done/</code></em> &mdash; the moment its code is actually on the line the next run cuts from. <code>Status: done</code> alone means only &ldquo;an ADW finished and pushed its own branch.&rdquo;</figcaption>
+  </figure>
+
+  <h3>5.2 dispatch.py &mdash; one card, one run</h3>
+  <ul>
+    <li>A one-shot <b>command, never a daemon</b>. Claims exactly one card, routes <code>Adw: x-y</code> &rarr; <code>adws/adw_x_y.py</code>, runs it as a foreground subprocess, writes <code>Status:</code> back twice (claim &rarr; terminal). Touches only the <code>Status:</code>/<code>Adw-Id:</code> lines &mdash; the body survives byte-for-byte.</li>
+    <li>Refusals (unknown ADW, unmet Needs, already running, read-only ADW) exit 2 with the card untouched. A blocked card retried later reuses its Adw-Id automatically &mdash; the run resumes rather than restarting.</li>
+    <li>Invocation contract per run: <code>uv run adws/adw_&lt;name&gt;.py "&lt;title&gt;\n\n&lt;body&gt;" --config &lt;roster&gt; --adw-id &lt;id&gt;</code>, cwd = the main checkout, output streamed with UTF-8 pinned at the pipe. The prompt argument doubles as a file path if one exists on disk.</li>
+  </ul>
+
+  <h3>5.3 engine.py &mdash; the always-on loop</h3>
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  A["resolve lanes / re-read roster"] --> B["preflights: git identity,\nharness launchable, uv launchable"]
+  B --> C["ensure on 'integration'\n(self-heals from main, never checks main out)"]
+  C --> D["reap finished dispatch children\ncommit their Status write-backs"]
+  D --> E["push pending &rarr; pull --ff-only\n(divergence: replay own card-only commits)"]
+  E --> F["integrate finished cards\noldest first, one at a time"]
+  F --> G["scan ready cards:\nStatus ready + Needs satisfied"]
+  G --> H["while children &lt; cap and lanes free:\nplan run &rarr; spawn dispatch.py &rarr; await claim"]
+  H --> I["push pending &rarr; sleep ~60s"] --> A
+  B -.->|"any preflight fails"| I
+  subgraph INT["one card's integrate step"]
+    direction TB
+    F1["checkout --detach the run's branch\nin its own worktree"] --> F2["rebase onto current integration"]
+    F2 -->|conflict| F3["abort, reattach,\nStatus: blocked + reason"]
+    F2 --> F4["re-run quality suite\nagainst the REBASED tree\n(lint + typecheck + test; fail-closed)"]
+    F4 -->|red| F3
+    F4 -->|green| F5["merge --ff-only into integration\nreattach worktree, push"]
+    F5 --> F6["park: git mv card &rarr; queue/done/\ncommit + push"]
+  end
+  F --- INT
+</pre>
+    </div>
+    <figcaption>One engine cycle (single-threaded, ~60s). Every gating step short-circuits the whole cycle visibly instead of raising. The integrate step rebases a <em>detached copy</em> &mdash; the run's pushed branch ref is never rewritten, so a later repair-dispatch pushes without <code>--force</code>.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Caps:</b> <code>--cap</code> (default 2) bounds total live children; per-lane slots bound quota draw. Integration is strictly sequential, oldest first, so each rebase lands on the tip the previous merge created.</li>
+    <li><b>Blocked is terminal for the loop</b> &mdash; a human-shaped problem, taken out of the scan by definition. The reason is written into the card header, committed, pushed, visible.</li>
+    <li><b>Pull discipline:</b> <code>--ff-only</code> first; on true divergence, replay own commits, dropping only commits whose entire diff is under <code>queue/</code> &mdash; a non-card commit that cannot replay stops the cycle rather than being dropped.</li>
+    <li><b>Unattended git is hardened at one door</b> (<code>git_helper.py</code>): every git call goes through one runner that disables prompts (<code>GIT_TERMINAL_PROMPT=0</code>, empty askpass, ssh BatchMode), disables signing, and bounds time (300s network / 60s local; timeout returns a failed result, never hangs). One prompt-blocked git call would otherwise stop a single-threaded factory that still looks alive.</li>
+    <li><b>Environment knobs:</b> <code>SSSF_CONFIG</code> (roster), <code>SSSF_CAP</code>, <code>SSSF_LANES</code> (<code>"xai=2,opencode-go=1"</code>), <code>SSSF_INTEGRATION_BRANCH</code>. <code>main</code> is refused as the integration branch at startup.</li>
+  </ul>
+
+  <h3>5.4 Worktrees: parallelism with git as the mutex</h3>
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  M[("main\nhuman-owned\nsquash merges only")]
+  I[("integration\nthe living line\ncards, docs, status commits")]
+  B1["adw/1a2b3c4d_add-health-endpoint\n&rarr; worktree ../repo-worktrees/1a2b3c4d_add-health-endpoint\n&rarr; own .venv"]
+  B2["adw/5e6f7a8b_fix-login-retry\n&rarr; own worktree + .venv"]
+  M -->|"forked once,\nself-healed if absent"| I
+  I -->|cut| B1
+  I -->|cut| B2
+  B1 -->|"ff-merge of rebased\ndetached copy"| I
+  B2 -->|"ff-merge"| I
+  I -->|"operator's one squash\nper finished chunk"| M
+</pre>
+    </div>
+    <figcaption>Branch topology. One branch + one worktree + one venv per run; the main checkout never moves. Nothing in the factory ever checks out, commits to, or pushes <code>main</code>.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Naming:</b> branch <code>adw/&lt;adw_id&gt;_&lt;slug&gt;</code> (slug = first four words of the title); worktree directory = branch name minus the prefix, in a sibling directory outside the repo.</li>
+    <li><b>Concurrency control is git itself:</b> <code>git worktree add</code> for a branch already checked out elsewhere fails &mdash; one branch per run means one tree per run, enforced with no lock file or daemon.</li>
+    <li><b>Venv isolation:</b> every subprocess pins <code>UV_PROJECT_ENVIRONMENT</code> to the tree's own <code>.venv</code>, provisioned at creation (never mid-phase) &mdash; parallel runs never share an environment.</li>
+    <li><b>Reconciliation</b> (<code>just worktrees</code>): a full outer join of git's worktree list, <code>adw/*</code> refs, and the sessions table, classifying each row <code>alive / orphan / unmerged / merged</code>. Exit 1 means work is stranded &mdash; silence is the bug.</li>
+    <li><b>&ldquo;Merged&rdquo; is content equality</b>, not ancestry (<code>git merge-tree</code> output equals the trunk's tree), so squash-merged branches classify correctly. Prune removes only proven-merged rows, with git's own <code>remove</code>/<code>branch -d</code> (never <code>-D</code>) as the second safety net.</li>
+    <li><b>Escape hatch:</b> <code>worktrees.enabled: false</code> falls back to a branch cut in the main checkout &mdash; a written decision for a box that can't support worktrees, never an accident.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="setup">
+  <h2><span class="num">06</span>How it sits on a machine</h2>
+  <p class="kicker">No server assumed. The factory is files in a repo plus a handful of resolved tools; the same product converges on a laptop, a VPS, or a container.</p>
+
+  <h3>6.1 The deployment unit: stamp, don't install</h3>
+  <p>The factory ships as a skill package whose <code>templates/adws/</code> is a byte-mirror of the live <code>adws/</code> tree. A stamper copies it into any target repo under a <b>two-worlds rule</b>:</p>
+  <ul>
+    <li><b>Factory-owned</b> (<code>adws/*.py</code>, <code>adw_modules/</code>, tests, <code>queue/TEMPLATE.md</code>): re-stamped to the package's bytes on <em>every</em> run &mdash; a partial refresh once produced a two-generation tree (new engine importing types an old module lacked), so skip-if-exists is banned for these.</li>
+    <li><b>Operator-owned</b> (the roster YAML, <code>adw_data/</code>, <code>pyproject.toml</code>, <code>justfile</code>, <code>.env</code>, every queue card): never overwritten without <code>--force</code>.</li>
+  </ul>
+  <p>Mirror drift is caught mechanically: a sync-check test runs inside the engine's own merge gate, so an edit to the live tree that skips the mirror goes red on the branch that caused it.</p>
+
+  <h3>6.2 Execution model</h3>
+  <ul>
+    <li><b>Every ADW is a self-contained PEP 723 script</b> (<code>#!/usr/bin/env -S uv run</code> + inline dependency block: pydantic, python-dotenv, pyyaml, rich). <code>uv run</code> uses the script's own metadata and skips the surrounding project entirely &mdash; there is no installed package. Don't port it as one.</li>
+    <li>The root <code>pyproject.toml</code> exists for the <b>pinned quality toolchain</b> only: group <code>dev</code> (ruff, mypy, pytest) kept separate from group <code>scan</code> (the AI-defect scanner, whose build needs a compiler on some hosts) so one group's failure never takes the other down.</li>
+    <li><b>Nothing depends on ambient state:</b> encoding pinned per pipe, extensions loaded explicitly, config paths passed explicitly, launchers (<code>uv</code>, the harness) resolved to absolute paths &mdash; bare names on a service's minimal PATH silently failed every dispatched card once.</li>
+  </ul>
+
+  <h3>6.3 Configuration surfaces</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Surface</th><th>Holds</th></tr>
+    <tr><td><code>adws/adw_sssf_config/*.yaml</code></td><td>the roster(s) &mdash; the entire model setup, &sect;04</td></tr>
+    <tr><td><code>.env</code> (repo root, loaded by <code>just</code> and dotenv)</td><td>harness launch paths (<code>PI_PATH</code>, <code>PI_MODELS_PATH</code>, <code>PI_BRIDGE_PATH</code>), <code>ENGINEER_NAME</code>; merged into, never overwritten</td></tr>
+    <tr><td><code>~/.sdl-factory/secrets.env</code></td><td>machine-level credentials, auto-loaded at module import by every ADW/dispatch/engine &mdash; no service-manager environment file needed; relocatable via <code>SDL_FACTORY_HOME</code></td></tr>
+    <tr><td>env knobs</td><td><code>SSSF_CONFIG</code>, <code>SSSF_CAP</code>, <code>SSSF_LANES</code>, <code>SSSF_INTEGRATION_BRANCH</code></td></tr>
+    <tr><td><code>justfile</code></td><td>the operator's entry points: <code>demo</code> (two cheap read-only runs, the smoke test), <code>work</code>/<code>work-next</code>, <code>sdlc</code>, <code>engine</code>, <code>worktrees</code>/<code>worktrees-prune</code>, <code>sessions</code>/<code>phases</code>/<code>tail</code>, <code>doctor</code> (token-free toolchain probe), <code>clean</code></td></tr>
+  </table></div>
+  <p>Provider credentials live in the harness's own auth store, not in <code>.env</code> &mdash; the roster's providers authenticate through the harness. A lane is proven live only by a real round trip returning non-zero tokens; auth-status commands lie in both directions.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="porting">
+  <h2><span class="num">07</span>The porting map</h2>
+  <p class="kicker">The factory drives its agents through <code>pi</code>, a coding-agent harness &mdash; but the harness is a deliberate seam, one module wide. Everything else is Python + git + SQLite and ports as-is.</p>
+
+  <figure>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph CORE["Portable core — keep"]
+    direction TB
+    DT["data_types.py\nenvelopes, config schema, phases"]
+    AG["agents.py\norchestration: parse-retry, gates,\ncorrections, validation"]
+    GA["gates.py &middot; permissions.py"]
+    TR["tracer.py &middot; session.py &middot; runner.py"]
+    QU["quality.py &middot; changes.py &middot; git_helper.py"]
+    WT["worktrees.py &middot; dispatch.py &middot; engine.py"]
+    PT["prompt templates\n(system.md / user.md per role)"]
+  end
+  subgraph SEAM["The seam — replace"]
+    AP["agent_pi.py\nharness adapter:\nspawn, stream, usage"]
+  end
+  AG -->|"Request in,\nResult out"| AP
+  AP -->|"your harness's\nnon-interactive mode"| HX["YOUR harness"]
+  ACC["agent_cc.py — the stub already\nsketching a second adapter"] -.-> SEAM
+  classDef keep fill:#dcfce7,color:#14532d,stroke:#16a34a
+  classDef swap fill:#fee2e2,color:#7f1d1d,stroke:#dc2626
+  class DT,AG,GA,TR,QU,WT,PT keep
+  class AP swap
+</pre>
+    </div>
+    <figcaption>The seam is one adapter module. The config already carries the switch (<code>coding_agent:</code> per agent), and a second-adapter stub exists &mdash; the orchestration in <code>agents.execute()</code> calls the adapter through a single send function.</figcaption>
+  </figure>
+
+  <h3>7.1 What your harness adapter must provide</h3>
+  <ol>
+    <li><b>Non-interactive invocation</b> with a separate system prompt and user prompt, cwd set to the run's own worktree, stdin closed (an inherited stdin on a non-TTY read hangs forever).</li>
+    <li><b>Session continuation.</b> The correction machinery (JSON-fix retries, gate corrections, cross-phase fix loops, resume after a crash) re-prompts the <em>same session</em> so the agent keeps its context. If your harness can't continue a session, every correction becomes a cold start &mdash; the loops still work but cost multiplies. A lane that cannot continue cannot sit at a loop node.</li>
+    <li><b>Final text returned</b> containing the JSON envelope (the extractor tolerates surrounding prose).</li>
+    <li><b>A tool allowlist</b>, or acceptance that the post-hoc permission diff is the real boundary (it already is &mdash; the allowlist is intent, the diff is enforcement).</li>
+    <li><b>Usage accounting</b> per call (tokens, cost if available) for the trace's per-run totals, and ideally <b>streamed tool-call events</b> for the live trace &mdash; both degrade gracefully if absent.</li>
+    <li><b>A catalog probe</b> (list models without generating) so roster validation can fail fast at zero cost &mdash; or replace with a static check.</li>
+    <li><b>Explicit everything:</b> no ambient extension discovery, no config the harness rewrites underneath you as the only home of factory-critical settings.</li>
+  </ol>
+
+  <h3>7.2 What is pi-specific and dies at the seam</h3>
+  <ul>
+    <li>The subprocess wire format: <code>pi -ne -p --mode json --provider ... --model ... --session-id ... --system-prompt ... [-e ext]</code> and its streamed JSONL event shapes, mirrored by the <code>PiRequest</code>/<code>PiResult</code>/<code>UsageBreakdown</code> types &mdash; write your own pair.</li>
+    <li><code>harness_engineering</code> (TypeScript extension files loaded per agent; the subagent fan-out tools for planner/scout; the claude-bridge extension that puts Anthropic models behind a pi provider). Your harness has its own plugin story, or none &mdash; the <em>merge-not-replace</em> loader rule is the part to keep.</li>
+    <li><code>provider/model</code> naming and the lane vocabulary (<code>ollama-cloud</code>, <code>xai</code>, &hellip;) &mdash; the <b>lane-per-account scheduling concept ports unchanged</b>; the names are pi's.</li>
+    <li>The Windows landmines (batch-shim truncation forcing <code>PI_PATH</code>, cp1252 encoding pins, timestamp-staleness instead of pid-probing, path-length pressure). A Linux on-prem target sheds most of them &mdash; but keep the encoding pin per subprocess and the no-prompt git hardening regardless.</li>
+  </ul>
+
+  <h3>7.3 Suggested rebuild order</h3>
+  <ol>
+    <li><b>The envelope + phase + trace spine</b> (&sect;2.1&ndash;2.3, 2.7) with your adapter and one trivial pipeline (<code>adw_prompt</code>-shaped). Prove one verified round trip.</li>
+    <li><b>Gates + permissions</b> (&sect;2.4&ndash;2.5) &mdash; the trust layer. Then <code>adw_build_test</code>-shaped: builder + deterministic test loop.</li>
+    <li><b>The roster config + validation</b> (&sect;04) with your model names; wire cross-family review.</li>
+    <li><b>Worktrees + dispatch</b> (&sect;5.2, 5.4) &mdash; parallelism and the card contract.</li>
+    <li><b>The engine</b> (&sect;5.3) last &mdash; it only composes what already works, and every piece of it is testable by hand first (<code>dispatch</code> is a command you can run yourself).</li>
+  </ol>
+</section>
+
+<!-- ============================================================ -->
+<section id="rules">
+  <h2><span class="num">08</span>The rules the design lives by</h2>
+  <p class="kicker">Argued once, then enforced. These explain most &ldquo;why is it built this way?&rdquo; questions you'll hit while rebuilding.</p>
+
+  <ol class="rulegrid">
+    <li><b>KISS.</b> If a ticket's answer is &ldquo;add a system,&rdquo; it is probably wrong. A discovered capability is not a reason to add a node.</li>
+    <li><b>Validate before running; typed outputs only.</b> No untyped handoffs anywhere &mdash; every agent declares a concrete envelope class.</li>
+    <li><b>Gates validate claims, not guesses.</b> Deterministic review wherever a predicate can decide; exactly one agent reviewer, never stacked.</li>
+    <li><b>Cross-family review.</b> The family that writes the code never reviews it.</li>
+    <li><b>One agent, one prompt, one purpose.</b> Identity in <code>system.md</code>, task shape at the call site.</li>
+    <li><b>ADW scripts stay thin.</b> All low-level logic lives in the shared modules; a pipeline is a readable sequence of phases.</li>
+    <li><b>A known command is code, not an agent.</b> The reason there is no tester role.</li>
+    <li><b>Every phase earns a description.</b> Enforced at construction time, before the run is in the trace.</li>
+    <li><b><code>tools:</code> is capability, <code>writes:</code> is the boundary.</b> Enforced in code after every call.</li>
+    <li><b>Every ADW ends in <code>run.finish()</code>.</b> One place where phase success meets domain acceptance.</li>
+    <li><b>The factory never builds the factory.</b> <code>protected_files</code> covers the machinery, always.</li>
+    <li><b>Never depend on ambient state.</b> Explicit paths, explicit extensions, explicit config &mdash; per call.</li>
+    <li><b>Park, never delete.</b> Uninstall and replace paths move files aside; nothing is ever removed.</li>
+    <li><b>Production-grade code, never mock data.</b> The reason the AI-defect scan exists, and why <code>incomplete</code> can never read green.</li>
+    <li><b>Two human gates, never in the middle.</b> Mid-run escalation is a defect report against the intake, not a feature.</li>
+    <li><b>Trunk-based, with a machine-owned living line.</b> Short-lived <code>adw/*</code> branches into <code>integration</code>; <code>main</code> moves only by the operator's squash. A run either merges or leaves a visible, named artifact explaining why not &mdash; silence is the bug.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>Compiled 2026-08-19 from the SDL Factory repository (code as primary source; <code>MAP.md</code> as the planning record). Core pattern: disler's <a href="https://github.com/disler/super-simple-software-factory">Super Simple Software Factory</a>, MIT. The dashboard, desktop app, and server provisioning exist in the source repo but are deliberately outside this dossier's scope &mdash; the SQLite trace is the stable surface any replacement observer reads.</p>
+</footer>
+
+</div>
