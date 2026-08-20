@@ -332,7 +332,7 @@ if [ -d /etc/apt/apt.conf.d ]; then
   fi
 fi
 
-APT_PKGS="git curl ca-certificates python3 python3-venv build-essential"
+APT_PKGS="git curl ca-certificates python3 python3-venv python3-dev build-essential"
 MISSING=""
 for pkg in $APT_PKGS; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
