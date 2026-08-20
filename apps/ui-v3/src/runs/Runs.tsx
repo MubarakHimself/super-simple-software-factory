@@ -111,22 +111,45 @@ export default function Runs() {
   }, [adwId, rows, navigate, encoded]);
 
   const row = useMemo(() => rows.find((candidate) => candidate.adwId === adwId) ?? null, [rows, adwId]);
+  // The list's own phases for the selected run, which is what the beat rail
+  // falls back to before (or instead of) the per-run detail read. It matters
+  // now that the list can hold runs recorded on a MACHINE: `/runs/:adw_id`
+  // reads this checkout's db and answers `{factory:"absent"}` for those, so
+  // without this the rail would be empty for exactly the runs the operator
+  // opened the surface to look at. Detail's own prop already documents this
+  // fallback ("the list's own until then"); the call site simply never passed it.
+  const listPhases = useMemo(
+    () => (row ? (runsData?.runs.find((candidate) => candidate.adw_id === row.adwId)?.phases ?? []) : []),
+    [row, runsData],
+  );
   const inFlight = row?.status.state === "running" || row?.status.state === "cooldown";
   const wantsDiff = row?.status.state === "integrated" || row?.status.state === "shipped" || row?.status.state === "done";
 
+  // A row the list read off a MACHINE (`row.machine` is the host chip beside
+  // it) has its detail, its work log and its diff in THAT machine's record.
+  // These three reads are this checkout's only - `/runs/:adw_id` and its two
+  // siblings look the id up in the local sssf.db - so asking them about such a
+  // run answers a bare 404 "no run <id>" on any laptop that holds an sssf.db of
+  // its own, and the pane would print that as a read failure THREE TIMES over
+  // (detail, work log, diff) about a run that is running perfectly well four
+  // thousand kilometres away. So they are not asked. The pane already has the
+  // list's own phases for the beat rail and a "this stays on <host>" sentence
+  // for the bodies, which is the truth rather than an alarm.
+  const local = row && !row.machine ? row : null;
+
   const detail = useResource<RunDetail | FactoryAbsent>(
-    row ? `${projectId}|run|${row.adwId}` : null,
-    row ? `/api/app/p/${encoded}/runs/${encodeURIComponent(row.adwId)}` : null,
+    local ? `${projectId}|run|${local.adwId}` : null,
+    local ? `/api/app/p/${encoded}/runs/${encodeURIComponent(local.adwId)}` : null,
     inFlight ? LIVE_INTERVAL_MS : undefined,
   );
   const worklog = useResource<WorkLogPage | FactoryAbsent>(
-    row ? `${projectId}|worklog|${row.adwId}` : null,
-    row ? `/api/app/p/${encoded}/runs/${encodeURIComponent(row.adwId)}/worklog` : null,
+    local ? `${projectId}|worklog|${local.adwId}` : null,
+    local ? `/api/app/p/${encoded}/runs/${encodeURIComponent(local.adwId)}/worklog` : null,
     inFlight ? LIVE_INTERVAL_MS : undefined,
   );
   const diff = useResource<DiffResponse | FactoryAbsent>(
-    row && wantsDiff ? `${projectId}|diff|${row.adwId}` : null,
-    row && wantsDiff ? `/api/app/p/${encoded}/runs/${encodeURIComponent(row.adwId)}/diff` : null,
+    local && wantsDiff ? `${projectId}|diff|${local.adwId}` : null,
+    local && wantsDiff ? `/api/app/p/${encoded}/runs/${encodeURIComponent(local.adwId)}/diff` : null,
   );
   const detailData = present(detail.data);
   const worklogData = present(worklog.data);
@@ -253,13 +276,14 @@ export default function Runs() {
         error={runs.error}
         loading={runs.loading}
         factoryAbsent={noFactory}
+        source={runsData?.source ?? null}
       />
 
       {row && status ? (
         <Detail
           row={row}
           status={status}
-          phases={detailData?.phases ?? []}
+          phases={detailData?.phases ?? listPhases}
           branch={detailData?.branch ?? null}
           runStart={detailData?.session.started_at ?? null}
           detailError={detailData ? null : detail.error}

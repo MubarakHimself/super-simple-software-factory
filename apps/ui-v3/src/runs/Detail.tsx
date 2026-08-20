@@ -174,7 +174,7 @@ export function Detail(props: DetailProps) {
         ) : null}
 
         {state === "integrated" || state === "shipped" || state === "done" ? (
-          <DiffSection card={shipCard} diff={diff} sha={shipCard?.sha ?? null} />
+          <DiffSection card={shipCard} diff={diff} sha={shipCard?.sha ?? null} machine={row.machine} />
         ) : null}
 
         {state === "integrated" && shipCard ? <Acceptance card={shipCard} /> : null}
@@ -204,7 +204,15 @@ export function Detail(props: DetailProps) {
             entries={worklog.data?.entries ?? []}
             runStart={props.runStart}
             hasMore={worklog.data?.has_more ?? false}
-            emptySentence="This run's record holds no work-log entries — nothing has been written for it yet."
+            // A run read off a machine (row.machine is set) has its work log on
+            // THAT machine. "nothing has been written for it yet" would be a
+            // flat untruth about a run that is writing entries right now, four
+            // thousand kilometres away - so the sentence says where they are.
+            emptySentence={
+              row.machine
+                ? `This run's work log stays ${row.machine} — this app reads the run list from that machine, not each run's log.`
+                : "This run's record holds no work-log entries — nothing has been written for it yet."
+            }
           />
         ) : null}
       </div>

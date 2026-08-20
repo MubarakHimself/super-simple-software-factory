@@ -78,6 +78,26 @@ export interface RunSummary {
   /** the run's human name, stamped at worktree entry; null when it never cut
    * a branch - never invented, so the row falls back to the adw id */
   title: string | null;
+  /** the machine this row was read from ("on 155.133.27.86"), set only on runs
+   * the server fetched off a registered machine. `model.ts:machineOf` has
+   * always read this field defensively; the server now fills it, which is why
+   * the muted chip appears with no other change here. */
+  machine?: string | null;
+}
+
+/**
+ * Where the rows came from (`shared/types.ts:RunsSource`). `origin: "local"` is
+ * this checkout's own sssf.db and says nothing more. `origin: "machine"` means
+ * the server read a registered machine over SSH, and `reason` is then always
+ * one plain sentence naming the host - including when there is nothing to show,
+ * so "no runs" is never a blank shrug.
+ */
+export interface RunsSource {
+  origin: "local" | "machine";
+  host: string | null;
+  repo_dir: string | null;
+  reachable: boolean | null;
+  reason: string | null;
 }
 
 export interface RunsResponse {
@@ -85,6 +105,8 @@ export interface RunsResponse {
   /** `adw_prompt` self-checks the list hides; said out loud rather than
    * silently dropped, so an empty list is never a mystery */
   hidden_self_checks: number;
+  /** optional only for a server that predates it - every shipped one sends it */
+  source?: RunsSource;
 }
 
 export interface RunDetail {

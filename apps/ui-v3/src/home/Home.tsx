@@ -32,7 +32,15 @@ import { Dot, type Tone } from "../shared/Dot.tsx";
 import { BookmarkIcon } from "../shared/Icons.tsx";
 import { EmptyState, ReadFailure } from "../shell/EmptyState.tsx";
 import { InitializeFactory } from "../shell/InitializeFactory.tsx";
-import type { CardsPayload, HomeCard, HomeLiveRun, HomeSession, RunsPayload, ShipReportPayload } from "./types.ts";
+import type {
+  CardsPayload,
+  HomeCard,
+  HomeLiveRun,
+  HomeSession,
+  ReadinessPayload,
+  RunsPayload,
+  ShipReportPayload,
+} from "./types.ts";
 import "./home.css";
 
 function greetingText(): string {
@@ -166,6 +174,11 @@ function ShippingReport({ projectId, ship }: { projectId: string; ship: Resource
  *   · no cards                  -> publishing a batch is what fills the Board
  *
  * Never "no data yet" on its own, and never a fabricated row.
+ *
+ * `factoryAbsent` is `/readiness`'s `factory.config` inverted - the SAME field
+ * the checklist inside this panel prints. It is deliberately not "this project
+ * has no runs recorded here", which is what it used to be and what made this
+ * banner contradict its own rows (see the comment at its call site).
  */
 function NothingYet({
   projectId,
@@ -190,7 +203,9 @@ function NothingYet({
       <div className="home-empty">
         <EmptyState
           heading="No factory here"
-          sentence="This project has no adws/ in it yet, so there is nothing for the engine to run — the factory installer is what puts the roster, the queue seam and the config in place."
+          // The same file the checklist below reads, named the same way, so
+          // the banner and its own rows can never say opposite things again.
+          sentence="This project has no adws/adw_sssf_config/sssf.config.yaml in it yet, so there is nothing for the engine to run — the factory installer is what puts the roster, the queue seam and the config in place."
         >
           <InitializeFactory projectId={projectId} projectName={projectName} onInitialized={onInitialized} />
         </EmptyState>
@@ -254,6 +269,12 @@ export default function Home() {
   const ship = useResource<ShipReportPayload>(`${projectId}|ship-report`, `/api/app/p/${encodeURIComponent(projectId)}/ship/report`);
   const cardsRes = useResource<CardsPayload>(`${projectId}|cards`, `/api/app/p/${encodeURIComponent(projectId)}/cards`);
   const runsRes = useResource<RunsPayload>(`${projectId}|runs`, `/api/app/p/${encodeURIComponent(projectId)}/runs`);
+  // The banner below and the checklist INSIDE it must read the same fact. This
+  // is that fact, and it is the one InitializeFactory already reads.
+  const readyRes = useResource<ReadinessPayload>(
+    `${projectId}|readiness`,
+    `/api/app/projects/${encodeURIComponent(projectId)}/readiness`,
+  );
 
   const items = cardsRes.data?.items ?? [];
   const doneCards = items.filter((c) => c.state === "done").sort(byName);
@@ -280,8 +301,24 @@ export default function Home() {
     shippedCards.length === 0 &&
     blockedCards.length === 0 &&
     failedSessions.length === 0;
-  const settled = !cardsRes.loading && !runsRes.loading && !cardsRes.error && !runsRes.error;
-  const factoryAbsent = runsRes.data?.factory === "absent";
+  const settled = !cardsRes.loading && !runsRes.loading && !readyRes.loading && !cardsRes.error && !runsRes.error;
+
+  /**
+   * ── The contradiction this line used to print ────────────────────────────
+   * It read `runsRes.data?.factory === "absent"`. That flag is `scoped.ts`'s
+   * answer to ONE question - is there an `adws/adw_data/sssf.db` in this
+   * checkout - and only a RUN ever writes one. So a project that was fully
+   * installed but had never run a card HERE (which, with the engine on a VPS,
+   * is every project) rendered "No factory here — This project has no adws/ in
+   * it yet" directly above the checklist inside that very banner saying
+   * "Factory initialized: yes — sssf.config.yaml is there".
+   *
+   * One truth drives both now: `/readiness`'s `factory.config`, which is the
+   * checklist's own field and the file the installer stamps. And it is only
+   * ever claimed from an ANSWERED read - a readiness read that failed or has
+   * not landed says nothing rather than accusing the folder of being empty.
+   */
+  const factoryAbsent = readyRes.data ? !readyRes.data.factory.config : false;
   const readyCount = items.filter((card) => card.state === "ready").length;
 
   return (
@@ -325,9 +362,12 @@ export default function Home() {
             factoryAbsent={factoryAbsent}
             readyCount={readyCount}
             onInitialized={() => {
-              // The two reads that answer "is there a factory here" — once
-              // they land, `factoryAbsent` is false and this block replaces
-              // itself with the real surface.
+              // `readiness` is the read that answers "is there a factory here"
+              // — once it lands, `factoryAbsent` is false and this block
+              // replaces itself with the real surface. The other two are
+              // refreshed because the installer just put a queue seam and a
+              // roster on disk for them to find.
+              readyRes.refresh();
               cardsRes.refresh();
               runsRes.refresh();
             }}

@@ -5,10 +5,19 @@
  * name + the plain sentence about where it stands (line 2), with the adw id
  * beneath it (line 3). No row ever prints a bare state word: "in the merge
  * queue", "lane cooldown", "failed · test" are sentences, not enums.
+ *
+ * "This project's record" is now either checkout's: when this laptop holds no
+ * rows and the project names a machine, the server reads THAT machine's
+ * sssf.db and stamps each row with the host it came from - which line 2 already
+ * renders as its muted chip. The empty case is `runsEmptyState` in model.ts,
+ * because "no factory here", "nothing recorded yet", "nothing on that machine
+ * yet" and "that machine did not answer" are four different sentences and this
+ * column must never print the wrong one.
  */
 import { Dot } from "../shared/Dot.tsx";
 import { EmptyState, ReadFailure } from "../shell/EmptyState.tsx";
-import { modelName, type RunRowModel } from "./model.ts";
+import { modelName, runsEmptyState, type RunRowModel } from "./model.ts";
+import type { RunsSource } from "./types.ts";
 
 export function RunList({
   rows,
@@ -18,6 +27,7 @@ export function RunList({
   error,
   loading,
   factoryAbsent,
+  source,
 }: {
   rows: RunRowModel[];
   selectedAdwId: string | null;
@@ -28,8 +38,12 @@ export function RunList({
   /** the server's own 200 `{factory:"absent"}` - no record here, not an empty
    * one, and the two say completely different things to an operator */
   factoryAbsent: boolean;
+  /** where these rows came from; when it is a machine, that machine's own
+   * sentence is what an empty list says */
+  source: RunsSource | null;
 }) {
   const active = rows.filter((row) => row.status.state === "running" || row.status.state === "cooldown").length;
+  const empty = runsEmptyState(source, factoryAbsent);
 
   return (
     <div className="run-list-col">
@@ -49,19 +63,17 @@ export function RunList({
           </p>
         ) : null}
 
-        {rows.length === 0 && !loading && factoryAbsent ? (
-          <EmptyState
-            heading="No factory record"
-            sentence="This project has no sssf.db on this machine — the engine writes one the first time it runs a card here."
-          />
+        {/* Rows read off a machine say so ONCE, here, in the server's own
+            sentence — which names the host AND the checkout they came out of.
+            The per-row chip is short ("on 155.133.27.86"); a machine can hold
+            more than one factory checkout, so the path is what makes these rows
+            unambiguously attributable, and it must not be visible only in the
+            empty case. */}
+        {rows.length > 0 && source?.origin === "machine" && source.reason ? (
+          <p className="run-list-note">{source.reason}</p>
         ) : null}
 
-        {rows.length === 0 && !loading && !factoryAbsent ? (
-          <EmptyState
-            heading="No runs yet"
-            sentence="The engine records a run when it picks up a ready card; nothing here needs dispatching."
-          />
-        ) : null}
+        {rows.length === 0 && !loading ? <EmptyState heading={empty.heading} sentence={empty.sentence} /> : null}
 
         {rows.map((row) => {
           const model = modelName(row.model);

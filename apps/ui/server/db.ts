@@ -178,14 +178,8 @@ export class SssfDb {
    * plus anything started but not yet finished (agents.py writes the row only
    * after the envelope persists, so a running agent has no row there yet). */
   private agentsFor(adwIds: string[]): Map<string, AgentSession[]> {
-    const byAdw = new Map<string, AgentSession[]>();
-    if (adwIds.length === 0) return byAdw;
+    if (adwIds.length === 0) return new Map();
     const placeholders = adwIds.map(() => "?").join(", ");
-    const append = (adwId: string, agent: AgentSession) => {
-      const list = byAdw.get(adwId);
-      if (list) list.push(agent);
-      else byAdw.set(adwId, [agent]);
-    };
 
     const color = this.optionalColumn("agent_sessions", "color");
     const ctxUsed = this.optionalColumn("agent_sessions", "context_tokens");
@@ -198,42 +192,17 @@ export class SssfDb {
           ORDER BY created_at, agent`,
       )
       .all(...adwIds);
-    for (const row of completed) append(row.adw_id, row);
 
     const started = this.db
-      .query<
-        { adw_id: string; agent: string | null; payload_json: string | null; started_at: string | null },
-        string[]
-      >(
+      .query<AgentStartRow, string[]>(
         `SELECT e.adw_id, p.owner AS agent, e.payload_json, e.started_at
            FROM events e JOIN phases p ON p.phase_id = e.phase_id
           WHERE e.adw_id IN (${placeholders}) AND e.type = 'agent_start'
           ORDER BY e.rowid`,
       )
       .all(...adwIds);
-    for (const row of started) {
-      if (!row.agent) continue;
-      if (byAdw.get(row.adw_id)?.some((a) => a.agent === row.agent)) continue;
-      let payload: { model?: string; session_id?: string; color?: string } = {};
-      try {
-        payload = JSON.parse(row.payload_json ?? "{}");
-      } catch {
-        /* malformed payload -> just no label, never a failed request */
-      }
-      append(row.adw_id, {
-        adw_id: row.adw_id,
-        agent: row.agent,
-        coding_agent: null,
-        model: payload.model ?? null,
-        session_id: payload.session_id ?? null,
-        color: payload.color ?? null,
-        context_tokens: null,
-        context_window: null,
-        created_at: row.started_at,
-        last_used_at: row.started_at,
-      });
-    }
-    return byAdw;
+
+    return agentsFromRows(completed, started);
   }
 
   /** adw_id -> human title, derived from the run's own trace events - the
@@ -261,38 +230,17 @@ export class SssfDb {
    * post-fix run's real `derive_title` is never overwritten by the cruder
    * fallback its own (later) `worktree` event also carries. */
   private titlesFor(adwIds: string[]): Map<string, string> {
-    const titles = new Map<string, string>();
-    if (adwIds.length === 0) return titles;
+    if (adwIds.length === 0) return new Map();
     const placeholders = adwIds.map(() => "?").join(", ");
-    const rows = this.db
-      .query<{ adw_id: string; name: string; payload_json: string | null }, string[]>(
-        `SELECT adw_id, name, payload_json FROM events
-          WHERE adw_id IN (${placeholders}) AND type = 'log' AND name IN ('branch', 'worktree')
-          ORDER BY rowid`,
-      )
-      .all(...adwIds);
-    for (const row of rows) {
-      let payload: { branch?: string; title?: string } = {};
-      try {
-        payload = JSON.parse(row.payload_json ?? "{}");
-      } catch {
-        continue; // malformed payload -> no title from this row, never a failed request
-      }
-      const fallback = payload.branch ? humanizeSlug(slugFromBranch(payload.branch)) : "";
-      if (row.name === "branch") {
-        // Authoritative: a real title if this run stamped one, else the same
-        // humanized-slug fallback. ORDER BY rowid -> a later `branch` row
-        // (a rejoin's fresh worktree entry) always wins over an earlier one.
-        const title = payload.title || fallback;
-        if (title) titles.set(row.adw_id, title);
-      } else if (fallback && !titles.has(row.adw_id)) {
-        // Old shape, no `branch` row seen for this run (yet) - this is the
-        // only title source it has. Never overrides a `branch` row, whatever
-        // order the two arrive in.
-        titles.set(row.adw_id, fallback);
-      }
-    }
-    return titles;
+    return titlesFromLogRows(
+      this.db
+        .query<TitleLogRow, string[]>(
+          `SELECT adw_id, name, payload_json FROM events
+            WHERE adw_id IN (${placeholders}) AND type = 'log' AND name IN ('branch', 'worktree')
+            ORDER BY rowid`,
+        )
+        .all(...adwIds),
+    );
   }
 
   /** Everything except `branch`, which needs a git call the caller (index.ts)
@@ -471,6 +419,98 @@ export class SssfDb {
     for (const [key, v] of map) out.set(key, { last_at: v.last_at, last_tokens: v.last_tokens, run_count: v.run_count });
     return out;
   }
+}
+
+/* ── the row assemblers, extracted so a SECOND reader can reuse them ────────
+ *
+ * `app/remote.ts` reads a *server's* sssf.db over SSH (python3 + sqlite3, the
+ * box has no sqlite CLI) and has to hand the Runs surface rows of exactly the
+ * shape this class produces. The two SELECTs are trivially portable; the rules
+ * that turn their rows into `agents` and `title` are not - they are the subtle
+ * part, and a second copy of them would drift the moment either side is
+ * touched. So the queries stay per-transport and the RULES live here, once,
+ * taking plain rows. Nothing about the local path changed: the methods above
+ * call these with exactly the rows they always built.  */
+
+export interface AgentStartRow {
+  adw_id: string;
+  agent: string | null;
+  payload_json: string | null;
+  started_at: string | null;
+}
+
+/** `agent_sessions` rows, plus one synthesised row per agent that has STARTED
+ * and not yet been written to that table - a running agent, which is the only
+ * kind an operator watching a live factory cares about. A started row never
+ * displaces a completed one for the same agent. */
+export function agentsFromRows(completed: AgentSession[], started: AgentStartRow[]): Map<string, AgentSession[]> {
+  const byAdw = new Map<string, AgentSession[]>();
+  const append = (adwId: string, agent: AgentSession) => {
+    const list = byAdw.get(adwId);
+    if (list) list.push(agent);
+    else byAdw.set(adwId, [agent]);
+  };
+
+  for (const row of completed) append(row.adw_id, row);
+
+  for (const row of started) {
+    if (!row.agent) continue;
+    if (byAdw.get(row.adw_id)?.some((a) => a.agent === row.agent)) continue;
+    let payload: { model?: string; session_id?: string; color?: string } = {};
+    try {
+      payload = JSON.parse(row.payload_json ?? "{}");
+    } catch {
+      /* malformed payload -> just no label, never a failed request */
+    }
+    append(row.adw_id, {
+      adw_id: row.adw_id,
+      agent: row.agent,
+      coding_agent: null,
+      model: payload.model ?? null,
+      session_id: payload.session_id ?? null,
+      color: payload.color ?? null,
+      context_tokens: null,
+      context_window: null,
+      created_at: row.started_at,
+      last_used_at: row.started_at,
+    });
+  }
+  return byAdw;
+}
+
+export interface TitleLogRow {
+  adw_id: string;
+  name: string;
+  payload_json: string | null;
+}
+
+/** The title rule described on `titlesFor` above, over rows already fetched in
+ * `rowid` order: `branch` rows are authoritative, `worktree` rows only fill in
+ * for a run that has no `branch` row at all. */
+export function titlesFromLogRows(rows: TitleLogRow[]): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const row of rows) {
+    let payload: { branch?: string; title?: string } = {};
+    try {
+      payload = JSON.parse(row.payload_json ?? "{}");
+    } catch {
+      continue; // malformed payload -> no title from this row, never a failed request
+    }
+    const fallback = payload.branch ? humanizeSlug(slugFromBranch(payload.branch)) : "";
+    if (row.name === "branch") {
+      // Authoritative: a real title if this run stamped one, else the same
+      // humanized-slug fallback. ORDER BY rowid -> a later `branch` row
+      // (a rejoin's fresh worktree entry) always wins over an earlier one.
+      const title = payload.title || fallback;
+      if (title) titles.set(row.adw_id, title);
+    } else if (fallback && !titles.has(row.adw_id)) {
+      // Old shape, no `branch` row seen for this run (yet) - this is the
+      // only title source it has. Never overrides a `branch` row, whatever
+      // order the two arrive in.
+      titles.set(row.adw_id, fallback);
+    }
+  }
+  return titles;
 }
 
 /** `adw/<adw_id>_<slug>` -> `<slug>` - the part `humanizeSlug` turns back

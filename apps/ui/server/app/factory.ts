@@ -8,15 +8,20 @@
  *
  * ── The honesty rule this module exists to keep ────────────────────────────
  * The engine runs on the server (`sdl-engine.service`), and its health is the
- * engine's own to report (docs/user-journeys.md's Engine row). This laptop has
- * no engine and no server connection yet, so everything here is marked
- * `source: "local-derived"`: queue counts come from the files, lanes from the
- * roster yaml, provider definitions from the git-tracked JSON in the repo -
- * and `engine` is `"unknown"` with a sentence, never `"stopped"`. "Stopped"
- * would be a claim about a machine this process has never spoken to. When the
- * server connection lands, THAT is what fills in engine/uptime/free-slots;
- * every field which will come from there is `null` today with its own reason
- * beside it, so the surface can render the difference instead of a zero.
+ * engine's own to report (docs/user-journeys.md's Engine row). Everything this
+ * file derives from the checkout in front of it - queue counts from the files,
+ * lanes from the roster yaml, provider definitions from the git-tracked JSON -
+ * stays marked `source: "local-derived"`, and `engine` is `"unknown"` with a
+ * sentence rather than `"stopped"`, because "stopped" would be a claim about a
+ * machine this process has never spoken to.
+ *
+ * The server connection has since landed (`app/machines.ts`, and `app/remote.ts`
+ * on top of it). So when a project names a machine - its own `Runs on` binding,
+ * or the machine marked default - `/factory/health` now ASKS that machine and
+ * answers with `source: "server"` plus `source_host`, and the sentence names it
+ * ("reported by 155.133.27.86"). Nothing became a guess: a machine that could
+ * not be reached still reads `"unknown"`, with the SSH error in the reason, and
+ * a project with no machine reads exactly as it did before.
  *
  * Nothing here reads a credential. Provider auth status is `"unknown"` and
  * says why: credentials live in `~/.pi/agent/auth.json` (0600) on the machine
@@ -41,6 +46,7 @@ import { readConfig } from "../config.ts";
 import { readCards, shippedFromMain } from "./cards.ts";
 import { appError, appJson, appSafely } from "./guard.ts";
 import { appHome } from "./manifest.ts";
+import { ENGINE_UNIT, remoteEngine, resolveProjectMachine, type RemoteEngine } from "./remote.ts";
 import { readRouterAndLanes } from "./roster.ts";
 import { getScope, param } from "./scoped.ts";
 
@@ -402,6 +408,18 @@ export async function readMachines(): Promise<MachinesResponse> {
  * The footer strip. Queue counts are files, lanes are the roster, and the two
  * things only a running engine knows - liveness and uptime - are `"unknown"`
  * / `null` with the reason attached.
+ *
+ * ── The engine half, since the machines plane landed ────────────────────────
+ * The header above is still exactly right about THIS machine: no engine runs
+ * here and this file asks none. What changed is that the app now knows how to
+ * reach the machine that DOES run one (`app/remote.ts`, over the SSH layer
+ * `machines.ts` owns), so when a project names a machine, `input.engine`
+ * carries that machine's own answer and the `source`/`source_host` pair says
+ * whose answer it is. With no machine to ask, every engine field below is
+ * byte-for-byte what it always was.
+ *
+ * Uptime stays null either way: the remote read asks systemd whether the unit
+ * is active, not how long it has been - one honest question, one round trip.
  */
 export async function buildHealth(input: {
   root: string;
@@ -410,6 +428,8 @@ export async function buildHealth(input: {
   runsRunning: number | null;
   factoryPresent: boolean;
   env: string | null;
+  /** the machine's answer when this project names one, else null */
+  engine?: RemoteEngine | null;
 }): Promise<FactoryHealth> {
   const shipped = await shippedFromMain(input.root);
   const cards = await readCards({
@@ -432,15 +452,26 @@ export async function buildHealth(input: {
   };
   for (const item of cards.items) queue[item.state] += 1;
 
+  const remote = input.engine ?? null;
+
   return {
-    source: "local-derived",
+    // "server" only when a machine actually ANSWERED. A box that refused the
+    // connection leaves the claim local ("this app could not learn anything")
+    // while `source_host` still names who was asked - the two facts an
+    // operator needs to tell "nothing to ask" from "asked and got nothing".
+    source: remote?.reachable ? "server" : "local-derived",
+    source_host: remote?.host ?? null,
     checked_at: new Date().toISOString(),
-    engine: "unknown",
+    engine: remote?.engine ?? "unknown",
     engine_reason:
-      "no engine runs on this machine and no server connection is configured - the engine's own health " +
-      "arrives with that connection; these numbers were derived here from the repo",
+      remote?.reason ??
+      "no engine runs on this machine and no machine is registered for this project - the engine's own health " +
+        "arrives from the machine it runs on (Settings · Machines · Runs on); these numbers were derived here from the repo",
+    engine_restarts: remote?.restarts ?? null,
     uptime_seconds: null,
-    uptime_reason: "uptime is the engine service's own, and this machine has no engine to ask",
+    uptime_reason: remote
+      ? `uptime is the engine service's own; this read asked ${remote.host} whether ${ENGINE_UNIT} is active, not how long it has been`
+      : "uptime is the engine service's own, and this machine has no engine to ask",
     lanes: lanes.lanes,
     lanes_active: null,
     lanes_reason:
@@ -470,6 +501,14 @@ async function getHealth(req: Request): Promise<Response> {
     }
   }
 
+  // The local answer for `engine` is, and always was, "unknown - nothing here
+  // runs one". So whenever this project names a machine, ask it. `remoteEngine`
+  // caches per machine for 15s and turns every failure into a named state, so
+  // this poll opens at most one SSH connection per machine per 15s and cannot
+  // throw into the route.
+  const machine = await resolveProjectMachine(id);
+  const engine = machine ? await remoteEngine(machine) : null;
+
   return appJson(
     await buildHealth({
       root: scope.root,
@@ -478,6 +517,7 @@ async function getHealth(req: Request): Promise<Response> {
       runsRunning,
       factoryPresent: scope.db !== null,
       env: process.env.SSSF_LANES?.trim() || null,
+      engine,
     }),
   );
 }

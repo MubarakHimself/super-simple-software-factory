@@ -13,7 +13,17 @@
  *     the endpoint is not deployed)         the server's own error string
  *   - engine unknown                     -> says exactly that, with the
  *                                           server's own reason underneath
- *   - engine running / stopped           -> the mock's own sentence
+ *   - engine running / stopped           -> the mock's own sentence, plus the
+ *                                           machine that reported it
+ *
+ * That last clause is the whole of "things are happening in the vps, but i do
+ * not know": the engine has never run on this laptop, so the strip used to say
+ * "Factory status unknown - no engine runs on this machine" while the factory
+ * was busy on a VPS. `/factory/health` now asks the machine the project names
+ * (server/app/remote.ts), and when it answers, `source_host` is on the line -
+ * "Factory running on 155.133.27.86". A machine that could NOT be reached
+ * still reads unknown, with the SSH error as the reason: this strip never
+ * upgrades silence into a state.
  *
  * Below Help sits the CONNECTION line: the mark, small, beside the machine
  * this app is actually talking to - "this machine · <hostname>", "connected ·
@@ -78,6 +88,12 @@ function strip(health: Resource<FactoryHealth>): Strip {
   // "derived here" is only worth a clause when no reason line is carrying that
   // same nuance already - the strip is 240px wide and every word costs a wrap.
   const derived = data.source === "local-derived" && !reason ? " · derived here" : "";
+  // The engine lives on a machine, not here. When the server asked one, its
+  // name goes on the line - "Factory stopped on 155.133.27.86" is the whole
+  // fix for "things are happening in the vps, but i do not know". The longer
+  // sentence (why, since when, what the journal said) is the reason line
+  // underneath, which is already the server's own words.
+  const where = data.source_host ? ` on ${data.source_host}` : "";
   const lanes = typeof data.lanes_active === "number" ? ` · ${plural(data.lanes_active, "active lane")}` : "";
   const common = {
     reason,
@@ -88,10 +104,13 @@ function strip(health: Resource<FactoryHealth>): Strip {
   };
 
   if (data.engine === "running") {
-    return { tone: "ok", pulse: true, text: `Factory running${lanes}${derived}`, ...common };
+    return { tone: "ok", pulse: true, text: `Factory running${where}${lanes}${derived}`, ...common };
   }
   if (data.engine === "stopped") {
-    return { tone: "fail", pulse: false, text: `Factory stopped · nothing is running${derived}`, ...common };
+    // With a host on the line, "· nothing is running" is a second way of
+    // saying the same thing in a 240px strip, so it is dropped there.
+    const tail = where === "" ? " · nothing is running" : "";
+    return { tone: "fail", pulse: false, text: `Factory stopped${where}${tail}${derived}`, ...common };
   }
   return { tone: "idle", pulse: false, text: `Factory status unknown${derived}`, ...common };
 }

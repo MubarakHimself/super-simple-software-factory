@@ -951,15 +951,30 @@ export interface FactoryQueueCounts {
   total: number;
 }
 
-/** The footer strip's source of truth, derived on THIS machine. */
+/**
+ * The footer strip's source of truth.
+ *
+ * `source` describes THE ENGINE CLAIM only: `"local-derived"` means no machine
+ * was asked (nothing here has an engine, so `engine` is `"unknown"`), and
+ * `"server"` means a registered machine answered over SSH and `source_host`
+ * names it. The queue counts and the lane list are always this checkout's -
+ * they are files, and the files are here.
+ */
 export interface FactoryHealth {
-  /** everything below was derived from files and git in this checkout - no
-   * engine was asked, because asking one needs the server connection */
-  source: "local-derived";
+  source: "local-derived" | "server";
+  /** the machine that produced `engine`/`engine_reason`, named whenever one
+   * was ASKED - including when it could not answer, because "unknown because
+   * 155.133.27.86 refused the connection" is a different sentence from
+   * "unknown because nothing was asked" */
+  source_host: string | null;
   checked_at: string;
-  /** "unknown" whenever no engine runs here - never "stopped" by guesswork */
+  /** "unknown" whenever nothing that runs an engine was asked - never
+   * "stopped" by guesswork about a machine this process has not spoken to */
   engine: "running" | "stopped" | "unknown";
   engine_reason: string;
+  /** systemd's `NRestarts` for the engine unit on `source_host`; null when no
+   * machine was asked or it could not answer - never a zero standing in */
+  engine_restarts: number | null;
   uptime_seconds: number | null;
   uptime_reason: string | null;
   lanes: LaneRow[];
@@ -971,6 +986,23 @@ export interface FactoryHealth {
   runs_running: number | null;
   factory: "present" | "absent";
   factory_reason: string;
+}
+
+/**
+ * Where a `/runs` answer came from. `origin: "local"` is this checkout's own
+ * `adws/adw_data/sssf.db` and carries no sentence - it is the ordinary case
+ * and needs no explaining. `origin: "machine"` means the rows (or the absence
+ * of them) came off a registered machine over SSH, and then `reason` is ALWAYS
+ * set: one plain sentence naming the host, so an empty list is never a
+ * mystery and an unreachable box is never a silent zero.
+ */
+export interface RunsSource {
+  origin: "local" | "machine";
+  host: string | null;
+  repo_dir: string | null;
+  /** null for `origin: "local"` - nothing was reached, so nothing is claimed */
+  reachable: boolean | null;
+  reason: string | null;
 }
 
 /* ── machines: the registry, the probe, the one-click deploy ────────────────

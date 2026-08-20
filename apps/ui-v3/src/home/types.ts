@@ -70,8 +70,30 @@ export interface HomeSession {
 
 export interface RunsPayload {
   runs?: HomeSession[];
-  /** present only on the `{factory:"absent"}` shape - the honest "this folder
-   * has no adws/ yet" answer, which Home's empty state names rather than
-   * showing as an ordinary quiet day. */
+  /**
+   * Present only on the `{factory:"absent"}` shape, which `scoped.ts` answers
+   * from ONE fact: this checkout has no `adws/adw_data/sssf.db`.
+   *
+   * That is emphatically NOT "this folder has no factory in it". A project can
+   * be fully installed - `adws/`, the roster, the queue seam, the config - and
+   * still have no db, because only a RUN writes one, and on this operator's
+   * setup the runs happen on a VPS. Home used to gate its "No factory here"
+   * banner on this field, which is why that banner rendered directly above its
+   * own checklist reading "Factory initialized: yes". It gates on `/readiness`
+   * now - the checklist's own source. This field is left declared because the
+   * shape still arrives; nothing on Home reads it any more.
+   */
   factory?: "present" | "absent";
+}
+
+/**
+ * `GET /api/app/projects/:id/readiness` - the two facts the "No factory here"
+ * banner and the Initialize-factory checklist inside it BOTH now read, so the
+ * two can no longer contradict each other. `factory.config` is the whole
+ * question "is a factory installed in this folder" (it is the file the
+ * installer stamps, and the file `InitializeFactory` treats as done).
+ */
+export interface ReadinessPayload {
+  git: { is_repo: boolean; branch: string | null };
+  factory: { config: boolean; adws: boolean; db: boolean };
 }

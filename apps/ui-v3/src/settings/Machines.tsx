@@ -1046,11 +1046,16 @@ export function Machines(_legacy: {
       <div className="form-section">
         <div className="form-section-title">
           <span>
-            {/* HONEST STATES: no dispatch routing exists. The binding is written
-                into the manifest and read back only for THIS list — every
-                deployed box's engine ships whatever its own checkout holds. The
-                title says what the field is, not what it is not yet. */}
-            Runs on <span className="section-plain">— a label on this list; nothing routes work by it yet</span>
+            {/* HONEST STATES: still no dispatch routing — every deployed box's
+                engine works whatever its own checkout holds, and nothing here
+                sends it work. What the binding DOES do now is decide which
+                machine this app reads a project's engine health and run history
+                from (server/app/remote.ts), so the caption names that and
+                nothing more. */}
+            Runs on{" "}
+            <span className="section-plain">
+              — the machine this app reads that project&apos;s engine and runs from; it still routes no work
+            </span>
           </span>
         </div>
 

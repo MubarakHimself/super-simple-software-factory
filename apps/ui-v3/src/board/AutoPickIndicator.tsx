@@ -16,8 +16,13 @@ import { Dot, type Tone } from "../shared/Dot.tsx";
 
 function view(health: Resource<FactoryHealth>): { tone: Tone; pulse: boolean; text: string } {
   const engine = health.data?.engine;
-  if (engine === "running") return { tone: "ok", pulse: true, text: "Auto-pick from Ready" };
-  if (engine === "stopped") return { tone: "fail", pulse: false, text: "Auto-pick paused — engine stopped" };
+  // The engine runs on a machine; when the server asked one, its name belongs
+  // on this line too - the topbar and the footer strip read the same health
+  // response and must never name different machines.
+  const host = health.data?.source_host;
+  const where = host ? ` on ${host}` : "";
+  if (engine === "running") return { tone: "ok", pulse: true, text: `Auto-pick from Ready${where}` };
+  if (engine === "stopped") return { tone: "fail", pulse: false, text: `Auto-pick paused — engine stopped${where}` };
   // No read yet, a failed read, or an honest "unknown": the model still has
   // no dispatch button, so the sentence stays - the dot just stops claiming
   // to know the engine is alive.

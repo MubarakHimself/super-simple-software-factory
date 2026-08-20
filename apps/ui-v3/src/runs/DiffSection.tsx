@@ -17,12 +17,17 @@ export function DiffSection({
   card,
   diff,
   sha,
+  machine,
 }: {
   /** the report's card, when this run's card is in the shipping report */
   card: ShipCard | null;
   diff: Resource<DiffResponse>;
   /** the park commit, shown as the chunk's cut point when the report named one */
   sha?: string | null;
+  /** "on 155.133.27.86" when the run was read off a machine - its file list is
+   * in that machine's record and this app does not ask for it, so the section
+   * says where it is instead of leaving a bare heading */
+  machine?: string | null;
 }) {
   const files = diff.data?.files ?? [];
   const reportStat = card ? diffStat(card.insertions, card.deletions) : null;
@@ -58,6 +63,13 @@ export function DiffSection({
 
       {card?.diff_note && !reportStat ? <p className="record-note">{card.diff_note}</p> : null}
       {diff.error ? <ReadFailure error={diff.error} /> : null}
+
+      {machine && !diff.data ? (
+        <p className="record-note">
+          This run's file list stays {machine} — the card's own numbers above come from the shipping report, which
+          reads git here.
+        </p>
+      ) : null}
 
       {files.length > 0 ? (
         <div className="diff-files">

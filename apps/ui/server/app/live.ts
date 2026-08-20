@@ -18,8 +18,9 @@ import type { GitRepo } from "../gitro.ts";
 import { availableScopes, resolveDiff } from "../gate.ts";
 import { isSafeSegment } from "../gitro.ts";
 import { readQueue } from "../queue.ts";
-import type { ConfigResponse, Event, LaneStatus, Phase, SessionSummary } from "../../shared/types.ts";
+import type { ConfigResponse, Event, LaneStatus, Phase, RunsSource, SessionSummary } from "../../shared/types.ts";
 import { appError, appJson, appSafely } from "./guard.ts";
+import { localRunsSource, remoteRuns, resolveProjectMachine } from "./remote.ts";
 import { factoryAbsent, getScope, intQuery, param, strQuery } from "./scoped.ts";
 import { maybeAutoSync } from "./sync.ts";
 
@@ -211,8 +212,41 @@ function isSelfCheck(s: SessionSummary): boolean {
 interface RunsResponse {
   runs: SessionSummary[];
   hidden_self_checks: number;
+  /** where these rows came from - see `RunsSource`. Always present, so the
+   * surface never has to guess whether an empty list means "nothing ran" or
+   * "nobody was asked". */
+  source: RunsSource;
 }
 
+/**
+ * The runs list.
+ *
+ * ── Why this read has a second half ────────────────────────────────────────
+ * The engine runs on a VPS and writes ITS sssf.db there. A laptop checkout of
+ * the same project has no such file, so this endpoint used to answer
+ * `{factory:"absent"}` and the Runs surface was empty while the factory was
+ * busy - the operator's whole complaint. So: read locally first, and when
+ * this checkout holds no rows AND the project names a machine, read that
+ * machine's own db over SSH (`app/remote.ts`).
+ *
+ * Remote-WHEN-LOCAL-EMPTY, not a merge. Merging would need a rule for the same
+ * adw_id appearing on both sides and a per-row provenance the surface would
+ * have to explain; "these rows are this checkout's" / "these rows are that
+ * machine's" is one sentence each and cannot be read two ways. Every remote row
+ * carries `machine: "on <host>"`, which the list already renders as its muted
+ * chip, so the two are never confusable even side by side in a screenshot.
+ *
+ * ── What "local empty" is counted on ───────────────────────────────────────
+ * The non-self-check rows, and NOT the rows this request happens to be showing.
+ * The two differ whenever a checkout holds nothing but `adw_prompt` self-checks
+ * - which is the ordinary state of a laptop that has validated its roster and
+ * run its real work on the VPS (this repo's own sssf.db is 22 rows, all 22 of
+ * them self-checks). Counting the displayed rows would make `?self_checks=1`
+ * flip the SOURCE as well as the filter: toggling "show self-checks" on such a
+ * project would swap fifty of the machine's real runs for one local no-op. So
+ * the source is decided once, on the rows that represent work, and the toggle
+ * only ever decides what is shown out of the source that decision picked.
+ */
 async function getRuns(req: Request): Promise<Response> {
   const id = param(req, "id");
   const scope = await getScope(id);
@@ -227,16 +261,41 @@ async function getRuns(req: Request): Promise<Response> {
   // prints the outcome.
   maybeAutoSync(scope);
 
-  if (!scope.db) return factoryAbsent();
-
   const limit = intQuery(req, "limit", 200);
   const includeSelfChecks = strQuery(req, "self_checks", "0") === "1";
 
-  const all = scope.db.sessions(limit);
-  const hidden = all.filter(isSelfCheck).length;
-  const runs = includeSelfChecks ? all : all.filter((s) => !isSelfCheck(s));
+  const all = scope.db ? scope.db.sessions(limit) : [];
+  const work = all.filter((s) => !isSelfCheck(s));
+  const hidden = all.length - work.length;
+  const runs = includeSelfChecks ? all : work;
+  if (work.length > 0) {
+    return appJson({ runs, hidden_self_checks: hidden, source: localRunsSource() } satisfies RunsResponse);
+  }
 
-  return appJson({ runs, hidden_self_checks: hidden } satisfies RunsResponse);
+  const machine = await resolveProjectMachine(id);
+  if (machine) {
+    // Never throws: an unreachable box, a checkout that was never deployed, a
+    // db that does not exist yet - each is an empty list plus one sentence
+    // naming the host, which is what the pane prints.
+    const remote = await remoteRuns(machine);
+    const visible = includeSelfChecks ? remote.runs : remote.runs.filter((s) => !isSelfCheck(s));
+    // The count describes THE LIST BEING RETURNED, which is the machine's - the
+    // same thing it means in the local answer. Any self-checks sitting in this
+    // laptop's own db are not added to it: they are not in this list, they are
+    // not on that host, and a number that mixed the two would belong to neither
+    // sentence `source` can print.
+    return appJson({
+      runs: visible,
+      hidden_self_checks: remote.runs.length - visible.length,
+      source: remote.source,
+    } satisfies RunsResponse);
+  }
+
+  // No rows here and no machine to ask. A project with no db at all is still
+  // the `{factory:"absent"}` state - "there is no factory record here" and "the
+  // record is empty" are different sentences and the surface prints both.
+  if (!scope.db) return factoryAbsent();
+  return appJson({ runs, hidden_self_checks: hidden, source: localRunsSource() } satisfies RunsResponse);
 }
 
 // -- /runs/:adw_id (+ beat) ---------------------------------------------------

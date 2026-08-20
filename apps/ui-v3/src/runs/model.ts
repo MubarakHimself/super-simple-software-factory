@@ -16,7 +16,7 @@
  *      paraphrased.
  */
 import type { Tone } from "../shared/Dot.tsx";
-import type { CardItem, FactoryAbsent, RunPhase, RunSummary, ShipCard, ShipReport, WorkLogEntry } from "./types.ts";
+import type { CardItem, FactoryAbsent, RunPhase, RunsSource, RunSummary, ShipCard, ShipReport, WorkLogEntry } from "./types.ts";
 
 /** What the left column, the detail pane and the badges all switch on.
  * `cooldown` is a run state the record has to earn (see cooldownSignal). */
@@ -79,11 +79,16 @@ export function modelOf(run: RunSummary): string | null {
 
 /**
  * The machine chip, "when known". No table in `sssf.db` records which machine
- * ran a run today, so this returns null on every run this app can read and the
- * chip does not render. It reads the field defensively rather than not at all,
- * because the moment run records arrive over the server connection carrying one
- * the chip appears with no other change anywhere. Guessing "it must be the
- * machine holding the db" would be a fabricated fact, so it is not done.
+ * ran a run, so a row read out of a LOCAL db still returns null here and the
+ * chip does not render - guessing "it must be the machine holding the db"
+ * would be a fabricated fact.
+ *
+ * What changed is that rows can now arrive from a machine: `/runs` falls back
+ * to reading a registered server's own sssf.db over SSH, and stamps each row
+ * it fetched with `machine: "on <host>"`. That is exactly the case this
+ * function was written for ("the moment run records arrive over the server
+ * connection carrying one the chip appears with no other change anywhere"),
+ * and it needed no edit to serve it.
  */
 export function machineOf(run: RunSummary): string | null {
   const record = run as unknown as { machine?: unknown; host?: unknown; hostname?: unknown };
@@ -317,6 +322,49 @@ export function buildRunRows(runs: RunSummary[], cards: CardItem[], now: number)
   const inFlight = (row: RunRowModel): number => (row.status.state === "running" || row.status.state === "cooldown" ? 0 : 1);
   const startedAt = (adwId: string): number => parseTime(runs.find((run) => run.adw_id === adwId)?.started_at) ?? 0;
   return rows.sort((a, b) => inFlight(a) - inFlight(b) || startedAt(b.adwId) - startedAt(a.adwId));
+}
+
+/* ── the empty list, which is three different sentences ─────────────────── */
+
+export interface RunsEmpty {
+  heading: string;
+  sentence: string;
+}
+
+/**
+ * What "no rows" means, decided from the server's own `source` rather than
+ * from the absence itself. There are four of them and they are not
+ * interchangeable:
+ *
+ *   no factory record here      this checkout has no sssf.db at all
+ *   nothing recorded yet        it has one and it is empty
+ *   nothing on <host> yet       a machine was read and its record is empty
+ *   <host> did not answer       a machine was read and could not be reached
+ *
+ * The last two are the ones this exists for. When the server read a machine it
+ * also wrote the sentence for it - naming the host, the path, or the SSH error
+ * verbatim - so the sentence below is the server's, never a friendlier one
+ * invented here. Only the short heading is chosen locally.
+ */
+export function runsEmptyState(source: RunsSource | null | undefined, factoryAbsent: boolean): RunsEmpty {
+  if (source?.origin === "machine" && source.reason) {
+    const host = source.host ?? "that machine";
+    return {
+      heading: source.reachable === false ? `${host} could not be reached` : `No runs on ${host} yet`,
+      sentence: source.reason,
+    };
+  }
+  if (factoryAbsent) {
+    return {
+      heading: "No factory record",
+      sentence:
+        "This project has no sssf.db on this machine — the engine writes one the first time it runs a card here.",
+    };
+  }
+  return {
+    heading: "No runs yet",
+    sentence: "The engine records a run when it picks up a ready card; nothing here needs dispatching.",
+  };
 }
 
 /* ── the merge queue's rows ─────────────────────────────────────────────── */

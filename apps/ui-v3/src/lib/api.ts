@@ -127,7 +127,15 @@ export interface SyncResponse {
 
 export interface FactoryHealth {
   engine: "running" | "stopped" | "unknown";
+  /** `"server"` = a registered machine answered over SSH and `source_host`
+   * names it; `"local-derived"` = nothing that runs an engine was asked. */
   source: "server" | "local-derived";
+  /** the machine that produced `engine`, set whenever one was ASKED - it is
+   * set on an unreachable box too, which is why the strip can say "unknown"
+   * and still name who did not answer. */
+  source_host?: string | null;
+  /** systemd's restart count on that machine; null when nobody was asked. */
+  engine_restarts?: number | null;
   engine_reason?: string | null;
   uptime_seconds?: number | null;
   uptime_reason?: string | null;
