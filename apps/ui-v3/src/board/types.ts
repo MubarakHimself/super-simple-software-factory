@@ -51,6 +51,26 @@ export interface UnparsedCard {
   reason: string;
 }
 
+/** The outcome of the last AUTO-sync the server ran for this project (the one
+ * a Board poll kicks - `server/app/sync.ts`). Null before the first one lands.
+ * The Board is silent about the states that mean all is well or that there is
+ * nothing to pull; see `SYNC_REFUSAL` in Board.tsx for the ones it prints. */
+export type CardsSyncState =
+  | "pulled"
+  | "up-to-date"
+  | "dirty"
+  | "diverged"
+  | "detached"
+  | "no-remote"
+  | "not-a-repo"
+  | "failed";
+
+export interface CardsSync {
+  state: CardsSyncState;
+  detail: string;
+  at: string;
+}
+
 export interface CardsResponse {
   dir: string;
   done_dir: string;
@@ -59,6 +79,7 @@ export interface CardsResponse {
   shipped_source: "git-tree" | "unavailable";
   shipped_reason: string | null;
   main_ref: string;
+  sync?: CardsSync | null;
 }
 
 /** `GET /api/app/p/:id/live`'s per-run row - only the fields the Board's

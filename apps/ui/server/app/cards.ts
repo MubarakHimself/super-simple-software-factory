@@ -44,12 +44,23 @@
  *
  * When `main` cannot be resolved at all, parked cards are `unknown` with that
  * sentence attached - never guessed into `integrated`.
+ *
+ * ── This read is also what keeps the checkout fresh ────────────────────────
+ * The queue directory this endpoint reads only changes when somebody pulls,
+ * and the factory pushes its card-status commits from a SERVER. So the route
+ * (never the derivation) calls `sync.ts:maybeAutoSync` on the way in: a
+ * project nobody has synced for a minute gets one background fetch +
+ * fast-forward, kicked and not awaited. The payload's `sync` field carries
+ * the LAST such outcome, which is how a refusal ("uncommitted changes in the
+ * working tree") reaches the Board as one line instead of as silently stale
+ * cards. `readCards` below knows nothing about any of it.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CardItem, CardState, CardsResponse, QueueStatus, UnparsedQueueItem } from "../../shared/types.ts";
 import { appError, appJson, appSafely } from "./guard.ts";
 import { getScope, param } from "./scoped.ts";
+import { maybeAutoSync } from "./sync.ts";
 
 const VALID_STATUSES: QueueStatus[] = ["ready-for-agent", "running", "blocked", "done"];
 const HEADER_LINE = /^([A-Za-z][A-Za-z0-9-]*):[ \t]*(.*)$/;
@@ -355,21 +366,32 @@ export async function shippedFromMain(root: string): Promise<Pick<CardsInput, "s
   return { shippedNames: null, shippedReason: `${MAIN} could not be read in ${root}`, mainRef: MAIN };
 }
 
-async function getCards(req: Request): Promise<Response> {
+export async function getCards(req: Request): Promise<Response> {
   const id = param(req, "id");
   const scope = await getScope(id);
   if (!scope) return appError(`no project ${id}`, 404);
 
+  // Somebody is watching this Board, so the checkout follows: a project whose
+  // last sync has gone stale gets ONE background `git fetch` + ff-only merge
+  // (sync.ts, the very same code the topbar button runs) kicked here. This
+  // call never awaits it - the read below is always current DISK state, and
+  // whatever that sync lands is picked up by the next poll. What comes back
+  // is the LAST sync's outcome, so a refusal (dirty tree, detached HEAD,
+  // diverged history) reaches the Board as one honest line instead of
+  // silently stale cards.
+  const sync = maybeAutoSync(scope);
+
   // Deliberately not gated on `scope.db`: a project can carry a queue with no
   // factory installed yet, and the Board says so honestly rather than 500ing.
   const shipped = await shippedFromMain(scope.root);
-  return appJson(
-    await readCards({
+  return appJson({
+    ...(await readCards({
       queueDir: scope.queueDir,
       doneDir: join(scope.queueDir, "done"),
       ...shipped,
-    }),
-  );
+    })),
+    sync,
+  } satisfies CardsResponse);
 }
 
 export const cardsRoutes = {

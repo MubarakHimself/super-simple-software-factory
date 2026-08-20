@@ -566,6 +566,33 @@ export interface CardItem {
   body: string;
 }
 
+/** The named outcomes of a sync (`server/app/sync.ts`'s `RepoSyncStatus`,
+ * spelled once more here because this file is the wire contract and nothing
+ * in `shared/` may import from `server/`). */
+export type CardsSyncState =
+  | "pulled"
+  | "up-to-date"
+  | "dirty"
+  | "diverged"
+  | "detached"
+  | "no-remote"
+  | "not-a-repo"
+  | "failed";
+
+/** What the last AUTO-sync of this project concluded - the Board's one honest
+ * line about why its cards may be older than the server's. `pulled`,
+ * `up-to-date` and `no-remote` are the quiet states (a working auto-sync says
+ * nothing, and a project with no origin is the normal state of one not yet
+ * deployed); the refusals are the ones worth a line. */
+export interface CardsSync {
+  state: CardsSyncState;
+  /** git's own words, or the sync's own sentence about refusing - never one
+   * this app invented over one git actually wrote. */
+  detail: string;
+  /** ISO timestamp of when that outcome was recorded. */
+  at: string;
+}
+
 export interface CardsResponse {
   dir: string;
   done_dir: string;
@@ -577,6 +604,10 @@ export interface CardsResponse {
   shipped_source: "git-tree" | "unavailable";
   shipped_reason: string | null;
   main_ref: string;
+  /** the last auto-sync outcome for this project, or null before the first
+   * one lands. Absent from `readCards`'s pure derivation (which knows only
+   * two directories) and attached by the route - see cards.ts. */
+  sync?: CardsSync | null;
 }
 
 export interface LaneRow {

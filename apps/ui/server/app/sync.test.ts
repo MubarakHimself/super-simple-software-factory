@@ -7,12 +7,23 @@
  * mocked — the claim under test is "this route fetches and fast-forwards, and
  * refuses (never forces) the moment that is not safely possible", and a
  * mocked git would prove nothing about that.
+ *
+ * The auto-sync half at the bottom holds to the same rule: every outcome it
+ * asserts (pulled, dirty, no-remote) comes from a real fetch against a real
+ * origin, and the refusals are checked against the files on disk, not just the
+ * JSON. `setAutoSyncRunner` appears in exactly the two tests whose claim is
+ * about TIMING rather than about git — "the read did not wait for the sync"
+ * and "three concurrent polls kicked one sync" can only be observed by holding
+ * a sync open, and a real network that hangs on demand is not something a test
+ * suite should be building.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { postSync } from "./sync.ts";
+import type { CardsResponse } from "../../shared/types.ts";
+import { getCards } from "./cards.ts";
+import { postSync, setAutoSyncRunner, type SyncRun } from "./sync.ts";
 
 const dirs: string[] = [];
 const realHome = process.env.SDL_FACTORY_HOME;
@@ -254,5 +265,157 @@ describe("POST /api/app/p/:id/sync", () => {
       expect(statuses).toEqual([200, 409]);
     },
     15_000,
+  );
+});
+
+/* ── auto-sync, driven the way the Board drives it ───────────────────────── */
+
+/** One Board poll: `GET /api/app/p/:id/cards`, the read that kicks the sync. */
+async function poll(id: string): Promise<CardsResponse> {
+  const req = new Request("http://127.0.0.1:4700/api/app/p/x/cards");
+  (req as Request & { params: Record<string, string> }).params = { id };
+  const res = await getCards(req);
+  expect(res.status).toBe(200);
+  return (await res.json()) as CardsResponse;
+}
+
+/** Keeps polling — exactly as the open SPA would — until the background sync
+ * has recorded an outcome, then hands it back. */
+async function settledSync(id: string, budgetMs = 20_000): Promise<NonNullable<CardsResponse["sync"]>> {
+  const until = Date.now() + budgetMs;
+  for (;;) {
+    const body = await poll(id);
+    if (body.sync) return body.sync;
+    if (Date.now() > until) throw new Error("the background auto-sync never recorded an outcome");
+    await Bun.sleep(100);
+  }
+}
+
+/** A sync that never finishes until the test lets it, so "the read did not
+ * wait for it" is an observable fact rather than a stopwatch reading. */
+function heldSync(repo: SyncRun["repo"]): { runner: () => Promise<SyncRun>; calls: () => number; finished: () => boolean; release: () => void } {
+  let calls = 0;
+  let finished = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    runner: async () => {
+      calls++;
+      await gate;
+      finished = true;
+      return { repo, unreadable: null };
+    },
+    calls: () => calls,
+    finished: () => finished,
+    release: () => release(),
+  };
+}
+
+const UP_TO_DATE: SyncRun["repo"] = {
+  status: "up-to-date",
+  detail: "already up to date with origin/main",
+  branch: "main",
+  before_sha: null,
+  after_sha: null,
+};
+
+describe("auto-sync behind the Board's poll", () => {
+  test(
+    "a poll with no recent sync kicks one, and the checkout ends up holding what origin pushed",
+    async () => {
+      const { id, clone, origin } = await project();
+      const pusherDir = await otherClone(origin);
+      await push(pusherDir, "v2\n", "v2");
+
+      // The very first poll has nothing to report yet — it answers from disk
+      // and kicks the sync on its way out.
+      const first = await poll(id);
+      expect(first.sync ?? null).toBeNull();
+
+      const sync = await settledSync(id);
+      expect(sync.state).toBe("pulled");
+      expect(sync.detail).toContain("fast-forwarded");
+      expect(Number.isNaN(Date.parse(sync.at))).toBe(false);
+      // and the Board's next read is now reading the pulled tree
+      expect(await readFile(join(clone, "file.txt"), "utf-8")).toBe("v2\n");
+    },
+    30_000,
+  );
+
+  test(
+    "concurrent polls kick exactly one sync, never one each",
+    async () => {
+      const { id } = await project();
+      const held = heldSync(UP_TO_DATE);
+      setAutoSyncRunner(held.runner);
+      try {
+        const bodies = await Promise.all([poll(id), poll(id), poll(id)]);
+        expect(held.calls()).toBe(1);
+        // and none of the three waited for it
+        for (const body of bodies) expect(body.sync ?? null).toBeNull();
+      } finally {
+        held.release();
+        setAutoSyncRunner(null);
+      }
+    },
+    20_000,
+  );
+
+  test(
+    "the cards read answers while the sync is still running — it never blocks on the fetch",
+    async () => {
+      const { id } = await project();
+      const held = heldSync(UP_TO_DATE);
+      setAutoSyncRunner(held.runner);
+      try {
+        const started = Date.now();
+        const body = await poll(id);
+        // The sync it kicked has not finished — cannot have, nothing has
+        // released it — and yet here is the payload.
+        expect(held.calls()).toBe(1);
+        expect(held.finished()).toBe(false);
+        expect(Array.isArray(body.items)).toBe(true);
+        expect(Date.now() - started).toBeLessThan(5_000);
+      } finally {
+        held.release();
+        setAutoSyncRunner(null);
+      }
+    },
+    20_000,
+  );
+
+  test(
+    "a dirty checkout is refused, said out loud in the cards payload, and never merged over",
+    async () => {
+      const { id, clone, origin } = await project();
+      const pusherDir = await otherClone(origin);
+      await push(pusherDir, "v2\n", "v2");
+      await writeFile(join(clone, "file.txt"), "local edit, uncommitted\n", "utf-8");
+
+      const sync = await settledSync(id);
+      expect(sync.state).toBe("dirty");
+      expect(sync.detail).toContain("uncommitted");
+      // the operator's own uncommitted work is exactly where they left it
+      expect(await readFile(join(clone, "file.txt"), "utf-8")).toBe("local edit, uncommitted\n");
+    },
+    30_000,
+  );
+
+  test(
+    "a project with no origin is a quiet no-remote, not a failure to nag about",
+    async () => {
+      const { id, clone } = await project();
+      await run(clone, ["remote", "remove", "origin"]);
+
+      const sync = await settledSync(id);
+      expect(sync.state).toBe("no-remote");
+      expect(sync.detail).toContain("origin");
+      // "quiet" is the Board's half of this: `no-remote` is not in the set of
+      // states it prints a line for (board/Board.tsx's SYNC_REFUSAL map).
+      expect(["pulled", "up-to-date", "no-remote"]).toContain(sync.state);
+    },
+    30_000,
   );
 });

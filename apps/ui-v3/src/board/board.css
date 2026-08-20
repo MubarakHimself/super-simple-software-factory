@@ -77,4 +77,14 @@
 .auto-pick-indicator .dot{width:6px;height:6px;border-radius:50%;}
 .auto-pick-indicator .api-text{color:var(--t2);}
 
+/* v3 board addition: the auto-sync refusal line, portaled into the same slot.
+   Muted, one line, truncated with the whole sentence on hover - the Board
+   states a fact it cannot fix, it does not raise an alarm about it. Warn, not
+   fail: nothing is broken, the server simply declined to pull over the
+   operator's own working tree. */
+.board-sync-note{display:flex;align-items:center;gap:8px;font-size:var(--text-meta);color:var(--t3);font-family:var(--font-mono);min-width:0;}
+.board-sync-note .dot{width:6px;height:6px;border-radius:50%;background:var(--warn);flex-shrink:0;}
+.board-sync-note .bsn-text{max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+@media(max-width:1100px){.board-sync-note .bsn-text{max-width:18ch;}}
+
 @media(max-width:768px){.inspector-rail{display:none;}.board-col{min-width:200px;}}

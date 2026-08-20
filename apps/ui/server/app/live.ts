@@ -21,6 +21,7 @@ import { readQueue } from "../queue.ts";
 import type { ConfigResponse, Event, LaneStatus, Phase, SessionSummary } from "../../shared/types.ts";
 import { appError, appJson, appSafely } from "./guard.ts";
 import { factoryAbsent, getScope, intQuery, param, strQuery } from "./scoped.ts";
+import { maybeAutoSync } from "./sync.ts";
 
 const HOSTNAME = "127.0.0.1";
 const PORT = 4700;
@@ -216,6 +217,16 @@ async function getRuns(req: Request): Promise<Response> {
   const id = param(req, "id");
   const scope = await getScope(id);
   if (!scope) return appError(`no project ${id}`, 404);
+
+  // The Runs surface is polling, so somebody is watching this project: kick a
+  // background sync if this checkout has gone a minute without one (sync.ts
+  // owns the interval, the single-flight lock and every refusal). Never
+  // awaited, and deliberately BEFORE the factory-absent branch - a project
+  // with no db still has a checkout worth keeping current. This response
+  // carries no sync field; the Board's `cards` read is the one surface that
+  // prints the outcome.
+  maybeAutoSync(scope);
+
   if (!scope.db) return factoryAbsent();
 
   const limit = intQuery(req, "limit", 200);

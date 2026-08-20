@@ -12,16 +12,27 @@
  * portals into the topbar (`AutoPickIndicator`) is the only thing this
  * surface says about starting a run, and it only ever describes, never
  * triggers.
+ *
+ * ── Why the poll is also the sync ──────────────────────────────────────────
+ * The cards this reads come from the project's LOCAL `queue/` folder, and the
+ * factory pushes its card-status commits from a server. So the cards endpoint
+ * kicks a background `git fetch` + fast-forward of its own when the checkout
+ * has gone a minute without one, and reports what the last one concluded in
+ * the payload's `sync` field. Nothing here triggers or waits for that - the
+ * only Board-side consequence is one muted line, beside the auto-pick
+ * indicator, on the days the server REFUSED to pull (see `SYNC_REFUSAL`).
  */
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useShell } from "../App.tsx";
 import { LIVE_INTERVAL_MS, useResource } from "../lib/poll.ts";
 import { EmptyState, ReadFailure } from "../shell/EmptyState.tsx";
+import { useTopbarSlot } from "../shell/TopBar.tsx";
 import { AutoPickIndicator } from "./AutoPickIndicator.tsx";
 import "./board.css";
 import { Inspector } from "./Inspector.tsx";
 import { TicketCard } from "./TicketCard.tsx";
-import type { BoardColumn, CardItem, CardsResponse, LiveRun } from "./types.ts";
+import type { BoardColumn, CardItem, CardsResponse, CardsSync, CardsSyncState, LiveRun } from "./types.ts";
 import { columnLabel, columnOf } from "./types.ts";
 
 const COLUMNS: BoardColumn[] = ["ready", "running", "done"];
@@ -45,6 +56,43 @@ function groupByColumn(items: CardItem[]): Record<BoardColumn, CardItem[]> {
   const grouped: Record<BoardColumn, CardItem[]> = { ready: [], running: [], done: [] };
   for (const item of items) grouped[columnOf(item)].push(item);
   return grouped;
+}
+
+/**
+ * The auto-sync outcomes worth one line, and the word that leads it. The three
+ * missing states are missing on purpose: `pulled` and `up-to-date` mean the
+ * Board is showing the server's own truth (a working sync is silent), and
+ * `no-remote` is the ordinary state of a project not yet deployed anywhere -
+ * nagging about it every two seconds is the UI scolding the operator for
+ * something that is not wrong.
+ *
+ * What is left is the honest case: the server REFUSED to pull, so these cards
+ * may be older than the factory's, and only the operator can fix it.
+ */
+const SYNC_REFUSAL: Partial<Record<CardsSyncState, string>> = {
+  dirty: "auto-sync skipped",
+  diverged: "auto-sync skipped",
+  detached: "auto-sync skipped",
+  "not-a-repo": "auto-sync off",
+  failed: "auto-sync failed",
+};
+
+/** One muted line in the Board's own header area (the topbar slot, beside the
+ * auto-pick indicator this surface already portals there). No box, no colour
+ * alarm, and the server's own sentence verbatim - never one this app invented
+ * over one git actually wrote. */
+function SyncNote({ sync }: { sync: CardsSync | null | undefined }) {
+  const host = useTopbarSlot();
+  const lead = sync ? SYNC_REFUSAL[sync.state] : undefined;
+  if (!host || !sync || !lead) return null;
+  const line = `${lead}: ${sync.detail}`;
+  return createPortal(
+    <div className="board-sync-note" title={`${line} (checked ${sync.at})`}>
+      <span className="dot" />
+      <span className="bsn-text">{line}</span>
+    </div>,
+    host,
+  );
 }
 
 export default function Board() {
@@ -86,6 +134,7 @@ export default function Board() {
   return (
     <>
       <AutoPickIndicator health={health} />
+      <SyncNote sync={cards.data.sync} />
       <div className="board">
         {COLUMNS.map((column) => {
           const items = grouped[column];
