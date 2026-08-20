@@ -483,6 +483,109 @@ else
   ok just "installed $(just --version 2>&1 | head -n 1)"
 fi
 
+# ── 5b. the GitHub credential the engine pushes with ─────────────────────────
+# EVERY CARD WRITE-BACK IS A PUSH. The engine commits each card's status on
+# `integration` and pushes it to the operator's hub over https, and no box has
+# ever carried a credential for that. Both halves of the consequence are real:
+# a PRIVATE repo dies one step below with "repository not reachable from the
+# server", and a PUBLIC one clones fine and then retries its push forever while
+# the operator's Board never updates and `systemctl is-active` says `active` -
+# the same shape of green-everything-and-ships-nothing this file keeps naming.
+#
+# BEFORE THE CLONE, on purpose: the clone is the first git call that may need
+# the credential, and a credential wired up after it is a credential that was
+# not there when it mattered.
+#
+# The vehicle is the one already on the box: `~/.sdl-factory/secrets.env`, mode
+# 0600, written by the app's own sign-in flows (apps/ui/server/app/
+# auth-sessions.ts and providers-v3.ts) and loaded into the engine's whole child
+# tree by adws/adw_modules/utils.py at import. One `GH_TOKEN=<token>` line in it
+# is this step's entire input.
+#
+# THE TOKEN IS NEVER COPIED. The helper written below re-reads secrets.env on
+# every git call, so the value lives in exactly one file: nothing is baked into
+# ~/.gitconfig, nothing is baked into the helper, and A CHANGED TOKEN NEEDS NO
+# REWRITE AND NO REDEPLOY - edit that one line and the next git call already
+# uses it. That is also why this step never compares a token: only the helper
+# and the config pointer are converged, so a box whose token was rotated
+# reports "already configured", because nothing about it did change.
+#
+# `--global`, and that is not the identity discipline bending. Step 15 writes
+# the committer identity `--local` because on a shared machine "who commits"
+# belongs to a repo, not to an account. This is a single-purpose factory box,
+# and a repo-local helper CANNOT EXIST before the clone it has to serve - there
+# is no repository yet. Different question, different answer.
+
+GH_SECRETS="$HOME/.sdl-factory/secrets.env"
+GH_HELPER="$HOME/.sdl-factory/git-credential-helper.sh"
+
+# THE PRESENCE TEST NEVER READS THE VALUE. `grep -q` answers "is there a
+# GH_TOKEN line with something after the =" without ever putting a token in a
+# shell variable, and no branch below interpolates one into a STEP line. (This
+# script runs under `set -u` and nothing else - there is no `set -x` for a
+# token to fall out of, and turning one on would mean revisiting this step.)
+# It is the same probe the app's Claude row runs against the same file
+# (apps/ui/server/app/auth-sessions.ts, CLAUDE_PROBE).
+if ! grep -q '^GH_TOKEN=.' "$GH_SECRETS" 2>/dev/null; then
+  ok git-credentials "NEEDS YOU: no GH_TOKEN line in $GH_SECRETS, so this box has no GitHub credential. A public repo still clones here and the engine still fetches - but every card write-back is a push, and GitHub rejects an unauthenticated one, so the Board stops moving while every status reads healthy. Add a GH_TOKEN=<token> line to $GH_SECRETS (mode 0600 - the same file the app's sign-ins write) and redeploy; this step wires it up and nothing else changes"
+else
+  # Written from a QUOTED heredoc: nothing from this deploy is interpolated into
+  # the file at all, so it is byte-identical on every box and the comparison
+  # below is a comparison of intent, not of a rendering.
+  GH_HELPER_BODY=$(cat <<'HELPER'
+#!/bin/sh
+# git credential helper, written by the SDL Factory deploy
+# (apps/ui/server/app/deploy/bootstrap.sh, the git-credentials step).
+#
+# THERE IS NO TOKEN IN THIS FILE. It reads the CURRENT one out of
+# ~/.sdl-factory/secrets.env every time git asks, which is what makes rotating
+# the token a one-line edit of that file and nothing else.
+#
+# git runs this as `<helper> get|store|erase`, writes the request on stdin and
+# reads `key=value` lines back on stdout. Only `get` has an answer here: `store`
+# and `erase` print nothing, because secrets.env is written by the app's
+# sign-in flows and is not this helper's to rewrite. Nothing reads stdin (git
+# ignores SIGPIPE around that write for exactly this case) and nothing ever
+# echoes the token - `password=` is printed to git, once, and never logged.
+[ "${1:-}" = get ] || exit 0
+gh_token=$(sed -n 's/^GH_TOKEN=//p' "$HOME/.sdl-factory/secrets.env" 2>/dev/null | head -n 1)
+[ -n "$gh_token" ] || exit 0
+printf 'username=x-access-token\n'
+printf 'password=%s\n' "$gh_token"
+HELPER
+)
+
+  # Compared, then written - the same shape as the apt drop-in above and the
+  # systemd unit below: a redeploy that would write the same bytes writes none.
+  GH_HELPER_STATE="already in place"
+  if [ "$(cat "$GH_HELPER" 2>/dev/null)" != "$GH_HELPER_BODY" ]; then
+    if printf '%s\n' "$GH_HELPER_BODY" >"$GH_HELPER" 2>/dev/null; then
+      GH_HELPER_STATE=written
+    else
+      GH_HELPER_STATE=unwritable
+    fi
+  fi
+  # 0700 on every run, not only on a write: a helper any other account on the
+  # box can execute is a helper any other account can be handed the token by.
+  if [ "$GH_HELPER_STATE" != unwritable ] && ! chmod 0700 "$GH_HELPER" 2>/dev/null; then
+    GH_HELPER_STATE=unwritable
+  fi
+
+  if [ "$GH_HELPER_STATE" = unwritable ]; then
+    ok git-credentials "NEEDS YOU: $GH_SECRETS has a GH_TOKEN, but the helper at $GH_HELPER could not be written (or could not be chmod 0700'd) - until it exists git has no credential and the engine's pushes are rejected. Check the owner and mode of $HOME/.sdl-factory on this box"
+  elif [ "$(git config --global --get credential.helper 2>/dev/null)" = "$GH_HELPER" ]; then
+    if [ "$GH_HELPER_STATE" = "already in place" ]; then
+      ok git-credentials "already configured: $GH_HELPER (0700) is git's global credential.helper, and nothing here was touched. It reads GH_TOKEN out of $GH_SECRETS on every call, so a rotated token needs no rewrite and no redeploy"
+    else
+      ok git-credentials "helper $GH_HELPER_STATE at $GH_HELPER (0700); git's global credential.helper already pointed at it. It reads GH_TOKEN out of $GH_SECRETS on every call, so a rotated token needs no rewrite and no redeploy"
+    fi
+  elif git config --global credential.helper "$GH_HELPER" 2>/dev/null; then
+    ok git-credentials "helper $GH_HELPER_STATE at $GH_HELPER (0700) and set as git's global credential.helper - the engine can push card write-backs to GitHub as x-access-token. It reads GH_TOKEN out of $GH_SECRETS on every call, so a rotated token needs no rewrite and no redeploy"
+  else
+    ok git-credentials "NEEDS YOU: the helper is at $GH_HELPER (0700) but 'git config --global credential.helper' would not take it, so git never calls it and the engine's pushes are rejected. Set it on the box by hand: git config --global credential.helper $GH_HELPER"
+  fi
+fi
+
 # ── 6. clone the repository (only if absent) ─────────────────────────────────
 # A clone that needs credentials must FAIL by name, never hang on a prompt and
 # never guess at an identity: GIT_TERMINAL_PROMPT=0 plus a no-op askpass turns

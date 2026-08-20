@@ -1499,12 +1499,22 @@ describe("deploy/bootstrap.sh", () => {
   test("every step it can reach prints a STEP line", async () => {
     const script = await readFile(bootstrapPath(), "utf-8");
     for (const name of [
-      "preflight", "apt", "sqlite", "uv", "node", "just", "clone", "checkout", "stamp",
-      "uv-sync", "installer", "pi", "pi-packages", "claude-cli", "codex-cli", "git-identity",
-      "skills", "engine-service", "engine",
+      "preflight", "apt", "sqlite", "uv", "node", "just", "git-credentials", "clone",
+      "checkout", "stamp", "uv-sync", "installer", "pi", "pi-packages", "claude-cli",
+      "codex-cli", "git-identity", "skills", "engine-service", "engine",
     ]) {
       expect(script).toContain(` ${name} `);
     }
+    // `git-credentials` comes BEFORE `clone`: it is the credential a private
+    // clone needs, so a step that ran after it would be a step that was not
+    // there when it mattered.
+    expect(script.indexOf("ok git-credentials")).toBeLessThan(script.indexOf("# ── 6. clone"));
+    // The token is read at CALL time out of the machine's own secrets.env, so
+    // it is never baked into the helper, into git's config, or into a STEP
+    // line - and a rotated token needs no redeploy.
+    expect(script).toContain("$HOME/.sdl-factory/secrets.env");
+    expect(script).toContain("sed -n 's/^GH_TOKEN=//p'");
+    expect(script).toContain("printf 'username=x-access-token");
     expect(script).toContain("DEPLOY COMPLETE");
     // The honest clone failure the operator asked for, verbatim.
     expect(script).toContain("repository not reachable from the server - make it public or add a deploy key");
@@ -1851,10 +1861,14 @@ describe("deploy/bootstrap.sh", () => {
  *      -> `ok`. That is the same key the app installed.
  *   3. Deploy factory on that row. EXPECT the STEP lines to stream in order.
  *      For a STAMPED PROJECT repo (the normal case - it has no installer/):
- *      preflight, apt, sqlite, uv, node, just, clone, checkout, stamp,
- *      uv-sync, service-user, pi, pi-packages, claude-cli, codex-cli,
- *      providers, git-identity, skills, engine-service, engine, then DEPLOY
- *      COMPLETE. `providers` is the honest one: on a box with no provider
+ *      preflight, apt, sqlite, uv, node, just, git-credentials, clone,
+ *      checkout, stamp, uv-sync, service-user, pi, pi-packages, claude-cli,
+ *      codex-cli, providers, git-identity, skills, engine-service, engine,
+ *      then DEPLOY COMPLETE. `git-credentials` reads `OK NEEDS YOU: ...` until
+ *      a GH_TOKEN line is in ~/.sdl-factory/secrets.env on the box; once it is,
+ *      `git -C <checkout> push` from that box works with no prompt, and
+ *      `cat ~/.gitconfig` names the helper and NEVER the token.
+ *      `providers` is the other honest one: on a box with no provider
  *      registered in ~/.pi/agent/models.json it reads `OK NEEDS YOU: ...`,
  *      because this path cannot converge what steps.py copies out of
  *      installer/assets/.
